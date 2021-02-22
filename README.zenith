@@ -1,0 +1,91 @@
+Components & modifications:
+
+zenith_push
+-----------
+
+zenith_push is a standalone executable. It take a base image of a database and
+uploads it to S3 in the zenith storage format.
+
+Also used as archive_command, to upload raw WAL segments to S3, as they're
+filled up.
+
+This is pretty similar to WAL-G. Storage format in S3 is different.
+
+zenith_restore
+--------------
+
+Another standalone executable. Downloads and restores a base image from S3.
+
+This only downloads the "non rel" image and WAL from S3. The relation data
+files are created as "lazy" files, so that they are restored on demand, when
+they're first accessed.
+
+zenith_slicedice
+----------------
+
+Another standalone executable. Reads raw WAL from the archive in
+S3. Splits it per relation, and writes it to per-relation WAL files.
+
+This only operates on the files in the S3 bucket, it doesn't require access to
+the primary.
+
+Reading and replaying non-rel WAL format
+---------------------
+
+The Postgres startup process has been modified so that it can read the
+zenith non-rel WAL format, in addition to upstream-format WAL
+segments.
+
+lazy-restore
+------------
+
+Changes in smgr.c, so that if a relation is accessed that doesn't exist
+locally, it is downloaded from S3. Per-relation WAL is also downloaded and
+replayed.
+
+
+Missing pieces
+==============
+
+Storage nodes
+-------------
+
+Storage nodes will:
+
+1. Receive newly-generated WAL from the primary, and hold it safe, so that
+if the primary is killed, the recent transactions are not lost. Currently,
+this demo relies on the primary to push completed WAL segments to S3
+(archive_command).
+
+2. Perform the duties of 'zenith_slicedice', splitting the WAL per relation
+
+3. Generate new base images of relation files, to reduce the amount of WAL
+that needs to be replayed when a page is read. (Basically, checkpointing).
+Delete old files from S3 that are no longer needed.
+
+4. Act as a page cache, so that the primary can request pages from the
+storage nodes, instead of restoring whole relation files from S3.
+
+TODO in Postgres code
+------------------------
+
+- Currently, a relation can be in one of two states: a normal relation, kept in
+local disk, and checkpointed and updated in the primary as normal. Or lazy,
+meaning it hasn't been restored from S3 yet. Introduce third state, where pages
+are fetched from storage nodes as needed, and not written to disk locally.
+
+- Local cache invalidation of read-only nodes, so that a read-only node can
+follow a primary, possibly with some lag. Currently, read-only nodes are
+frozen at a particular LSN when they're created.
+
+- Currently, a read-only node can only restore already-sliced non-relation WAL.
+So in order to create a read-only node at LSN X, zenith_slicedice must've been
+called to process all the WAL up to X. Add capability to also process "raw"
+WAL for the part that hasn't been sliced yet.
+
+- Creating a new primary. Currently, only read-only nodes can be restored from
+S3. Also, promoting a read-only node as new primary.
+
+Coordinating these will require support from Kubernetes to determine which
+node is the primary. Or a Raft implementation or similar.
+
