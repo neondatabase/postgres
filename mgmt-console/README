@@ -1,0 +1,113 @@
+Mock implementation of a management console.
+
+This isn't very different from a "normal" PostgreSQL installation with
+a base backup and WAL archive. The main user-visible difference is
+that when you create a standby server, we don't restore the whole data
+directory, but only the "non-relation" files. Relation files are
+restored on demand, when they're accessed the first time. That makes
+the "create standby" operation is very fast, but with some delay when
+you connect and start running queries instead.  Most visible if you
+have a large database. (However, see note below about large databases)
+
+Note: lots of things are broken/unsafe. Things will fail if a table is
+larger than 1 GB. Or if there are more than 1000 file in the cloud
+bucket.
+
+How to use this demo:
+
+1. If there are any leftovers from previous runs, reset by clicking
+   the RESET DEMO button.  This kills and deletes all Postgres servers,
+   and empties the cloud storage bucket
+
+2. Create primary server by clicking on the "Init primary" button
+
+3. Push a base image of the primary to cloud storage, by clicking the
+   "push base image" button.  (This takes about 30 seconds, be
+   patient)
+
+4. Connect to primary with psql, and create a test table with a little data.
+
+      psql postgres  -p5432 -U zenith -h<host>
+
+      create table mytable (i int4);
+
+      insert into mytable values (1);
+      select pg_switch_wal();
+
+3. Now that there's a new WAL segment in the arhive, we can "slice &
+  dice" it. Click on the "Slice & dice button".
+
+4. Perform more updates on the primary, to generate more WAL.
+
+      insert into mytable values (2); select pg_switch_wal();
+      insert into mytable values (3); select pg_switch_wal();
+      insert into mytable values (4); select pg_switch_wal();
+      insert into mytable values (5); select pg_switch_wal();
+
+5. Slice & Dice the WAL again
+
+6. Now you can create read-only standby servers at any point in the
+   WAL. Type a WAL position in the text box (or use the slider), and
+   click "Create new standby". The first standby is created at port 5433,
+   the second at port 5434, and so forth.
+
+7. Connect to the standby with "psql -p 5433". Note that it takes a
+   few seconds until the connection is established. That's because the
+   standby has to restore the basic system catalogs, like pg_database and
+   pg_authid from the backup. After connecting, you can do "\d" to list
+   tables, this will also take a few seconds, as more catalog tables are
+   restored from backup.  Subsequent commands will be faster.
+
+   Run queries in the standby:
+
+      select * from mytable;
+
+   the result depends on the LSN that you picked when you created the server.
+
+
+
+Building and Installation
+-------------------------
+
+To compile Postgres::
+  sudo apt build-dep postgresql
+  sudo apt install bison flex libz-dev libssl-dev
+  sudo apt install ccache
+  sudo apt install libcurl4-openssl-dev libxml2-dev
+
+For the webapp
+  sudo apt install python3 python3-flask python3-pip
+  pip3 install Flask-BasicAuth
+  pip3 install boto3
+
+git clone and compile and install patched version of Postgres:
+
+  git clone https://github.com/hlinnaka/postgres.git
+  cd postgres
+  git checkout zenith-experiments
+  ./configure --enable-debug --enable-cassert --with-openssl --prefix=/home/heikki/pgsql-install --with-libxml CC="ccache gcc" CFLAGS="-O0"
+  make -j4 -s install
+  
+
+Get the webapp:
+  cd ~
+  git clone https://github.com/hlinnaka/zenith-mgmt-console.git
+  cd zenith-mgmt-console
+  mkdir pgdatadirs
+
+
+  openssl req -new -x509 -days 365 -nodes -text -out server.crt \
+    -keyout server.key -subj "/CN=zenith-demo"
+
+Run it:
+  PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> python3 app.py
+
+  PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> flask run --host=0.0.0.0
+
+
+  S3_REGION=auto S3_ACCESSKEY=<accesskey> S3_SECRET=<secret> S3_ENDPOINT=https://storage.googleapis.com S3_BUCKET=zenith-testbucket PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> flask run --host=0.0.0.0
+
+
+You can view the contents of the S3 bucket with browser:
+
+http://<server>/list_bucket
