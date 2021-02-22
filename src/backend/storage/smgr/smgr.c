@@ -21,6 +21,7 @@
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
+#include "storage/lazyrestore.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
@@ -82,6 +83,24 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+	},
+	/* lazyrestore */
+	{
+		.smgr_init = lazyrestore_init,
+		.smgr_shutdown = NULL,
+		.smgr_open = lazyrestore_open,
+		.smgr_close = lazyrestore_close,
+		.smgr_create = lazyrestore_create,
+		.smgr_exists = lazyrestore_exists,
+		.smgr_unlink = lazyrestore_unlink,
+		.smgr_extend = lazyrestore_extend,
+		.smgr_prefetch = lazyrestore_prefetch,
+		.smgr_read = lazyrestore_read,
+		.smgr_write = lazyrestore_write,
+		.smgr_writeback = lazyrestore_writeback,
+		.smgr_nblocks = lazyrestore_nblocks,
+		.smgr_truncate = lazyrestore_truncate,
+		.smgr_immedsync = lazyrestore_immedsync,
 	}
 };
 
@@ -176,10 +195,16 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
+		if (rnode.relNode < FirstNormalObjectId)
+			reln->smgr_which = 1; /* md */
+		else
+			reln->smgr_which = 1; /* lazyrestore */
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
+
+		for (int i = 0; i <= MAX_FORKNUM; ++i)
+			reln->possibly_lazy[i] = true;
 
 		/* it has no owner yet */
 		dlist_push_tail(&unowned_relns, &reln->node);

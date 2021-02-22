@@ -14,6 +14,8 @@
 
 #include "postgres.h"
 
+#define WAL_DEBUG
+
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
@@ -4364,6 +4366,20 @@ ReadRecord(XLogReaderState *xlogreader, int emode,
 	/* This is the first attempt to read this page. */
 	lastSourceFailed = false;
 
+	/*
+	 * If we have partial non-rel WAL for this position, use it.
+	 */
+	record = nonrelwal_read_record(xlogreader, emode, fetching_ckpt);
+	if (record)
+	{
+		if (!expectedTLEs)
+			expectedTLEs = readTimeLineHistory(recoveryTargetTLI);
+
+		ReadRecPtr = xlogreader->ReadRecPtr;
+		EndRecPtr = xlogreader->EndRecPtr;
+		return record;
+	}
+
 	for (;;)
 	{
 		char	   *errormsg;
@@ -7264,7 +7280,7 @@ StartupXLOG(void)
 				bool		switchedTLI = false;
 
 #ifdef WAL_DEBUG
-				if (XLOG_DEBUG ||
+				if (true || XLOG_DEBUG ||
 					(rmid == RM_XACT_ID && trace_recovery_messages <= DEBUG2) ||
 					(rmid != RM_XACT_ID && trace_recovery_messages <= DEBUG3))
 				{

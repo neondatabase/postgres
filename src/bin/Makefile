@@ -33,6 +33,10 @@ SUBDIRS = \
 	psql \
 	scripts
 
+SUBDIRS += zenith_slicedice \
+	zenith_restore \
+	zenith_push
+
 ifeq ($(PORTNAME), win32)
 SUBDIRS += pgevent
 else

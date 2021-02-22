@@ -54,6 +54,9 @@ ifeq ($(with_systemd),yes)
 LIBS += -lsystemd
 endif
 
+# todo: autoconf magic
+LIBS += -lcurl
+
 ##########################################################################
 
 all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
