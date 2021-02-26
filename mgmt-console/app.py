@@ -1,11 +1,13 @@
 from flask import request
 from flask_basicauth import BasicAuth
+from flask import render_template
 from subprocess import PIPE, STDOUT, run, Popen
 import html
 import os
 import re
 import shutil
 import logging
+import time
 
 import boto3
 from boto3.session import Session
@@ -21,9 +23,6 @@ app.config['BASIC_AUTH_FORCE'] = True
 
 basic_auth = BasicAuth(app)
 
-minwalpos = 0
-maxwalpos = 0
-
 # S3 configuration:
 
 ENDPOINT = os.getenv('S3_ENDPOINT', 'https://localhost:9000')
@@ -37,7 +36,7 @@ session = Session(aws_access_key_id=ACCESS_KEY,
                   aws_secret_access_key=SECRET,
                   region_name=os.getenv('S3_REGION', 'auto'))
 
-# needd for google cloud?
+# needed for google cloud?
 session.events.unregister('before-parameter-build.s3.ListObjects',
                           set_list_objects_encoding_type_url)
 
@@ -55,110 +54,39 @@ s3_client = boto3.client('s3',
                          aws_secret_access_key=SECRET)
 
 
-@app.route('/')
-def landing():
-    return mainpage(None)
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-def mainpage(operation):
-    responsestr = '''
-<html>
-<body>
-
-'''
-    if operation:
-        responsestr += operation
-        responsestr += '<hr>\n'
-
-    responsestr += '''
-<h1>server status:</h1>
-
-''' + server_status() + '''
-
-<h1>storage bucket status:</h1>
-
-''' + wal_summary() + '''
-
-<h1>Actions:</h1>
-
-<form action="/reset_all" method=post id="reset_all"></form>
-<button type="submit" form="reset_all">RESET DEMO</button>
-
-<form action="/init_primary" method=post id="init_primary"></form>
-<button type="submit" form="init_primary">Init primary</button>
-
-<form action="/zenith_push" method=post id="zenith_push"></form>
-<button type="submit" form="zenith_push">Push base image</button>
-
-<form action="/slicedice" method=post id="slicedice"></form>
-<button type="submit" form="slicedice">Slice & Dice WAL</button>
-
-<br>
-<br>
-
-
-<form action="/init_standby" method=post id="init_standby">
-  <button type="submit" form="init_standby"
-    '''
-    if minwalpos == 0 or maxwalpos == 0:
-        responsestr += 'disabled'
-    responsestr += '''
-
-  >Create new standby</button>
-  <label for="walpos">at WAL position:</label><br>
-  <input type="walpos" id="walpos" name="walpos" pattern="[0-9A-Z]+/[0-9A-Z]+"
-    value="''' + walpos_str(maxwalpos) + '''"
-    '''
-    if minwalpos == 0 or maxwalpos == 0:
-        responsestr += 'disabled'
-    responsestr += '''
-  ><br>
-  <input type="range" id="walpos_slider" min="0" max="10" steps="1" value="10"
-    oninput="myFunction()"
-    '''
-    if minwalpos == 0 or maxwalpos == 0:
-        responsestr += 'disabled'
-    responsestr += '''
-  >
-
-<script>
-function myFunction() {
-  var x = document.getElementById("walpos_slider").value;
-
-  var walpositions = [
-'''
-
-    for x in range(0, 10):
-        responsestr += '"' + walpos_str(int(minwalpos + (maxwalpos - minwalpos) * (x/10))) + '", '
-    responsestr += '"' + walpos_str(maxwalpos) + '"'
-
-    responsestr += '''
-  ];
-
-  document.getElementById("walpos").value = walpositions[x];
-}
-</script>
-
-</form>
-
-</body>
-</html>
-'''
-    return responsestr
-
+@app.route("/server_status")
 def server_status():
     dirs = os.listdir("pgdatadirs")
     dirs.sort()
 
-    resultstr = ''
-    if dirs:
-        for dirname in dirs:
+    primary = None
+    standbys = []
 
-            result = run("pg_ctl status -D pgdatadirs/" + dirname, stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
-            resultstr = resultstr + dirname + ": " + result.stdout + "<br>\n<br>\n"
-    else:
-        resultstr += "no data directories<br>\n"
+    for dirname in dirs:
+        
+        result = run("pg_ctl status -D pgdatadirs/" + dirname, stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
 
-    return resultstr
+        srv = {
+            'datadir': dirname,
+            'status': result.stdout,
+            'port': None
+        }
+
+        if dirname == 'primary':
+            primary = srv;
+            primary['port'] = 5432;
+        else:
+            standby_match = re.search('standby_([0-9]+)', dirname)
+            if standby_match:
+                srv['port'] = int(standby_match.group(1))
+
+            standbys.append(srv);
+
+    return {'primary': primary, 'standbys': standbys}
 
 @app.route('/list_bucket')
 def list_bucket():
@@ -168,120 +96,81 @@ def list_bucket():
     for file in s3bucket.objects.all():
         response = response + html.escape(file.key) + '<br>\n'
 
-    return mainpage(response)
+    return response
 
 def walpos_str(walpos):
     return '{:X}/{:X}'.format(walpos >> 32, walpos & 0xFFFFFFFF)
 
-def wal_summary():
+@app.route('/bucket_summary')
+def bucket_summary():
 
     nonrelimages = []
-    nonrelwal = []
-    walsegments = []
-
-    minwal = 0
-    maxwal = 0
-    maxseqwal = 0
+    minwal = int(0)
+    maxwal = int(0)
+    minseqwal = int(0)
+    maxseqwal = int(0)
 
     for file in s3bucket.objects.all():
         path = file.key
         match = re.search('nonreldata/nonrel_([0-9A-F]+).tar', path)
         if match:
-            nonrelimages.append(path)
-
-            wal = int(match.group(1), 16)
-            if minwal == 0 or wal < minwal:
-                minwal = wal
+            walpos = int(match.group(1), 16)
+            nonrelimages.append(walpos_str(walpos))
 
         match = re.search('nonreldata/nonrel_([0-9A-F]+)-([0-9A-F]+)', path)
         if match:
-            nonrelwal.append(path)
-
             endwal = int(match.group(2), 16)
             if endwal > maxwal:
                 maxwal = endwal
 
         match = re.search('walarchive/([0-9A-F]{8})([0-9A-F]{8})([0-9A-F]{8})', path)
         if match:
-            walsegments.append(path)
-
             tli = int(match.group(1), 16)
             logno = int(match.group(2), 16)
             segno = int(match.group(3), 16)
             # FIXME: this assumes default 16 MB wal segment size
             logsegno = logno * (0x100000000 / (16*1024*1024)) + segno
 
-            seqwal = (logsegno + 1) * (16*1024*1024)
+            seqwal = int((logsegno + 1) * (16*1024*1024))
 
             if seqwal > maxseqwal:
                 maxseqwal = seqwal;
+            if minseqwal == 0 or seqwal < minseqwal:
+                minseqwal = seqwal;
 
-    responsestr = ''
-    if minwal:
-        responsestr += 'base image at ' + walpos_str(minwal) + '<br>\n'
-        responsestr += '<br><br>base images:<br>'
-
-        for x in nonrelimages:
-            responsestr += x + "<br>\n"
-    else:
-        responsestr += "no base image<br>\n"
-
-    if maxwal:
-        responsestr += 'Sliced WAL is available up to '+ walpos_str(maxwal) + '<br>\n'
-        responsestr += 'sliced nonrel WAL:<br>'
-        for x in nonrelwal:
-            responsestr += x + "<br>\n"
-    else:
-        responsestr += 'no sliced WAL available<br>\n'
-
-    if walsegments:
-        responsestr += "raw WAL archive: <br>\n" + walsegments[0]
-        responsestr += " - " + walsegments[-1] + "<br>\n"
-        #for x in walsegments:
-        #    responsestr += x + "<br>\n"
-    else:
-        responsestr += "no archived raw WAL"
-
-    global minwalpos
-    minwalpos = minwal
-    global maxwalpos
-    maxwalpos = maxwal
-
-    return responsestr
-
+    return {
+        'nonrelimages': nonrelimages,
+        'minwal': walpos_str(minwal),
+        'maxwal': walpos_str(maxwal),
+        'minseqwal': walpos_str(minseqwal),
+        'maxseqwal': walpos_str(maxseqwal)
+        }
 
 def print_cmd_result(cmd_result):
     return print_cmd_result_ex(cmd_result.args, cmd_result.returncode, cmd_result.stdout)
 
 def print_cmd_result_ex(cmd, returncode, stdout):
-    return '''
-ran command:<br>
-<blockquote>
-''' + html.escape(str(cmd)).replace("\n","<br/>\n") + '''
-</blockquote>
+    res = ''
+    res += 'ran command:\n' + str(cmd) + '\n'
+    res += 'It returned code ' + str(returncode) + '\n'
+    res += '\n'
+    res += 'stdout/stderr:\n'
+    res += stdout
 
-It returned code
-''' + str(returncode) + '''
-<br>
-stdout/stderr:
-<blockquote>
-''' + html.escape(stdout).replace("\n","<br/>\n") + '''
-</blockquote>
-<br>
-'''
-
+    return res
 
 @app.route('/init_primary', methods=['GET', 'POST'])
 def init_primary():
+    
     initdb_result = run("initdb -D pgdatadirs/primary --username=zenith --pwfile=pg-password.txt", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
     if initdb_result.returncode != 0:
-        return mainpage(print_cmd_result(initdb_result))
+        return print_cmd_result(initdb_result)
     
     # Append archive_mode and archive_command and port to postgresql.conf
     f=open("pgdatadirs/primary/postgresql.conf", "a+")
     f.write("listen_addresses='*'\n")
     f.write("archive_mode=on\n")
-    f.write("archive_command='zenith_push --archive-wal-path=%p --archive-wal-fname=%f dummyurl'\n")
+    f.write("archive_command='zenith_push --archive-wal-path=%p --archive-wal-fname=%f'\n")
     f.write("ssl=on\n")
     f.close()
 
@@ -302,7 +191,7 @@ def init_primary():
     responsestr = print_cmd_result(initdb_result) + '\n'
     responsestr += print_cmd_result_ex(start_proc.args, start_rc, start_stdout)
 
-    return mainpage(responsestr)
+    return responsestr
 
 @app.route('/zenith_push', methods=['GET', 'POST'])
 def zenith_push():
@@ -310,7 +199,7 @@ def zenith_push():
     stop_result = run(args=["pg_ctl", "stop", "-D", "pgdatadirs/primary"], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
     
     # Call zenith_push
-    push_result = run("zenith_push -D pgdatadirs/primary dummyurl", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
+    push_result = run("zenith_push -D pgdatadirs/primary", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
 
     # Restart the primary
     start_proc = Popen(args=["pg_ctl", "start", "-D", "pgdatadirs/primary", "-l", "pgdatadirs/primary/log"], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
@@ -321,10 +210,10 @@ def zenith_push():
     responsestr += print_cmd_result(push_result) + '\n'
     responsestr += print_cmd_result_ex(start_proc.args, start_rc, start_stdout) + '\n'
 
-    return mainpage(responsestr)
+    return responsestr
 
-@app.route('/init_standby', methods=['GET', 'POST'])
-def init_standby():
+@app.route('/create_standby', methods=['GET', 'POST'])
+def create_standby():
 
     walpos = request.form.get('walpos')
     if not walpos:
@@ -362,17 +251,58 @@ def init_standby():
         start_stdout, start_stderr = start_proc.communicate()
         responsestr += print_cmd_result_ex(start_proc.args, start_rc, start_stdout)
 
-    return mainpage(responsestr)
+    return responsestr
+
+@app.route('/destroy_server', methods=['GET', 'POST'])
+def destroy_primary():
+
+    datadir = request.form.get('datadir')
+
+    # Check that the datadir parameter doesn't contain anything funny.
+    if not re.match("^[A-Za-z0-9_-]+$", datadir):
+        raise Exception('invalid datadir: ' + datadir)
+    
+    # Stop the server if it's running
+    stop_result = run(args=["pg_ctl", "stop", "-m", "immediate", "-D", "pgdatadirs/" + datadir], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
+
+    shutil.rmtree('pgdatadirs/' + datadir, ignore_errors=True)
+
+    responsestr = print_cmd_result(stop_result) + '\n'
+    responsestr += 'Deleted datadir ' + datadir + '.\n'
+
+    return responsestr
+
+@app.route('/restore_primary', methods=['GET', 'POST'])
+def restore_primary():
+
+    # Call zenith_restore
+    restore_result = run(["zenith_restore", "-D", "pgdatadirs/primary"], stdout=PIPE, stderr=STDOUT, encoding='latin1')
+    responsestr = print_cmd_result(restore_result)
+
+    # Append restore_command to postgresql.conf, so that it can find the last raw WAL segments
+    f=open("pgdatadirs/primary/postgresql.conf", "a+")
+    f.write("listen_addresses='*'\n")
+    f.write("restore_command='zenith_restore --archive-wal-path=%p --archive-wal-fname=%f'\n")
+    f.write("ssl=on\n")
+    f.close()
+    
+    if restore_result.returncode == 0:
+        start_proc = Popen(args=["pg_ctl", "start", "-D", "pgdatadirs/primary", "-l", "pgdatadirs/primary/log"], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
+        start_rc = start_proc.wait()
+        start_stdout, start_stderr = start_proc.communicate()
+        responsestr += print_cmd_result_ex(start_proc.args, start_rc, start_stdout)
+
+    return responsestr
 
 @app.route('/slicedice', methods=['GET', 'POST'])
 def run_slicedice():
-    result = run("zenith_slicedice dummyurl", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
+    result = run("zenith_slicedice", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
     
     responsestr = print_cmd_result(result)
 
-    return mainpage(responsestr)
+    return responsestr
 
-@app.route('/reset_all', methods=['POST'])
+@app.route('/reset_demo', methods=['POST'])
 def reset_all():
     result = run("pkill -9 postgres", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
 
@@ -383,12 +313,13 @@ def reset_all():
     for file in s3bucket.objects.all():
         s3_client.delete_object(Bucket = BUCKET, Key = file.key)
 
-    responsestr = print_cmd_result(result) + '''
-Deleted all Postgres datadirs<br>
-Deleted all files in object storage bucket<br>
+    responsestr = print_cmd_result(result) + '\n'
+    responsestr += '''
+Deleted all Postgres datadirs.
+Deleted all files in object storage bucket.
 '''
-    return mainpage(responsestr)
 
+    return responsestr
 
 if __name__ == '__main__':
     app.run()
