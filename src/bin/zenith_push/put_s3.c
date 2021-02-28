@@ -10,7 +10,8 @@
 
 /* FIXME: 'auto' is a googlism, not sure what to put here for others */
 static const char *region = "auto";
-static const char *endpoint = "localhost:9000";
+static const char *endpoint = "https://localhost:9000";
+static const char *host; /* derived from endpoint */
 static const char *bucket = "foobucket";
 static const char *accesskeyid = "minioadmin";
 static const char *secret = "";
@@ -27,9 +28,13 @@ init_s3()
 		return;
 	/* read config from env variables */
 	region = getenv_with_default("S3_REGION", "auto");
-	endpoint = getenv_with_default("S3_ENDPOINT", "localhost:9000");
+	endpoint = getenv_with_default("S3_ENDPOINT", "https://localhost:9000");
 	if (strncmp(endpoint, "https://", 8) == 0)
-		endpoint += 8;
+		host = &endpoint[8];
+	else if (strncmp(endpoint, "http://", 7) == 0)
+		host = &endpoint[7];
+	else
+		host = endpoint;
 	bucket = getenv_with_default("S3_BUCKET", "zenith-testbucket");
 	accesskeyid = getenv_with_default("S3_ACCESSKEY", "");
 	secret = getenv_with_default("S3_SECRET", "");
@@ -142,12 +147,11 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 
 	urlpath = psprintf("/%s/%s", bucket, s3path);
 
-	url = psprintf("https://%s%s",
-				   endpoint, urlpath);
+	url = psprintf("%s%s", endpoint, urlpath);
 
 	//fprintf(stderr, "putting: %s\n", url);
 
-	hosthdr = psprintf("Host: %s", endpoint);
+	hosthdr = psprintf("Host: %s", host);
 
 	curl = curl_easy_init();
 	if (!curl)
