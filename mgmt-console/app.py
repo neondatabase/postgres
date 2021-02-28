@@ -249,7 +249,7 @@ def create_standby():
         start_proc = Popen(args=["pg_ctl", "start", "-D", standby_dir, "-l", standby_dir + "/log"], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
         start_rc = start_proc.wait()
         start_stdout, start_stderr = start_proc.communicate()
-        responsestr += print_cmd_result_ex(start_proc.args, start_rc, start_stdout)
+        responsestr += '\n\n' + print_cmd_result_ex(start_proc.args, start_rc, start_stdout)
 
     return responsestr
 

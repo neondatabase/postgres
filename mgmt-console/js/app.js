@@ -228,9 +228,10 @@ function OperationStatus(props) {
     {
 	return (
 	    <div><h2>Last operation:</h2>
-		<div>{lastOperation}</div>
-		<div>{inProgress ? <ProgressIndicator/> : (lastOperation ? 'Done!' : '')}</div>
-		<pre className='result'>{operationResult}</pre>
+		<div>{lastOperation} { (!inProgress && lastOperation) ? 'done!' : '' }</div>
+		<div className='result'>
+		    {inProgress ? <ProgressIndicator/> : <pre>{operationResult}</pre>}
+		</div>
 	    </div>
 	);
     }
