@@ -122,7 +122,7 @@ s3_ListObjects(const char *s3path)
 	
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "GET", urlpath, NULL,
+	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);
@@ -261,7 +261,7 @@ fetch_s3_file_memory(const char *s3path)
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) result);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "GET", urlpath, NULL,
+	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);
@@ -344,7 +344,7 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 	/* use the internal callback that writes to file */
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) fp);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "GET", urlpath, NULL,
+	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);
@@ -512,7 +512,7 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
                      (curl_off_t) filesize);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "PUT", urlpath, bodyhash,
+	auth_headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath, bodyhash,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);

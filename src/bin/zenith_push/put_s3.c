@@ -176,7 +176,7 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
                      (curl_off_t) filesize);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "PUT", urlpath,
+	auth_headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath,
 											 bodyhash, accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);

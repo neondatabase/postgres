@@ -17,7 +17,7 @@
 
 #include "fe_utils/simple_list.h"
 
-extern SimpleStringList *s3_get_authorization_hdrs(const char *endpoint,
+extern SimpleStringList *s3_get_authorization_hdrs(const char *host,
 												   const char *region,
 												   const char *method,
 												   const char *path,
