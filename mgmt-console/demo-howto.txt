@@ -34,6 +34,8 @@ How to use this demo:
       insert into mytable values (1);
       select pg_switch_wal();
 
+   The Postgres password is the same as for the management console.
+
 3. Now that there's a new WAL segment in the arhive, we can "slice &
    dice" it. Click on the "Slice & dice button".
 

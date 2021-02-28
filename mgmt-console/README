@@ -23,7 +23,6 @@ git clone and compile and install patched version of Postgres:
   git checkout zenith-experiments
   ./configure --enable-debug --enable-cassert --with-openssl --prefix=/home/heikki/pgsql-install --with-libxml CC="ccache gcc" CFLAGS="-O0"
   make -j4 -s install
-  
 
 Get the webapp:
   cd ~
@@ -35,14 +34,16 @@ Get the webapp:
   openssl req -new -x509 -days 365 -nodes -text -out server.crt \
     -keyout server.key -subj "/CN=zenith-demo"
 
+For Mock S3 server (unless you want to test against a real cloud service):
+  sudo apt install python3-tornado
+
+  cd ~/zenith-mgmt-console
+  git clone https://github.com/hlinnaka/ms3.git
+
 Compile & run it:
   webpack # compile React app
-  PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> python3 app.py
 
-  PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> flask run --host=0.0.0.0
-
-
-  S3_REGION=auto S3_ACCESSKEY=<accesskey> S3_SECRET=<secret> S3_ENDPOINT=https://storage.googleapis.com S3_BUCKET=zenith-testbucket PATH=/home/heikki/pgsql-install/bin:$PATH BASIC_AUTH_PASSWORD=<password> flask run --host=0.0.0.0
+  BASIC_AUTH_PASSWORD=<password> ./launch-local.sh
 
 
 You can view the contents of the S3 bucket with browser:
