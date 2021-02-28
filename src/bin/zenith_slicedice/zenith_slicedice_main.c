@@ -154,12 +154,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	if (argc <= 1)
-	{
-		pg_log_error("no arguments specified");
-		goto bad_argument;
-	}
-
 	while ((option = getopt_long(argc, argv, "p:t:",
 								 long_options, &optindex)) != -1)
 	{

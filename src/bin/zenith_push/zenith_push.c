@@ -68,7 +68,7 @@ usage(void)
 	printf(_("%s push an existing PostgreSQL cluster to S3 bucket in Zenith file format.\n\n"),
 		   progname);
 	printf(_("Usage:\n"));
-	printf(_("  %s [OPTION]... <url>\n"), progname);
+	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
 	printf(_("  --archive-wal-path=PATH   push a single WAL file\n"));
 	printf(_("  --archive-wal-fname=PATH  push a single WAL file\n"));
@@ -87,7 +87,6 @@ main(int argc, char **argv)
 	char	   *pg_data = NULL;
 	char	   *archive_wal_path = NULL;
 	char	   *archive_wal_fname = NULL;
-	char	   *s3url = NULL;
 	ControlFileData *controlfile;
 	bool		crc_ok;
 
@@ -155,20 +154,11 @@ main(int argc, char **argv)
 	}
 
 	/*
-	 * Non-option argument specifies URL
-	 */
-	if (optind < argc)
-	{
-		s3url = pg_strdup(argv[optind]);
-		optind++;
-	}
-
-	/*
 	 * Required arguments
 	 */
 	if (pg_data == NULL && archive_wal_path == NULL)
 	{
-		pg_log_error("no target directory (-D) or --arhive-wal-path specified");
+		pg_log_error("no data directory (-D) or --arhive-wal-path specified");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -189,13 +179,6 @@ main(int argc, char **argv)
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
-	}
-
-	/* FIXME: This isn't actually used for anything. The S3 config is read from env variables, see put_s3.c */
-	if (s3url == NULL)
-	{
-		pg_log_error(_("%s: no url specified"), progname);
-		goto bad_argument;
 	}
 	
 	if (optind < argc)
