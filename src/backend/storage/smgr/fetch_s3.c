@@ -104,7 +104,7 @@ fetch_s3_file_restore(const char *s3path, const char *dstpath)
 	/* use the internal callback that writes to file */
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) fp);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "GET", urlpath,
+	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);
@@ -201,7 +201,7 @@ s3_ListObjects(const char *s3path)
 	
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
-	auth_headers = s3_get_authorization_hdrs(endpoint, region, "GET", urlpath,
+	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath,
 											 accesskeyid, secret);
 	headers = NULL;
 	headers = curl_slist_append(headers, hosthdr);

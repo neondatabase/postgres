@@ -222,7 +222,7 @@ construct_string_to_sign(pg_time_t now, const char *method, const char *host, co
 }
 
 SimpleStringList *
-s3_get_authorization_hdrs(const char *endpoint,
+s3_get_authorization_hdrs(const char *host,
 						  const char *region,
 						  const char *method,
 						  const char *path,
@@ -259,7 +259,7 @@ s3_get_authorization_hdrs(const char *endpoint,
 
 	derive_signingkey(SigningKey, now, region, "s3", secret);
 
-	string_to_sign = construct_string_to_sign(now, method, endpoint, region, path, "", bodyhash);
+	string_to_sign = construct_string_to_sign(now, method, host, region, path, "", bodyhash);
 
 	/* Construct Signature */
 	hmac_sha256(signaturebuf, SigningKey, PG_SHA256_DIGEST_LENGTH, (uint8 *) string_to_sign, strlen(string_to_sign));

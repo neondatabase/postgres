@@ -30,7 +30,7 @@ extern void fetch_s3_file_restore(const char *s3path, const char *dstpath);
 extern ListObjectsResult *s3_ListObjects(const char *s3path);
 
 /* in s3_sign.c */
-extern List *s3_get_authorization_hdrs(const char *endpoint,
+extern List *s3_get_authorization_hdrs(const char *host,
 									   const char *region,
 									   const char *method,
 									   const char *path,
