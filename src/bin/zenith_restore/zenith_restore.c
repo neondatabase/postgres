@@ -15,13 +15,17 @@
 #include <dirent.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "access/transam.h"
+#include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
+#include "catalog/pg_control.h"
 #include "catalog/pg_tablespace_d.h"
+#include "common/controldata_utils.h"
 #include "common/fe_memutils.h"
 #include "common/file_perm.h"
 #include "common/logging.h"
@@ -36,7 +40,6 @@ typedef struct XLogDumpPrivate
 	TimeLineID	timeline;
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
-	bool		endptr_reached;
 } XLogDumpPrivate;
 
 typedef struct zenith_restore_config
@@ -63,6 +66,8 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
+	printf(_("  --archive-wal-path=PATH   restore a single WAL file\n"));
+	printf(_("  --archive-wal-fname=PATH  restore a single WAL file\n"));
 	printf(_("  -D, --pgdata=DIRECTORY receive base backup into directory\n"));
 	printf(_("  -e, --end=RECPTR       stop reading at WAL location RECPTR\n"));
 	printf(_("  -q, --quiet            do not print any output, except for errors\n"));
@@ -167,10 +172,14 @@ main(int argc, char **argv)
 	XLogDumpPrivate private;
 	zenith_restore_config config;
 	char	   *pg_data;
+	char	   *archive_wal_path = NULL;
+	char	   *archive_wal_fname = NULL;
 	ListObjectsResult *files;
 	XLogRecPtr	latest_tarball_ptr = InvalidXLogRecPtr;
 	char	   *latest_tarball_name;
 	int			numlazyfiles;
+	XLogRecPtr	end_of_nonrelwal = InvalidXLogRecPtr;
+	int			WalSegSz;
 
 	static struct option long_options[] = {
 		{"pgdata", required_argument, NULL, 'D'},
@@ -179,6 +188,8 @@ main(int argc, char **argv)
 		{"quiet", no_argument, NULL, 'q'},
 		{"timeline", required_argument, NULL, 't'},
 		{"version", no_argument, NULL, 'V'},
+		{"archive-wal-path", required_argument, NULL, 1},
+		{"archive-wal-fname", required_argument, NULL, 2},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -209,7 +220,6 @@ main(int argc, char **argv)
 	private.timeline = 1;
 	private.startptr = InvalidXLogRecPtr;
 	private.endptr = InvalidXLogRecPtr;
-	private.endptr_reached = false;
 
 	config.quiet = false;
 	config.stop_after_records = -1;
@@ -248,6 +258,12 @@ main(int argc, char **argv)
 					goto bad_argument;
 				}
 				break;
+			case 1:
+				archive_wal_path = pg_strdup(optarg);
+				break;
+			case 2:
+				archive_wal_fname = pg_strdup(optarg);
+				break;
 			default:
 				goto bad_argument;
 		}
@@ -256,9 +272,26 @@ main(int argc, char **argv)
 	/*
 	 * Required arguments
 	 */
-	if (pg_data == NULL)
+	if (pg_data == NULL && archive_wal_path == NULL)
 	{
-		pg_log_error("no target directory specified (-D)");
+		pg_log_error("no target directory (-D) or --arhive-wal-path specified");
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
+
+	if ((archive_wal_path && !archive_wal_fname) ||
+		(!archive_wal_path && archive_wal_fname))
+	{
+		pg_log_error("--archive-wal-path and --archive-wal-fname must be used together");
+		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
+				progname);
+		exit(1);
+	}
+	
+	if (pg_data && archive_wal_path)
+	{
+		pg_log_error("-D and --archive-wal-path are mutually exclusive");
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 				progname);
 		exit(1);
@@ -271,14 +304,32 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
+#if 0
 	if (XLogRecPtrIsInvalid(private.endptr))
 	{
 		pg_log_error("no end WAL location given");
 		goto bad_argument;
 	}
-
+#endif
+	
 	/* done with argument parsing, do the actual work */
 
+	/* In this mode, used as an restore_command */
+	if (archive_wal_path)
+	{
+		char		s3pathbuf[MAXPGPATH];
+
+		snprintf(s3pathbuf, sizeof(s3pathbuf), "walarchive/%s",
+				 archive_wal_fname);
+
+		fetch_s3_file(s3pathbuf, archive_wal_path);
+
+		fprintf(stderr, "restored %s from WAL archive\n", archive_wal_fname);
+
+		return EXIT_SUCCESS;
+	}
+
+	
 	/* TODO: check existence of the directory first, before fetching and creating.
 	 * nicer that way
 	 */
@@ -309,7 +360,8 @@ main(int argc, char **argv)
 			fprintf(stderr, "tarball: %s at %X/%X\n", files->filenames[i],
 					(uint32) (ptr >> 32), (uint32) ptr);
 
-			if (ptr < private.endptr && latest_tarball_ptr < private.endptr)
+			if ((ptr < private.endptr || private.endptr == InvalidXLogRecPtr) &&
+				latest_tarball_ptr < ptr)
 			{
 				latest_tarball_ptr = ptr;
 				latest_tarball_name = files->filenames[i];
@@ -322,7 +374,10 @@ main(int argc, char **argv)
 	
 	/* Fetch and unpack the tarball */
 	fetch_s3_file(psprintf("%s", latest_tarball_name), "latest_tarball.tar");
-	system("tar xvf latest_tarball.tar");
+	fprintf(stderr, "extracting base tarball...");
+	fflush(stderr);
+	system("tar xf latest_tarball.tar");
+	fprintf(stderr, "done\n");
 
 	/* Fetch all nonrel WAL files needed */
 	if (pg_mkdir_p(pstrdup("pg_wal/nonrelwal"), pg_dir_create_mode) != 0)
@@ -335,10 +390,10 @@ main(int argc, char **argv)
 		XLogRecPtr this_endptr;
 		char *this_dir;
 		char *this_fname;
-		
+
 		if (parse_nonrelwal_filename(this_path, &this_startptr, &this_endptr))
 		{
-			if (this_startptr <= private.endptr &&
+			if ((this_startptr <= private.endptr || private.endptr == InvalidXLogRecPtr) &&
 				this_endptr > latest_tarball_ptr)
 			{
 				fprintf(stderr, "non-rel WAL: %s from %X/%X to %X/%X\n", this_path,
@@ -349,8 +404,14 @@ main(int argc, char **argv)
 
 				fetch_s3_file(this_path, psprintf("pg_wal/nonrelwal/%s", this_fname));
 			}
+
+			if (this_endptr > end_of_nonrelwal)
+				end_of_nonrelwal = this_endptr;
 		}
 	}
+
+	if (private.endptr != InvalidXLogRecPtr && end_of_nonrelwal > private.endptr)
+		end_of_nonrelwal = private.endptr;
 
 	/* FIXME: check that we have all the WAL in between low and high point */
 
@@ -370,13 +431,136 @@ main(int argc, char **argv)
 	}
 	fprintf(stderr, "created lazy files as placeholders for %d relation files\n", numlazyfiles);
 
+
+	/*
+	 * Create a backup label file
+	 */
+	{
+		ControlFileData *controlfile;
+		bool		crc_ok;
+		time_t		stamp_time;
+		char		strfbuf[128];
+		StringInfo	labelfile;
+		XLogRecPtr	startpoint;
+		TimeLineID	starttli;
+		XLogRecPtr checkpointloc;
+		char		xlogfilename[MAXFNAMELEN];
+		XLogSegNo	segno;
+		FILE	   *fp;
+
+		controlfile = get_controlfile(".", &crc_ok);
+		if (!crc_ok)
+		{
+			fprintf(stderr, _("Calculated pg_control file checksum does not match value stored in file.\n"));
+			return EXIT_FAILURE;
+		}
+
+		if (controlfile->state != DB_SHUTDOWNED)
+		{
+			fprintf(stderr, _("cluster must be cleanly shut down.\n"));
+			return EXIT_FAILURE;
+		}
+
+		WalSegSz = controlfile->xlog_seg_size;
+		startpoint = controlfile->checkPointCopy.redo;
+		starttli = controlfile->checkPointCopy.PrevTimeLineID;
+		checkpointloc = controlfile->checkPoint;
+
+		/*
+		 * Calculate name of the WAL file containing the latest checkpoint's REDO
+		 * start point.
+		 */
+		XLByteToSeg(controlfile->checkPointCopy.redo, segno, WalSegSz);
+		XLogFileName(xlogfilename, controlfile->checkPointCopy.ThisTimeLineID,
+					 segno, WalSegSz);
+
+		/* Use the log timezone here, not the session timezone */
+		stamp_time = (time_t) time(NULL);
+		strftime(strfbuf, sizeof(strfbuf),
+					"%Y-%m-%d %H:%M:%S %Z",
+				 localtime(&stamp_time));
+
+		labelfile = makeStringInfo();
+		appendStringInfo(labelfile, "START WAL LOCATION: %X/%X (file %s)\n",
+						 (uint32) (startpoint >> 32), (uint32) startpoint, xlogfilename);
+		appendStringInfo(labelfile, "CHECKPOINT LOCATION: %X/%X\n",
+						 (uint32) (checkpointloc >> 32), (uint32) checkpointloc);
+		appendStringInfo(labelfile, "BACKUP METHOD: zenith\n");
+		/* FIXME: the backend doesn't recognize 'zenith', but it does what we want:
+		 * it's not 'standby', as that would make the startup process complain when
+		 * the control file is in SHUTDOWNED state. And it's not 'streamed', which
+		 * would enforce waiting for end-of-backup WAL record, which we haven't
+		 * generated.
+		 */
+		appendStringInfo(labelfile, "BACKUP FROM: zenith\n");
+		appendStringInfo(labelfile, "START TIME: %s\n", strfbuf);
+		appendStringInfo(labelfile, "LABEL: zenith\n");
+		appendStringInfo(labelfile, "START TIMELINE: %u\n", starttli);
+
+		if (private.endptr == InvalidXLogRecPtr)
+		{
+			fp = fopen(BACKUP_LABEL_FILE, "w");
+
+			if (!fp)
+				pg_fatal("could not create file \"%s\": %m",
+						 BACKUP_LABEL_FILE);
+			if (fwrite(labelfile->data, labelfile->len, 1, fp) != 1 ||
+				fflush(fp) != 0 ||
+#if 0
+				pg_fsync(fileno(fp)) != 0 ||
+#endif
+				ferror(fp) ||
+				fclose(fp))
+				pg_fatal("could not write file \"%s\": %m",
+						 BACKUP_LABEL_FILE);
+		}
+
+		pfree(labelfile->data);
+		pfree(labelfile);
+	}
+
+	/* Fetch all raw WAL segments after the point of slicing */
+
+	for (int i = 0; i < files->numfiles; i++)
+	{
+		const char *path = files->filenames[i];
+		uint32		tli;
+		uint32		log;
+		uint32		seg;
+
+		if (strlen(path) == strlen("walarchive/000000001111111122222222") &&
+			sscanf(path, "walarchive/%08X%08X%08X",
+				   &tli, &log, &seg) == 3)
+		{
+			uint64		logSegNo;
+			XLogRecPtr	this_endptr;
+
+			logSegNo = (uint64) log * XLogSegmentsPerXLogId(WalSegSz) + seg;
+			this_endptr = (logSegNo + 1) * WalSegSz;
+
+			if (this_endptr >= end_of_nonrelwal)
+			{
+				char		localpath[MAXPGPATH];
+
+				snprintf(localpath, sizeof(localpath),
+						 "pg_wal/%s",
+						 path + strlen("walarchive/"));
+
+				fetch_s3_file(path, localpath);
+			}
+		}
+	}
+
 	/* create standby.signal to turn this into a standby server */
 	/* FIXME: the end-of-recovery checkpoint fails with the special non-rel
 	 * WAL format, so the server won't start up except as a standby */
-	system("touch standby.signal");
-	system("echo \"hot_standby=on\" >> postgresql.conf");
-	system(psprintf("echo \"recovery_target_lsn='%X/%X'\" >> postgresql.conf",
-					(uint32) (private.endptr >> 32), (uint32) private.endptr));
+	if (private.endptr != InvalidXLogRecPtr)
+	{
+		system("touch standby.signal");
+		system("echo \"hot_standby=on\" >> postgresql.conf");
+		system(psprintf("echo \"recovery_target_lsn='%X/%X'\" >> postgresql.conf",
+						(uint32) (private.endptr >> 32), (uint32) private.endptr));
+	}
 
 	return EXIT_SUCCESS;
 

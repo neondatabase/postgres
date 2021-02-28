@@ -197,18 +197,44 @@ restore_if_lazy(SMgrRelation reln, ForkNumber forknum)
 	/* Is it lazy? */
 	if (reln_is_lazy(reln, forknum))
 	{
+		bool		save_InRecovery = InRecovery;
+
 		PG_TRY();
 		{
+			int			rmid;
+
 			currently_restoring = true;
-			InRecovery = true;
+
+			if (!save_InRecovery)
+			{
+				InRecovery = true;
+				/* Initialize resource managers */
+				for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
+				{
+					if (RmgrTable[rmid].rm_startup != NULL)
+						RmgrTable[rmid].rm_startup();
+				}
+			}
+
 			restore_reln(reln, forknum);
+
+			if (!save_InRecovery)
+			{
+				/* Allow resource managers to do any required cleanup. */
+				for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
+				{
+					if (RmgrTable[rmid].rm_cleanup != NULL)
+						RmgrTable[rmid].rm_cleanup();
+				}
+				InRecovery = false;
+			}
+
 			currently_restoring = false;
-			InRecovery = false;
 		}
 		PG_CATCH();
 		{
 			currently_restoring = false;
-			InRecovery = false;
+			InRecovery = save_InRecovery;
 			PG_RE_THROW();
 		}
 		PG_END_TRY();
@@ -252,7 +278,6 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	List	   *walfiles;
 	ListCell   *lc;
 	XLogRecPtr	last_replayed_recptr;
-	int			rmid;
 
 	/*
 	 * Get current WAL position. We need to reconstruct the file "as of" this position.
@@ -336,13 +361,6 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	/* Fetch and restore the base file */
 	fetch_s3_file_restore(latest_image_path, basepath);
 
-	/* Initialize resource managers */
-	for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
-	{
-		if (RmgrTable[rmid].rm_startup != NULL)
-			RmgrTable[rmid].rm_startup();
-	}
-
 	last_replayed_recptr = latest_image_ptr;
 	foreach(lc, walfiles)
 	{
@@ -368,13 +386,6 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 			ereport(WARNING,
 					(errcode_for_file_access(),
 					 errmsg("could not remove file \"%s\": %m", "tmpwal")));
-	}
-
-	/* Allow resource managers to do any required cleanup. */
-	for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
-	{
-		if (RmgrTable[rmid].rm_cleanup != NULL)
-			RmgrTable[rmid].rm_cleanup();
 	}
 
 	/* remove the _lazy file so that we don't try to restore it again */
