@@ -29,7 +29,7 @@
 #include "common/logging.h"
 #include "getopt_long.h"
 #include "zenith_push.h"
-#include "put_s3.h"
+#include "zenith_s3/s3_ops.h"
 #include "pgtar.h"
 
 /*

@@ -10,18 +10,17 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	$(WIN32RES) \
 	compat.o \
-	zenith_push.o \
-	put_s3.o
+	zenith_push.o
 
 override CPPFLAGS := -DFRONTEND $(CPPFLAGS)
 
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
-
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/zenith_s3 -lzeniths3
 LDFLAGS_INTERNAL += -lcurl
 
 all: zenith_push
 
-zenith_push: $(OBJS) | submake-libpgport submake-libpgfeutils
+zenith_push: $(OBJS) | submake-libpgport submake-libpgfeutils submake-libzeniths3
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs

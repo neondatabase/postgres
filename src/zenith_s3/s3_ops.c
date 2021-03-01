@@ -1,4 +1,3 @@
-
 #include "postgres.h"
 
 #include <stdio.h>
@@ -20,10 +19,16 @@
 #include "common/hex.h"
 #include "common/logging.h"
 #include "lib/stringinfo.h"
-#include "fe_utils/simple_list.h"
-#include "fe_utils/zenith_s3_sign.h"
-#include "s3_ops.h"
+#include "zenith_s3/s3_sign.h"
+#include "zenith_s3/s3_ops.h"
 
+
+/* logging support */
+#ifdef FRONTEND
+#define pg_fatal(...) do { pg_log_fatal(__VA_ARGS__); exit(1); } while(0)
+#else
+#define pg_fatal(...) elog(ERROR, __VA_ARGS__)
+#endif
 
 /* FIXME: 'auto' is a googlism, not sure what to put here for others */
 static const char *region = "auto";
@@ -35,13 +40,8 @@ static const char *secret = "";
 
 static bool initialized = false;
 
-/* logging support */
-#define pg_fatal(...) do { pg_log_fatal(__VA_ARGS__); exit(1); } while(0)
-
 static char *getenv_with_default(const char *name, char *default_value);
 static size_t write_callback(void *data, size_t size, size_t nmemb, void *userp);
-static ListObjectsResult *parse_listobjects_result(StringInfo response);
-static void parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result);
 
 static void
 init_s3()
@@ -88,6 +88,9 @@ write_callback(void *data, size_t size, size_t nmemb, void *userp)
 	return realsize;
 }
 
+static ListObjectsResult *parse_listobjects_result(StringInfo response);
+static void parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result);
+
 ListObjectsResult *
 s3_ListObjects(const char *s3path)
 {
@@ -96,8 +99,6 @@ s3_ListObjects(const char *s3path)
 	char	   *url;
 	char	   *hosthdr;
 	struct curl_slist *headers;
-	SimpleStringList *auth_headers;
-	SimpleStringListCell *h;
 	long		http_code = 0;
 	StringInfoData responsebuf;
 	ListObjectsResult *result = NULL;
@@ -105,8 +106,7 @@ s3_ListObjects(const char *s3path)
 
 	init_s3();
 
-	urlpath = psprintf("/%s/%s", bucket, s3path);
-
+	urlpath = psprintf("/%s/", bucket);
 	url = psprintf("%s%s", endpoint, urlpath);
 
 	fprintf(stderr, "listing: %s\n", url);
@@ -120,18 +120,12 @@ s3_ListObjects(const char *s3path)
 	initStringInfo(&responsebuf);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &responsebuf);
+	
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
-	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
-											 accesskeyid, secret);
-	headers = NULL;
+	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
+										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
-
-	for (h = auth_headers->head; h != NULL; h = h->next)
-	{
-		headers = curl_slist_append(headers, h->val);
-		//fprintf(stderr, "%s\n", h->val);
-	}
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
@@ -236,8 +230,6 @@ fetch_s3_file_memory(const char *s3path)
 	char	   *url;
 	char	   *hosthdr;
 	struct curl_slist *headers;
-	SimpleStringList *auth_headers;
-	SimpleStringListCell *h;
 	long		http_code = 0;
 	StringInfo	result;
 	char	   *urlpath;
@@ -245,7 +237,6 @@ fetch_s3_file_memory(const char *s3path)
 	init_s3();
 
 	urlpath = psprintf("/%s/%s", bucket, s3path);
-
 	url = psprintf("%s%s", endpoint, urlpath);
 
 	fprintf(stderr, "fetching: %s\n", url);
@@ -262,16 +253,9 @@ fetch_s3_file_memory(const char *s3path)
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) result);
 
-	auth_headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
-											 accesskeyid, secret);
-	headers = NULL;
+	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
+										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
-
-	for (h = auth_headers->head; h != NULL; h = h->next)
-	{
-		headers = curl_slist_append(headers, h->val);
-		//fprintf(stderr, "%s\n", h->val);
-	}
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
@@ -304,6 +288,81 @@ fetch_s3_file_memory(const char *s3path)
 	pfree(hosthdr);
 
 	return result;
+}
+
+/*
+ * Fetch a file from S3 compatible storage to a local file
+ */
+void
+fetch_s3_file(const char *s3path, const char *dstpath)
+{
+	CURL	   *curl;
+	CURLcode	res;
+	char	   *url;
+	char	   *hosthdr;
+	struct curl_slist *headers;
+	long		http_code = 0;
+	FILE	   *fp;
+	char	   *urlpath;
+
+	init_s3();
+
+	urlpath = psprintf("/%s/%s", bucket, s3path);
+	url = psprintf("%s%s", endpoint, urlpath);
+
+	fprintf(stderr, "fetching: %s\n", url);
+
+	hosthdr = psprintf("Host: %s", host);
+ 
+	curl = curl_easy_init();
+	if (!curl)
+		pg_fatal("could not init libcurl");
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+
+	fp = fopen(dstpath, PG_BINARY_W);
+	if (!fp)
+		pg_fatal("could not open file \"%s\" for writing: %m", dstpath);
+
+	/* use the internal callback that writes to file */
+	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) fp);
+
+	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
+										accesskeyid, secret);
+	headers = curl_slist_append(headers, hosthdr);
+	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
+
+	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+    /* Perform the request, res will get the return code */ 
+    res = curl_easy_perform(curl);
+    /* Check for errors */ 
+    if (res != CURLE_OK)
+		pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
+
+	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+	if (http_code == 200)
+	{
+		//Succeeded
+	}
+	else
+	{
+		//Failed
+		pg_fatal("got http error: %ld on path %s", http_code, s3path);
+	}
+	
+    /* always cleanup */ 
+    curl_easy_cleanup(curl);
+
+	if (fclose(fp) < 0)
+		pg_fatal("could not write file %s", dstpath);
+
+	fprintf(stderr, "restored file \"%s\" from \"%s\"\n", dstpath, url);
+
+	pfree(url);
+	pfree(hosthdr);
 }
 
 
@@ -389,8 +448,6 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 	char	   *url;
 	char	   *hosthdr;
 	struct curl_slist *headers;
-	SimpleStringList *auth_headers;
-	SimpleStringListCell *h;
 	long		http_code = 0;
 	struct read_file_source src;
 	char	   *bodyhash;
@@ -429,16 +486,9 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
                      (curl_off_t) filesize);
 
-	auth_headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath,
-											 bodyhash, accesskeyid, secret);
-	headers = NULL;
+	headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath, bodyhash,
+										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
-
-	for (h = auth_headers->head; h != NULL; h = h->next)
-	{
-		headers = curl_slist_append(headers, h->val);
-		//fprintf(stderr, "%s\n", h->val);
-	}
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
 
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);

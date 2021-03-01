@@ -10,8 +10,7 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	$(WIN32RES) \
 	compat.o \
-	zenith_restore.o \
-	s3_ops.o
+	zenith_restore.o
 
 #	$(RMGRDESCOBJS) \
 
@@ -22,12 +21,12 @@ override CPPFLAGS := -DFRONTEND $(CPPFLAGS)
 #RMGRDESCOBJS = $(patsubst %.c,%.o,$(RMGRDESCSOURCES))
 
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
-
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/zenith_s3 -lzeniths3
 LDFLAGS_INTERNAL += -lcurl
 
 all: zenith_restore
 
-zenith_restore: $(OBJS) | submake-libpgport submake-libpgfeutils
+zenith_restore: $(OBJS) | submake-libpgport submake-libpgfeutils submake-libzeniths3
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%

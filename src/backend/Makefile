@@ -43,6 +43,8 @@ OBJS = \
 	$(top_builddir)/src/common/libpgcommon_srv.a \
 	$(top_builddir)/src/port/libpgport_srv.a
 
+OBJS += $(top_builddir)/src/zenith_s3/libzeniths3_srv.a
+
 # We put libpgport and libpgcommon into OBJS, so remove it from LIBS; also add
 # libldap and ICU
 LIBS := $(filter-out -lpgport -lpgcommon, $(LIBS)) $(LDAP_LIBS_BE) $(ICU_LIBS)
@@ -60,6 +62,8 @@ LIBS += -lcurl
 ##########################################################################
 
 all: submake-libpgport submake-catalog-headers submake-utils-headers postgres $(POSTGRES_IMP)
+all: submake-libzeniths3
+
 
 ifneq ($(PORTNAME), cygwin)
 ifneq ($(PORTNAME), win32)
@@ -118,6 +122,7 @@ endif
 endif # aix
 
 $(top_builddir)/src/port/libpgport_srv.a: | submake-libpgport
+$(top_builddir)/src/zenith_s3/libzeniths3_srv.a: | submake-libzeniths3
 
 
 # The postgres.o target is needed by the rule in Makefile.global that

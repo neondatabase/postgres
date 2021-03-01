@@ -13,14 +13,12 @@ OBJS = \
 	compat.o \
 	zenith_slicedice_main.o \
 	zenith_slicedice.o \
-	xlogreader.o \
-	s3_ops.o
-
+	xlogreader.o
 
 override CPPFLAGS := -DFRONTEND $(CPPFLAGS)
 
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
-
+LDFLAGS_INTERNAL += -L$(top_builddir)/src/zenith_s3 -lzeniths3
 LDFLAGS_INTERNAL += -lcurl
 
 RMGRDESCSOURCES = xactdesc.c standbydesc.c
@@ -32,7 +30,7 @@ RMGRDESCOBJS = $(patsubst %.c,%.o,$(RMGRDESCSOURCES))
 
 all: zenith_slicedice
 
-zenith_slicedice: $(OBJS) | submake-libpgport submake-libpgfeutils
+zenith_slicedice: $(OBJS) | submake-libpgport submake-libpgfeutils submake-libzeniths3
 	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%

@@ -30,7 +30,7 @@
 #include "common/logging.h"
 #include "getopt_long.h"
 #include "zenith_slicedice.h"
-#include "s3_ops.h"
+#include "zenith_s3/s3_ops.h"
 
 /*
  * RmgrNames is an array of resource manager names, to make error messages

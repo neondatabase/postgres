@@ -13,8 +13,6 @@ top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = \
-	fetch_s3.o \
-	s3_sign.o \
 	lazyrestore.o \
 	md.o \
 	smgr.o
