@@ -22,6 +22,7 @@
 #include "libpq/pqformat.h"
 #include "utils/builtins.h"
 #include "tcop/tcopprot.h"
+#include "access/xlog_internal.h"
 #include "libpq-fe.h"
 
 #include "zenith_store.h"
@@ -29,9 +30,20 @@
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
+#define LSN_PARTS(lsn) (uint32) ((lsn) >> 32), (uint32) (lsn)
+
+static XLogReaderState *xlogreader = NULL;
+
 static void receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received);
-static void apply_dispatch(StringInfo s);
+static void process_record(XLogRecord *record, XLogRecPtr start_lsn);
+static void process_records(StringInfo s, XLogRecPtr start_lsn);
 static void send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool requestReply);
+
+static int stream_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
+					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page);
+static void stream_segment_open(XLogReaderState *state, XLogSegNo nextSegNo,
+					TimeLineID *tli_p);
+static void stream_segment_close(XLogReaderState *state);
 
 typedef struct
 {
@@ -114,19 +126,15 @@ receiver_main(Datum main_arg)
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
-	/* walrcv_exec() wants database connection */
-	// BackgroundWorkerInitializeConnection('postgres', NULL, 0);
-
 	zenith_log(ReceiverTrace, "Starting receiver on '%s'", conn_string);
 
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
-		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
+		zenith_log(ERROR, "libpqwalreceiver didn't initialize correctly");
 
 	conn = walrcv_connect(conn_string, false /* is_logical */, "zenith", &err);
 	if (conn == NULL)
-		ereport(ERROR,
-				(errmsg("could not connect to the publisher: %s", err)));
+		zenith_log(ERROR, "could not connect to the processing node: %s", err);
 
 	/*
 	 * We don't really use the output identify_system for anything but it
@@ -145,6 +153,19 @@ receiver_main(Datum main_arg)
 
 	/* Start normal logical streaming replication. */
 	walrcv_startstreaming(conn, &options);
+
+	/* create xlogreader for physical replication */
+	xlogreader =
+		XLogReaderAllocate(wal_segment_size, NULL,
+						   XL_ROUTINE(.page_read = &stream_read_xlog_page,
+									  .segment_open = &stream_segment_open,
+									  .segment_close = &stream_segment_close),
+						   NULL);
+
+	if (!xlogreader)
+		zenith_log(ERROR, "out of memory");
+
+	XLogBeginRead(xlogreader, primary_lsn);
 
 	receiver_loop(conn, primary_lsn);
 }
@@ -219,7 +240,7 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 					if (last_received < end_lsn)
 						last_received = end_lsn;
 
-					apply_dispatch(&s);
+					process_records(&s, start_lsn);
 				}
 				else if (c == 'k')
 				{
@@ -267,10 +288,108 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 	walrcv_endstreaming(conn, &tli);
 }
 
-static void
-apply_dispatch(StringInfo s)
+static bool
+is_valid_record(XLogRecord *record)
 {
-	zenith_log(ReceiverTrace, "Got record len=%d", s->len);
+	pg_crc32c	crc;
+
+	/* Calculate the CRC */
+	INIT_CRC32C(crc);
+	COMP_CRC32C(crc, ((char *) record) + SizeOfXLogRecord, record->xl_tot_len - SizeOfXLogRecord);
+	/* include the record header last */
+	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_crc));
+	FIN_CRC32C(crc);
+
+	if (!EQ_CRC32C(record->xl_crc, crc))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+static void
+process_records(StringInfo s, XLogRecPtr start_lsn)
+{
+
+	zenith_log(ReceiverTrace, "Got record pack size=%d, first_lsn=%X/%X",
+		s->len - s->cursor,
+		(uint32) (start_lsn >> 32), (uint32) start_lsn);
+
+	const XLogRecPtr lsn_base = start_lsn - s->cursor;
+
+	while (s->cursor < s->len)
+	{
+		// XXX: do XLogRecord sanity check akin to ValidXLogRecordHeader()
+		XLogRecord *record = (XLogRecord *) (s->data + s->cursor);
+		uint32 total_len = record->xl_tot_len;
+		uint32 len_in_block = XLOG_BLCKSZ - (lsn_base + s->cursor) % XLOG_BLCKSZ;
+
+		start_lsn = lsn_base + s->cursor;
+
+		if (total_len <= len_in_block)
+		{
+			process_record(record, lsn_base + s->cursor);
+			s->cursor += MAXALIGN(record->xl_tot_len);
+		}
+		else
+		{
+			/* Record does cross a page boundary */
+			StringInfoData buf;
+			initStringInfo(&buf);
+			appendBinaryStringInfoNT(&buf, s->data + s->cursor, len_in_block);
+			s->cursor += len_in_block;
+
+			XLogPageHeaderData *pageHeader;
+			uint32 gotlen = len_in_block;
+			do
+			{
+				Assert((lsn_base + s->cursor) % XLOG_BLCKSZ == 0);
+
+				pageHeader = (XLogPageHeaderData *) (s->data + s->cursor);
+				if (!(pageHeader->xlp_info & XLP_FIRST_IS_CONTRECORD))
+					zenith_log(ERROR, "there is no contrecord flag at %X/%X", LSN_PARTS(start_lsn));
+
+				if (pageHeader->xlp_rem_len == 0 ||
+					total_len != (pageHeader->xlp_rem_len + gotlen))
+				{
+					zenith_log(ERROR, "invalid contrecord length %u (expected %lld) at %X/%X",
+							pageHeader->xlp_rem_len,
+							((long long) total_len) - gotlen,
+							LSN_PARTS(lsn_base + s->cursor));
+				}
+
+				s->cursor += XLogPageHeaderSize(pageHeader);
+				len_in_block = XLOG_BLCKSZ - XLogPageHeaderSize(pageHeader);
+				if (pageHeader->xlp_rem_len < len_in_block)
+					len_in_block = pageHeader->xlp_rem_len;
+
+				appendBinaryStringInfoNT(&buf, s->data + s->cursor, len_in_block);
+				s->cursor += MAXALIGN(len_in_block);
+				gotlen += len_in_block;
+			} while (gotlen < total_len);
+
+
+			Assert(record->xl_tot_len == total_len);
+			process_record((XLogRecord *) buf.data, start_lsn);
+		}
+	}
+	Assert(s->cursor == s->len);
+}
+
+static void
+process_record(XLogRecord *record, XLogRecPtr start_lsn)
+{
+
+	zenith_log(ReceiverTrace, "Processing record: xid=%d, xl_tot_len=%d, len_before_8k=%lu, lsn=%X/%X",
+		record->xl_xid,
+		record->xl_tot_len,
+		XLOG_BLCKSZ - start_lsn % XLOG_BLCKSZ,
+		LSN_PARTS(start_lsn));
+
+	if (!is_valid_record(record))
+		zenith_log(ERROR, "CRC check failed for record %X/%X", LSN_PARTS(start_lsn));
+
 }
 
 static void
@@ -290,4 +409,27 @@ send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool reques
 	pq_sendbyte(reply_message, requestReply);	/* replyRequested */
 
 	walrcv_send(conn, reply_message->data, reply_message->len);
+}
+
+/*
+ *
+ */
+
+static int
+stream_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
+					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
+{
+	return 42;
+}
+
+static void
+stream_segment_open(XLogReaderState *state, XLogSegNo nextSegNo,
+					TimeLineID *tli_p)
+{
+}
+
+static void
+stream_segment_close(XLogReaderState *state)
+{
+
 }
