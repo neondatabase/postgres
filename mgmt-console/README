@@ -21,7 +21,7 @@ For the webapp:
 
 git clone and compile and install patched version of Postgres:
 
-  git clone https://github.com/hlinnaka/postgres.git
+  git clone https://github.com/libzenith/postgres.git
   cd postgres
   git checkout zenith-experiments
   ./configure --enable-debug --enable-cassert --with-openssl --prefix=/home/heikki/pgsql-install --with-libxml CC="ccache gcc" CFLAGS="-O0"
@@ -29,7 +29,7 @@ git clone and compile and install patched version of Postgres:
 
 Get the webapp:
   cd ~
-  git clone https://github.com/hlinnaka/zenith-mgmt-console.git
+  git clone https://github.com/libzenith/zenith-mgmt-console.git
   cd zenith-mgmt-console
   mkdir pgdatadirs
 
