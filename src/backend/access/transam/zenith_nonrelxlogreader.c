@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
- *
+1 *
  * zenith_nonrelxlogreader.c
  *		Read WAL in nonrelwal format
  *
@@ -14,20 +14,15 @@
 
 #include "postgres.h"
 
-#include <ctype.h>
-#include <math.h>
-#include <time.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <sys/time.h>
-#include <unistd.h>
-
 #include "access/transam.h"
 #include "access/xlog.h"
 #include "access/xlogreader.h"
-#include "lib/ilist.h"
 
 
+/*
+ * On first call, we scan pg_wal and collect information about all non-rel WAL
+ * files in 'nonrelwal_files' list. It is sorted by 'startptr'.
+ */
 typedef struct
 {
 	const char *filename;
@@ -38,6 +33,9 @@ typedef struct
 static List *nonrelwal_files;
 static bool nonrelwal_scanned = false;
 
+/*
+ * Currently open non-rel WAL file and position within it.
+ */
 static int	current_nonrelwal_idx;
 static FILE *current_nonrelwal_fp;
 static XLogRecPtr current_recptr;
@@ -56,6 +54,9 @@ fread_noerr(void *buf, size_t size, FILE *fp)
 		elog(ERROR, "error reading");
 }
 
+/*
+ * Read next record from currently open non-rel WAL file.
+ */
 static bool
 read_next_record(XLogReaderState *xlogreader, XLogRecPtr *recstartptr, XLogRecPtr *recendptr)
 {
@@ -67,7 +68,7 @@ read_next_record(XLogReaderState *xlogreader, XLogRecPtr *recstartptr, XLogRecPt
 		return false;
 	if (nread != sizeof(XLogRecPtr))
 		elog(ERROR, "error reading"); /* FIXME: proper error message */
-	
+
 	/* on entry, we are positioned between the startptr and endptr of a record. */
 	fread_noerr(recendptr, sizeof(XLogRecPtr), current_nonrelwal_fp);
 	fread_noerr(&xl_tot_len, sizeof(uint32), current_nonrelwal_fp);
@@ -85,6 +86,9 @@ read_next_record(XLogReaderState *xlogreader, XLogRecPtr *recstartptr, XLogRecPt
 	return true;
 }
 
+/*
+ * Try to read a record from a non-rel WAL file.
+ */
 XLogRecord *
 nonrelwal_read_record(XLogReaderState *xlogreader, int emode,
 					  bool fetching_ckpt)
@@ -97,6 +101,9 @@ nonrelwal_read_record(XLogReaderState *xlogreader, int emode,
 		 (uint32) (recptr >> 32),
 		 (uint32) recptr);
 
+	/*
+	 * Scan the pg_wal directory for non-rel WAL files on first call.
+	 */
 	if (!nonrelwal_scanned)
 	{
 		scan_nonrelwal_files();
@@ -107,7 +114,11 @@ nonrelwal_read_record(XLogReaderState *xlogreader, int emode,
 	if (nfiles == 0)
 		return NULL;
 	e = list_nth(nonrelwal_files, current_nonrelwal_idx);
-	
+
+	/*
+	 * Try to open a non-rel WAL file containing 'recptr', if it's not
+	 * open already.
+	 */
 	if (current_nonrelwal_fp == NULL ||
 		current_recptr == InvalidXLogRecPtr ||
 		current_recptr > recptr ||
@@ -116,13 +127,13 @@ nonrelwal_read_record(XLogReaderState *xlogreader, int emode,
 	{
 		char		path[MAXPGPATH];
 
-		/* seek */
 		if (current_nonrelwal_fp)
 		{
 			FreeFile(current_nonrelwal_fp);
 			current_nonrelwal_fp = NULL;
 		}
 
+		/* Find the right file in the list of files. */
 		while (e->startptr > recptr && current_nonrelwal_idx > 0)
 		{
 			current_nonrelwal_idx--;

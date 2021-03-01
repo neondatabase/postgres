@@ -195,10 +195,13 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+		/*
+		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the
+		 * calls. Instead, there is a direct call to restore_if_lazy() in
+		 * ReadBuffer_common()
+		 */
 		if (rnode.relNode < FirstNormalObjectId)
 			reln->smgr_which = 1; /* md */
-		else
-			reln->smgr_which = 1; /* lazyrestore */
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
