@@ -200,8 +200,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 		 * calls. Instead, there is a direct call to restore_if_lazy() in
 		 * ReadBuffer_common()
 		 */
-		if (rnode.relNode < FirstNormalObjectId)
-			reln->smgr_which = 1; /* md */
+		reln->smgr_which = 1; /* md */
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
