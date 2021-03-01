@@ -44,6 +44,8 @@ static void find_slice_wal_points(void);
 static XLogSegNo current_segno;
 static StringInfo current_segment;
 
+CURL *curl_handle;
+
 /* pg_waldump's XLogReaderRoutine->page_read callback */
 static int
 WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
@@ -80,12 +82,12 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		}
 
 		XLByteToSeg(targetPagePtr, nextSegNo, state->segcxt.ws_segsize);
-	
+
 		XLogFileName(fname, timeline, nextSegNo, state->segcxt.ws_segsize);
 
 		snprintf(s3path, sizeof(s3path), "walarchive/%s", fname);
 
-		current_segment = fetch_s3_file_memory(s3path);
+		current_segment = fetch_s3_file_memory(curl_handle, s3path);
 		current_segno = nextSegNo;
 	}
 
@@ -180,8 +182,12 @@ main(int argc, char **argv)
 					 argv[optind + 2]);
 		goto bad_argument;
 	}
-	
+
 	/* done with argument parsing, do the actual work */
+
+	curl_handle = curl_easy_init();
+	if (!curl_handle)
+		pg_fatal("could not init libcurl");
 
 	/*
 	 * 1. Establish beginning and end point of the operation.
@@ -270,6 +276,8 @@ main(int argc, char **argv)
 	/* Finally, upload the generated sliced WAL files */
 	upload_slice_wal_files();
 
+	curl_easy_cleanup(curl_handle);
+
 	return EXIT_SUCCESS;
 
 bad_argument:
@@ -351,7 +359,7 @@ find_slice_wal_points(void)
 	XLogRecPtr		startptr = InvalidXLogRecPtr;
 	XLogRecPtr		endptr = InvalidXLogRecPtr;
 
-	files = s3_ListObjects("");
+	files = s3_ListObjects(curl_handle, "");
 	fprintf(stderr, "number of files in bucket: %d\n", files->numfiles);
 
 	/*
@@ -369,7 +377,7 @@ find_slice_wal_points(void)
 		{
 			if (ptr > latest_tarball_ptr)
 				latest_tarball_ptr = ptr;
-		}		
+		}
 		else if (parse_nonrelwal_filename(files->filenames[i], &this_startptr, &this_endptr))
 		{
 			fprintf(stderr, "non-rel WAL: %s from %X/%X to %X/%X\n", files->filenames[i],

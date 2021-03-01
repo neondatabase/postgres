@@ -11,6 +11,9 @@
 #ifndef ZENITH_SLICEDICE_H
 #define ZENITH_SLICEDICE_H
 
+#include <curl/curl.h>
+
+extern CURL *curl_handle;
 
 /* logging support */
 #define pg_fatal(...) do { pg_log_fatal(__VA_ARGS__); exit(1); } while(0)

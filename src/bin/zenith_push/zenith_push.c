@@ -62,6 +62,8 @@ static void _tarWriteHeader(const char *filename, const char *linktarget,
 
 static FILE *tarfile;
 
+static CURL *curl;
+
 static void
 usage(void)
 {
@@ -189,7 +191,11 @@ main(int argc, char **argv)
 	}
 
 	/* done with argument parsing, do the actual work */
-	
+
+	curl = curl_easy_init();
+	if (!curl)
+		pg_fatal("could not init libcurl");
+
 	/* In this mode, used as an archive_command */
 	if (archive_wal_path)
 	{
@@ -204,7 +210,7 @@ main(int argc, char **argv)
 		snprintf(s3pathbuf, sizeof(s3pathbuf), "walarchive/%s",
 				 archive_wal_fname);
 
-		put_s3_file(archive_wal_path, s3pathbuf, fst.st_size);
+		put_s3_file(curl, archive_wal_path, s3pathbuf, fst.st_size);
 
 		return EXIT_SUCCESS;
 	}
@@ -257,9 +263,10 @@ main(int argc, char **argv)
 				 "nonreldata/nonrel_%08X%08X.tar", 
 				 (uint32) (walpos >> 32), (uint32) walpos);
 
-		put_s3_file("/tmp/zenith_push_base.tar", s3pathbuf, fst.st_size);
+		put_s3_file(curl, "/tmp/zenith_push_base.tar", s3pathbuf, fst.st_size);
 	}
 
+	curl_easy_cleanup(curl);
 	return EXIT_SUCCESS;
 
 bad_argument:
@@ -401,7 +408,7 @@ handlefile(const char *datadir, const char *path, struct stat *statbuf)
 		snprintf(s3pathbuf, sizeof(s3pathbuf),
 				 "relationdata/%s_%08X%08X",
 				 path, (uint32) (walpos >> 32), (uint32) walpos);
-		put_s3_file(path, s3pathbuf, statbuf->st_size);
+		put_s3_file(curl, path, s3pathbuf, statbuf->st_size);
 	}
 	else if (strlen(path) > strlen("pg_wal/") &&
 			 IsXLogFileName(path + strlen("pg_wal/")))
