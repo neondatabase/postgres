@@ -92,9 +92,8 @@ static void parse_listobjects_result(StringInfo response, ListObjectsResult *res
 static void parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result);
 
 ListObjectsResult *
-s3_ListObjects(const char *s3path)
+s3_ListObjects(CURL *curl, const char *s3path)
 {
-	CURL	   *curl;
 	CURLcode	res;
 	char	   *url;
 	char	   *hosthdr;
@@ -109,10 +108,6 @@ s3_ListObjects(const char *s3path)
 	init_s3();
 
 	hosthdr = psprintf("Host: %s", host);
-
-	curl = curl_easy_init();
-	if (!curl)
-		pg_fatal("could not init libcurl");
 
 	initStringInfo(&responsebuf);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
@@ -185,9 +180,6 @@ s3_ListObjects(const char *s3path)
 		else
 			fprintf(stderr, "got continuation token: %s\n", continuation_token);
 	}
-
-	/* always cleanup */
-	curl_easy_cleanup(curl);
 
 	pfree(url);
 	pfree(hosthdr);
@@ -263,9 +255,8 @@ parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result)
  * Fetch a file from S3 compatible storage, returning it as a blob of memory
  */
 StringInfo
-fetch_s3_file_memory(const char *s3path)
+fetch_s3_file_memory(CURL *curl, const char *s3path)
 {
-	CURL	   *curl;
 	CURLcode	res;
 	char	   *url;
 	char	   *hosthdr;
@@ -282,10 +273,6 @@ fetch_s3_file_memory(const char *s3path)
 	fprintf(stderr, "fetching: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
-
-	curl = curl_easy_init();
-	if (!curl)
-		pg_fatal("could not init libcurl");
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
@@ -319,9 +306,6 @@ fetch_s3_file_memory(const char *s3path)
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
 
-	/* always cleanup */
-	curl_easy_cleanup(curl);
-
 	fprintf(stderr, "fetched \"%s\"\n", url);
 
 	pfree(url);
@@ -334,9 +318,8 @@ fetch_s3_file_memory(const char *s3path)
  * Fetch a file from S3 compatible storage to a local file
  */
 void
-fetch_s3_file(const char *s3path, const char *dstpath)
+fetch_s3_file(CURL *curl, const char *s3path, const char *dstpath)
 {
-	CURL	   *curl;
 	CURLcode	res;
 	char	   *url;
 	char	   *hosthdr;
@@ -353,10 +336,6 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 	fprintf(stderr, "fetching: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
-
-	curl = curl_easy_init();
-	if (!curl)
-		pg_fatal("could not init libcurl");
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
@@ -392,9 +371,6 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 		//Failed
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
-
-	/* always cleanup */
-	curl_easy_cleanup(curl);
 
 	if (fclose(fp) < 0)
 		pg_fatal("could not write file %s", dstpath);
@@ -480,9 +456,8 @@ compute_file_hash(FILE *fp)
  * Put a file to S3
  */
 void
-put_s3_file(const char *localpath, const char *s3path, size_t filesize)
+put_s3_file(CURL *curl, const char *localpath, const char *s3path, size_t filesize)
 {
-	CURL	   *curl;
 	CURLcode	res;
 	FILE	   *fp;
 	char	   *url;
@@ -502,10 +477,6 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 	//fprintf(stderr, "putting: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
-
-	curl = curl_easy_init();
-	if (!curl)
-		pg_fatal("could not init libcurl");
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
 
@@ -551,9 +522,6 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 		//Failed
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
-
-	/* always cleanup */
-	curl_easy_cleanup(curl);
 
 	if (fclose(fp) < 0)
 		pg_fatal("could not read file %s", localpath);

@@ -267,6 +267,7 @@ walfile_info_cmp(const ListCell *a, const ListCell *b)
 static void
 restore_reln(SMgrRelation reln, ForkNumber forknum)
 {
+	CURL	   *curl;
 	ListObjectsResult *files;
 	char	   *lazypath;
 	int			ret;
@@ -292,7 +293,11 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	else
 		walpos = GetXLogReplayRecPtr(&tli);
 
-	files = s3_ListObjects("");
+	curl = curl_easy_init();
+	if (!curl)
+		elog(ERROR, "could not init libcurl");
+
+	files = s3_ListObjects(curl, "");
 	elog(LOG, "number of files in bucket: %d\n", files->numfiles);
 
 	basepath = relpath(reln->smgr_rnode, forknum);
@@ -359,7 +364,7 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	list_sort(walfiles, walfile_info_cmp);
 
 	/* Fetch and restore the base file */
-	fetch_s3_file(latest_image_path, basepath);
+	fetch_s3_file(curl, latest_image_path, basepath);
 
 	last_replayed_recptr = latest_image_ptr;
 	foreach(lc, walfiles)
@@ -368,7 +373,7 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 		XLogRecPtr from;
 		XLogRecPtr upto;
 
-		fetch_s3_file(e->path, "tmpwal");
+		fetch_s3_file(curl, e->path, "tmpwal");
 
 		from = Max(last_replayed_recptr, e->startptr);
 		upto = Min(walpos, e->endptr);
@@ -399,6 +404,8 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 
 	/* clean up (FIXME: consider using a temp memory context to avoid leaks) */
 	pfree(lazypath);
+
+	curl_easy_cleanup(curl);
 }
 
 static bool

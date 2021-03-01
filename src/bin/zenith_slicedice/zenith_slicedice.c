@@ -480,12 +480,12 @@ upload_slice_wal_files(void)
 					 entry->relpath,
 					 (uint32) (entry->create_lsn >> 32),
 					 (uint32) (entry->create_lsn));
-			put_s3_file("/dev/null", s3path, 0);
+			put_s3_file(curl_handle, "/dev/null", s3path, 0);
 		}
 
 		/* Put the per-rel WAL file */
 		snprintf(s3path, sizeof(s3path), "relationdata/%s", entry->walpath);
-		put_s3_file(entry->walpath, s3path, entry->size);
+		put_s3_file(curl_handle, entry->walpath, s3path, entry->size);
 	}
 
 	/* finally, upload the non-rel WAL */
@@ -494,5 +494,5 @@ upload_slice_wal_files(void)
 	snprintf(s3path, sizeof(s3path), "nonreldata/nonrel_%08X%08X-%08X%08X",
 			 (uint32) (start_lsn >> 32), (uint32) start_lsn,
 			 (uint32) (end_lsn >> 32), (uint32) end_lsn);
-	put_s3_file(nonrel_entry->walpath, s3path, nonrel_entry->size);
+	put_s3_file(curl_handle, nonrel_entry->walpath, s3path, nonrel_entry->size);
 }

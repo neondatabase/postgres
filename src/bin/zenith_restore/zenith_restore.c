@@ -53,6 +53,8 @@ typedef struct zenith_restore_config
 
 #define fatal_error(...) do { pg_log_fatal(__VA_ARGS__); exit(EXIT_FAILURE); } while(0)
 
+static CURL *curl;
+
 static bool parse_nonreldata_filename(const char *path, XLogRecPtr *startptr);
 static bool parse_nonrelwal_filename(const char *path, XLogRecPtr *startptr, XLogRecPtr *endptr);
 static bool parse_reldata_filename(const char *path, char **basefname);
@@ -314,6 +316,10 @@ main(int argc, char **argv)
 	
 	/* done with argument parsing, do the actual work */
 
+	curl = curl_easy_init();
+	if (!curl)
+		pg_fatal("could not init libcurl");
+
 	/* In this mode, used as an restore_command */
 	if (archive_wal_path)
 	{
@@ -322,10 +328,11 @@ main(int argc, char **argv)
 		snprintf(s3pathbuf, sizeof(s3pathbuf), "walarchive/%s",
 				 archive_wal_fname);
 
-		fetch_s3_file(s3pathbuf, archive_wal_path);
+		fetch_s3_file(curl, s3pathbuf, archive_wal_path);
 
 		fprintf(stderr, "restored %s from WAL archive\n", archive_wal_fname);
 
+		curl_easy_cleanup(curl);
 		return EXIT_SUCCESS;
 	}
 
@@ -345,7 +352,7 @@ main(int argc, char **argv)
 	 */
 
 	/* Fetch list of files */
-	files = s3_ListObjects("");
+	files = s3_ListObjects(curl, "");
 	fprintf(stderr, "number of files in bucket: %d\n", files->numfiles);
 
 	/* Find the latest base tarball */
@@ -373,7 +380,7 @@ main(int argc, char **argv)
 		pg_fatal("could not find suitable base tarball");
 	
 	/* Fetch and unpack the tarball */
-	fetch_s3_file(psprintf("%s", latest_tarball_name), "latest_tarball.tar");
+	fetch_s3_file(curl, psprintf("%s", latest_tarball_name), "latest_tarball.tar");
 	fprintf(stderr, "extracting base tarball...");
 	fflush(stderr);
 	system("tar xf latest_tarball.tar");
@@ -402,7 +409,7 @@ main(int argc, char **argv)
 
 				split_path(this_path, &this_dir, &this_fname);
 
-				fetch_s3_file(this_path, psprintf("pg_wal/nonrelwal/%s", this_fname));
+				fetch_s3_file(curl, this_path, psprintf("pg_wal/nonrelwal/%s", this_fname));
 			}
 
 			if (this_endptr > end_of_nonrelwal)
@@ -546,7 +553,7 @@ main(int argc, char **argv)
 						 "pg_wal/%s",
 						 path + strlen("walarchive/"));
 
-				fetch_s3_file(path, localpath);
+				fetch_s3_file(curl, path, localpath);
 			}
 		}
 	}
@@ -562,6 +569,7 @@ main(int argc, char **argv)
 						(uint32) (private.endptr >> 32), (uint32) private.endptr));
 	}
 
+	curl_easy_cleanup(curl);
 	return EXIT_SUCCESS;
 
 bad_argument:
