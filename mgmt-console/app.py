@@ -30,6 +30,8 @@ ACCESS_KEY = os.getenv('S3_ACCESSKEY', 'minioadmin')
 SECRET = os.getenv('S3_SECRET', '')
 BUCKET = os.getenv('S3_BUCKET', 'foobucket')
 
+print("Using bucket at " + ENDPOINT);
+
 #boto3.set_stream_logger('botocore', logging.DEBUG)
 
 session = Session(aws_access_key_id=ACCESS_KEY,
@@ -91,7 +93,7 @@ def server_status():
 @app.route('/list_bucket')
 def list_bucket():
 
-    response = 'cloud bucket contents:'
+    response = 'cloud bucket contents:<br>\n'
 
     for file in s3bucket.objects.all():
         response = response + html.escape(file.key) + '<br>\n'
