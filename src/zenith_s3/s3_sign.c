@@ -132,6 +132,7 @@ hmac_sha256(uint8 *result, const uint8 *key, int keylen, const uint8 *msg, int m
 		pg_cryptohash_free(sha256ctx);
 		pg_fatal("cryptohash failure");
 	}
+	pg_cryptohash_free(sha256ctx);
 }
 
 static void
@@ -226,6 +227,7 @@ construct_string_to_sign(pg_time_t now, const char *method, const char *host, co
 
 	appendStringInfoString(&string_to_sign, hex);
 	pfree(hex);
+	pg_cryptohash_free(sha256ctx);
 
 	//fprintf(stderr, "stringToSign:\n%s\n", string_to_sign.data);
 
@@ -252,17 +254,19 @@ s3_get_authorization_hdrs(const char *host,
 	char	   *signaturehex;
 	struct curl_slist *headers;
 	char		today_buf[128];
-	pg_cryptohash_ctx *sha256ctx;
 
 	if (!bodyhash)
 	{
 		/* Calculate hash of empty request body */
 		/* FIXME: check errors */
+		pg_cryptohash_ctx *sha256ctx;
+
 		sha256ctx = pg_cryptohash_create(PG_SHA256);
 		pg_cryptohash_init(sha256ctx);
 		pg_cryptohash_update(sha256ctx, (uint8 *) "", 0);
 		pg_cryptohash_final(sha256ctx, bodyhashbuf, sizeof(bodyhashbuf));
 		bodyhash = gethex(bodyhashbuf, PG_SHA256_DIGEST_LENGTH);
+		pg_cryptohash_free(sha256ctx);
 	}
 
 	now = (pg_time_t) time(NULL);
