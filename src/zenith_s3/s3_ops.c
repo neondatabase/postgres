@@ -106,6 +106,7 @@ s3_ListObjects(CURL *curl, const char *s3path)
 	char	   *continuation_token = NULL;
 
 	init_s3();
+	curl_easy_reset(curl);
 
 	hosthdr = psprintf("Host: %s", host);
 
@@ -266,6 +267,7 @@ fetch_s3_file_memory(CURL *curl, const char *s3path)
 	char	   *urlpath;
 
 	init_s3();
+	curl_easy_reset(curl);
 
 	urlpath = psprintf("/%s/%s", bucket, s3path);
 	url = psprintf("%s%s", endpoint, urlpath);
@@ -329,6 +331,7 @@ fetch_s3_file(CURL *curl, const char *s3path, const char *dstpath)
 	char	   *urlpath;
 
 	init_s3();
+	curl_easy_reset(curl);
 
 	urlpath = psprintf("/%s/%s", bucket, s3path);
 	url = psprintf("%s%s", endpoint, urlpath);
@@ -469,6 +472,7 @@ put_s3_file(CURL *curl, const char *localpath, const char *s3path, size_t filesi
 	char	   *urlpath;
 
 	init_s3();
+	curl_easy_reset(curl);
 
 	urlpath = psprintf("/%s/%s", bucket, s3path);
 
