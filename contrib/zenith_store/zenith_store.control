@@ -1,0 +1,5 @@
+# zenith_store extension
+comment = 'PostgreSQL remote page store'
+default_version = '1.1'
+module_pathname = '$libdir/zenith_store'
+relocatable = true

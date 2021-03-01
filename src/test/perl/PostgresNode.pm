@@ -1199,8 +1199,8 @@ sub get_free_port
 		# 0.0.0.0 is unnecessary on non-Windows systems.
 		if ($found == 1)
 		{
-			foreach my $addr (qw(127.0.0.1),
-				$use_tcp ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
+			foreach my $addr (qw(127.0.0.1))
+				# $use_tcp ? qw(127.0.0.2 127.0.0.3 0.0.0.0) : ())
 			{
 				if (!can_bind($addr, $port))
 				{
