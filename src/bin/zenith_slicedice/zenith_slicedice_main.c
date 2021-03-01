@@ -25,7 +25,7 @@
 #include "getopt_long.h"
 #include "zenith_slicedice.h"
 
-#include "s3_ops.h"
+#include "zenith_s3/s3_ops.h"
 
 // FIXME: read this from control file
 static const int wal_segment_size = DEFAULT_XLOG_SEG_SIZE;

@@ -31,7 +31,7 @@
 #include "common/logging.h"
 #include "getopt_long.h"
 #include "zenith_restore.h"
-#include "s3_ops.h"
+#include "zenith_s3/s3_ops.h"
 
 static const char *progname;
 

@@ -31,6 +31,8 @@ SUBDIRS = \
 	test/isolation \
 	test/perl
 
+SUBDIRS += zenith_s3
+
 ifeq ($(with_llvm), yes)
 SUBDIRS += backend/jit/llvm
 endif

@@ -1,23 +1,35 @@
 #include "postgres.h"
 
+#include <curl/curl.h>		/* for curl_slist */
+
+#ifndef FRONTEND
+#include "pgtime.h"
+#else
 #include <time.h>
+#endif
 
 #include "common/cryptohash.h"
 #include "common/hex.h"
 #include "common/sha2.h"
 #include "lib/stringinfo.h"
-#include "fe_utils/simple_list.h"
-#include "pgtime.h"
 
+#ifdef FRONTEND
 #include "common/logging.h"
-#include "fe_utils/zenith_s3_sign.h"
+#endif
 
+#include "zenith_s3/s3_sign.h"
 
+#ifdef FRONTEND
+#define pg_time_t time_t
 #define pg_strftime strftime
 #define pg_gmtime gmtime
 
 /* logging support */
 #define pg_fatal(...) do { pg_log_fatal(__VA_ARGS__); exit(1); } while(0)
+
+#else
+#define pg_fatal(...) elog(ERROR, __VA_ARGS__)
+#endif
 
 static char *
 gethex(uint8 *input, int inputlen)
@@ -221,7 +233,7 @@ construct_string_to_sign(pg_time_t now, const char *method, const char *host, co
 	return string_to_sign.data;
 }
 
-SimpleStringList *
+struct curl_slist *
 s3_get_authorization_hdrs(const char *host,
 						  const char *region,
 						  const char *method,
@@ -238,7 +250,7 @@ s3_get_authorization_hdrs(const char *host,
 	uint8		signaturebuf[PG_SHA256_DIGEST_LENGTH];
 	uint8		bodyhashbuf[PG_SHA256_DIGEST_LENGTH];
 	char	   *signaturehex;
-	SimpleStringList *headers;
+	struct curl_slist *headers;
 	char		today_buf[128];
 	pg_cryptohash_ctx *sha256ctx;
 
@@ -278,17 +290,16 @@ s3_get_authorization_hdrs(const char *host,
 
 	pfree(signaturehex);
 
-	headers = palloc0(sizeof(SimpleStringList));
-	simple_string_list_append(headers, authhdr);
+	headers = curl_slist_append(NULL, authhdr);
 
 	/* Contsruct date header */
 	initStringInfo(&datehdr);
 	appendStringInfo(&datehdr, "X-Amz-Date: ");
 	appendDate(&datehdr, now, "%Y%m%dT%H%M%SZ");
-	simple_string_list_append(headers, datehdr.data);
+	headers = curl_slist_append(headers, datehdr.data);
 
 	/* add X-Amz-Content-Sha256 header */
-	simple_string_list_append(headers, psprintf("X-Amz-Content-Sha256: %s", bodyhash));
+	headers = curl_slist_append(headers, psprintf("X-Amz-Content-Sha256: %s", bodyhash));
 
 	return headers;
 }

@@ -28,7 +28,6 @@
 #include "postmaster/bgwriter.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
-#include "storage/fetch_s3.h"
 #include "storage/lazyrestore.h"
 #include "storage/md.h"
 #include "storage/relfilenode.h"
@@ -37,6 +36,7 @@
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "access/xlog_internal.h"
+#include "zenith_s3/s3_ops.h"
 
 static MemoryContext LazyRestoreCxt;
 
@@ -359,7 +359,7 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	list_sort(walfiles, walfile_info_cmp);
 
 	/* Fetch and restore the base file */
-	fetch_s3_file_restore(latest_image_path, basepath);
+	fetch_s3_file(latest_image_path, basepath);
 
 	last_replayed_recptr = latest_image_ptr;
 	foreach(lc, walfiles)
@@ -368,7 +368,7 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 		XLogRecPtr from;
 		XLogRecPtr upto;
 
-		fetch_s3_file_restore(e->path, "tmpwal");
+		fetch_s3_file(e->path, "tmpwal");
 
 		from = Max(last_replayed_recptr, e->startptr);
 		upto = Min(walpos, e->endptr);

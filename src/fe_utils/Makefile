@@ -34,8 +34,6 @@ OBJS = \
 	simple_list.o \
 	string_utils.o
 
-OBJS += zenith_s3_sign.o
-
 all: libpgfeutils.a
 
 libpgfeutils.a: $(OBJS)
