@@ -26,6 +26,7 @@ extern struct curl_slist *s3_get_authorization_hdrs(const char *host,
 													const char *region,
 													const char *method,
 													const char *path,
+													const char *query_string,
 													const char *bodyhash,
 													const char *accesskeyid,
 													const char *secret);

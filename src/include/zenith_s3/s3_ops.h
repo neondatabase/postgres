@@ -18,6 +18,7 @@ typedef struct
 {
 	int			numfiles;
 	char	  **filenames;
+	int			szfilenames;	/* allocated size of filenames */
 } ListObjectsResult;
 
 extern ListObjectsResult *s3_ListObjects(const char *s3path);
