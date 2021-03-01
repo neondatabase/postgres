@@ -134,7 +134,6 @@ hmac_sha256(uint8 *result, const uint8 *key, int keylen, const uint8 *msg, int m
 	}
 }
 
-//230c5a5ca9104202538ccb40fcbbfd4f4a8ac1c857ac855fab1492f5c7c94be3
 static void
 derive_signingkey(uint8 *result, pg_time_t today, const char *region, const char *service,
 				  const char *secret)
@@ -195,7 +194,7 @@ construct_string_to_sign(pg_time_t now, const char *method, const char *host, co
 	/* PAYLOAD */
 	appendStringInfo(&canonical_request, "%s", bodyhash);
 
-	//fprintf(stderr, "canonicalRequest:\n%s\n", canonical_request.data);
+	// fprintf(stderr, "canonicalRequest:\n---\n%s\n---\n", canonical_request.data);
 
 	/*
 	 * Construct StringToSign
@@ -238,6 +237,7 @@ s3_get_authorization_hdrs(const char *host,
 						  const char *region,
 						  const char *method,
 						  const char *path,
+						  const char *query_string,
 						  const char *bodyhash,
 						  const char *accesskeyid,
 						  const char *secret)
@@ -271,7 +271,10 @@ s3_get_authorization_hdrs(const char *host,
 
 	derive_signingkey(SigningKey, now, region, "s3", secret);
 
-	string_to_sign = construct_string_to_sign(now, method, host, region, path, "", bodyhash);
+	string_to_sign = construct_string_to_sign(now, method, host, region,
+											  path,
+											  query_string ? query_string : "",
+											  bodyhash);
 
 	/* Construct Signature */
 	hmac_sha256(signaturebuf, SigningKey, PG_SHA256_DIGEST_LENGTH, (uint8 *) string_to_sign, strlen(string_to_sign));

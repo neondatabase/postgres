@@ -84,11 +84,11 @@ write_callback(void *data, size_t size, size_t nmemb, void *userp)
 	StringInfo	buf = (StringInfo) userp;
 
 	appendBinaryStringInfo(buf, data, realsize);
- 
+
 	return realsize;
 }
 
-static ListObjectsResult *parse_listobjects_result(StringInfo response);
+static void parse_listobjects_result(StringInfo response, ListObjectsResult *result, char **continuation_token);
 static void parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result);
 
 ListObjectsResult *
@@ -103,16 +103,13 @@ s3_ListObjects(const char *s3path)
 	StringInfoData responsebuf;
 	ListObjectsResult *result = NULL;
 	char	   *urlpath;
+	char	   *query_string;
+	char	   *continuation_token = NULL;
 
 	init_s3();
 
-	urlpath = psprintf("/%s/", bucket);
-	url = psprintf("%s%s", endpoint, urlpath);
-
-	fprintf(stderr, "listing: %s\n", url);
-
 	hosthdr = psprintf("Host: %s", host);
- 
+
 	curl = curl_easy_init();
 	if (!curl)
 		pg_fatal("could not init libcurl");
@@ -120,42 +117,77 @@ s3_ListObjects(const char *s3path)
 	initStringInfo(&responsebuf);
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &responsebuf);
-	
-    curl_easy_setopt(curl, CURLOPT_URL, url);
 
-	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
-										accesskeyid, secret);
-	headers = curl_slist_append(headers, hosthdr);
-	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+	result = palloc(sizeof(ListObjectsResult));
+	result->filenames = palloc(sizeof(char *) * 1000);
+	result->szfilenames = 1000;
+	result->numfiles = 0;
 
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
-	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
-
-	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-    /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
-    /* Check for errors */ 
-    if (res != CURLE_OK)
-		pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
-
-	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-	if (http_code == 200)
+	for (;;)
 	{
-		//Succeeded
-		result = parse_listobjects_result(&responsebuf);
-	}
-	else
-	{
-		//Failed
-		pg_fatal("got http error: %ld on path %s", http_code, s3path);
+		urlpath = psprintf("/%s/", bucket);
+		if (continuation_token)
+		{
+			char	   *marker;
+
+			marker = curl_easy_escape(curl, continuation_token, 0);
+			if (!marker)
+				pg_fatal("out of memory");
+
+			query_string = psprintf("marker=%s", marker);
+			curl_free(marker);
+			url = psprintf("%s%s?%s", endpoint, urlpath, query_string);
+
+			fprintf(stderr, "continuing listing from: \"%s\"...\n", query_string);
+		}
+		else
+		{
+			query_string = NULL;
+			fprintf(stderr, "listing %s...\n", endpoint);
+		}
+
+		if (query_string)
+			url = psprintf("%s%s?%s", endpoint, urlpath, query_string);
+		else
+			url = psprintf("%s%s", endpoint, urlpath);
+		curl_easy_setopt(curl, CURLOPT_URL, url);
+
+		resetStringInfo(&responsebuf);
+		headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, query_string, NULL,
+											accesskeyid, secret);
+		headers = curl_slist_append(headers, hosthdr);
+		curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0);
+		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
+
+		curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+		/* Perform the request, res will get the return code */
+		res = curl_easy_perform(curl);
+		/* Check for errors */
+		if (res != CURLE_OK)
+			pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
+
+		curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+		if (http_code == 200)
+		{
+			//Succeeded
+			parse_listobjects_result(&responsebuf, result, &continuation_token);
+		}
+		else
+		{
+			//Failed
+			pg_fatal("got http error: %ld on path %s", http_code, s3path);
+		}
+
+		if (!continuation_token)
+			break;
+		else
+			fprintf(stderr, "got continuation token: %s\n", continuation_token);
 	}
 
-	/* FIXME: One ListObjects call returns only 1000 entries. Continue! */
-	if (result->numfiles == 1000)
-		pg_fatal("TODO: ListObjects continuation not implemented");
-	
-    /* always cleanup */ 
-    curl_easy_cleanup(curl);
+	/* always cleanup */
+	curl_easy_cleanup(curl);
 
 	pfree(url);
 	pfree(hosthdr);
@@ -163,16 +195,13 @@ s3_ListObjects(const char *s3path)
 	return result;
 }
 
-static ListObjectsResult *
-parse_listobjects_result(StringInfo response)
+static void
+parse_listobjects_result(StringInfo response,  ListObjectsResult *result, char **continuation_token)
 {
 	xmlDocPtr	doc;
 	xmlNodePtr	cur;
-	ListObjectsResult *result;
 
-	result = palloc(sizeof(ListObjectsResult));
-	result->filenames = palloc(sizeof(char *) * 1000);
-	result->numfiles = 0;
+	*continuation_token = NULL;
 
 	doc = xmlParseMemory(response->data, response->len);
 	if (doc == NULL)
@@ -192,11 +221,15 @@ parse_listobjects_result(StringInfo response)
 		{
 			parseContents(doc, cur, result);
 		}
+		else if (xmlStrcmp(cur->name, (const xmlChar *) "NextMarker") == 0)
+		{
+			/* FIXME: should we check IsTruncated too? */
+			*continuation_token = pstrdup((char *) xmlNodeListGetString(doc, cur->xmlChildrenNode, 1));
+		}
 		cur = cur->next;
 	}
 
 	xmlFreeDoc(doc);
-	return result;
 }
 
 static void
@@ -211,7 +244,14 @@ parseContents(xmlDocPtr doc, xmlNodePtr contents, ListObjectsResult *result)
 	    if (xmlStrcmp(cur->name, (const xmlChar *) "Key") == 0)
 		{
 		    key = xmlNodeListGetString(doc, cur->xmlChildrenNode, 1);
-			result->filenames = repalloc(result->filenames, (result->numfiles + 1) * sizeof(char *));
+			if (result->numfiles >= result->szfilenames)
+			{
+				int		newsize;
+
+				newsize = result->szfilenames + 1000;
+				result->filenames = repalloc(result->filenames, newsize * sizeof(char *));
+				result->szfilenames = newsize;
+			}
 			result->filenames[result->numfiles++] = pstrdup((char *) key);
 		    xmlFree(key);
  	    }
@@ -242,7 +282,7 @@ fetch_s3_file_memory(const char *s3path)
 	fprintf(stderr, "fetching: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
- 
+
 	curl = curl_easy_init();
 	if (!curl)
 		pg_fatal("could not init libcurl");
@@ -253,7 +293,7 @@ fetch_s3_file_memory(const char *s3path)
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) result);
 
-	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
+	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL, NULL,
 										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -262,10 +302,10 @@ fetch_s3_file_memory(const char *s3path)
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
 
 	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-    /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
-    /* Check for errors */ 
-    if (res != CURLE_OK)
+	/* Perform the request, res will get the return code */
+	res = curl_easy_perform(curl);
+	/* Check for errors */
+	if (res != CURLE_OK)
 		pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
 
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -278,9 +318,9 @@ fetch_s3_file_memory(const char *s3path)
 		//Failed
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
-	
-    /* always cleanup */ 
-    curl_easy_cleanup(curl);
+
+	/* always cleanup */
+	curl_easy_cleanup(curl);
 
 	fprintf(stderr, "fetched \"%s\"\n", url);
 
@@ -313,7 +353,7 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 	fprintf(stderr, "fetching: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
- 
+
 	curl = curl_easy_init();
 	if (!curl)
 		pg_fatal("could not init libcurl");
@@ -327,7 +367,7 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 	/* use the internal callback that writes to file */
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) fp);
 
-	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL,
+	headers = s3_get_authorization_hdrs(host, region, "GET", urlpath, NULL, NULL,
 										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -336,10 +376,10 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
 
 	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-    /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
-    /* Check for errors */ 
-    if (res != CURLE_OK)
+	/* Perform the request, res will get the return code */
+	res = curl_easy_perform(curl);
+	/* Check for errors */
+	if (res != CURLE_OK)
 		pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
 
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -352,9 +392,9 @@ fetch_s3_file(const char *s3path, const char *dstpath)
 		//Failed
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
-	
-    /* always cleanup */ 
-    curl_easy_cleanup(curl);
+
+	/* always cleanup */
+	curl_easy_cleanup(curl);
 
 	if (fclose(fp) < 0)
 		pg_fatal("could not write file %s", dstpath);
@@ -372,7 +412,7 @@ struct read_file_source
 	size_t total_read;
 	FILE *fp;
 };
- 
+
 static size_t
 read_callback(char *ptr, size_t size, size_t nmemb, void *stream)
 {
@@ -387,10 +427,10 @@ read_callback(char *ptr, size_t size, size_t nmemb, void *stream)
 		if (nmemb == 0)
 			return 0;
 	}
- 
+
 	nread = fread(ptr, size, nmemb, src->fp);
 	src->total_read += nread;
- 
+
 	return nread;
 }
 
@@ -424,7 +464,7 @@ compute_file_hash(FILE *fp)
 	{
 		char		buf[65536];
 		size_t		nread;
-		
+
 		nread = fread(buf, 1, sizeof(buf), fp);
 		if (nread == 0)
 			break;
@@ -462,7 +502,7 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 	//fprintf(stderr, "putting: %s\n", url);
 
 	hosthdr = psprintf("Host: %s", host);
- 
+
 	curl = curl_easy_init();
 	if (!curl)
 		pg_fatal("could not init libcurl");
@@ -486,7 +526,7 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
                      (curl_off_t) filesize);
 
-	headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath, bodyhash,
+	headers = s3_get_authorization_hdrs(host, region, "PUT", urlpath, NULL, bodyhash,
 										accesskeyid, secret);
 	headers = curl_slist_append(headers, hosthdr);
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -495,10 +535,10 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0);
 
 	curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-    /* Perform the request, res will get the return code */ 
-    res = curl_easy_perform(curl);
-    /* Check for errors */ 
-    if (res != CURLE_OK)
+	/* Perform the request, res will get the return code */
+	res = curl_easy_perform(curl);
+	/* Check for errors */
+	if (res != CURLE_OK)
 		pg_fatal("curl_easy_perform() failed: %s", curl_easy_strerror(res));
 
 	curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
@@ -511,9 +551,9 @@ put_s3_file(const char *localpath, const char *s3path, size_t filesize)
 		//Failed
 		pg_fatal("got http error: %ld on path %s", http_code, s3path);
 	}
-	
-    /* always cleanup */ 
-    curl_easy_cleanup(curl);
+
+	/* always cleanup */
+	curl_easy_cleanup(curl);
 
 	if (fclose(fp) < 0)
 		pg_fatal("could not read file %s", localpath);
