@@ -19,10 +19,15 @@
 #include "replication/walreceiver.h"
 #include "utils/guc.h"
 #include "postmaster/bgworker.h"
-#include "libpq/pqformat.h"
 #include "utils/builtins.h"
 #include "tcop/tcopprot.h"
 #include "access/xlog_internal.h"
+#include "catalog/storage_xlog.h"
+#include "commands/dbcommands_xlog.h"
+#include "access/xact.h"
+#include "catalog/pg_control.h"
+
+#include "libpq/pqformat.h"
 #include "libpq-fe.h"
 
 #include "zenith_store.h"
@@ -32,18 +37,11 @@
 
 #define LSN_PARTS(lsn) (uint32) ((lsn) >> 32), (uint32) (lsn)
 
-static XLogReaderState *xlogreader = NULL;
-
 static void receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received);
-static void process_record(XLogRecord *record, XLogRecPtr start_lsn);
+static void process_record(XLogRecord *record, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
 static void process_records(StringInfo s, XLogRecPtr start_lsn);
 static void send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool requestReply);
-
-static int stream_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page);
-static void stream_segment_open(XLogReaderState *state, XLogSegNo nextSegNo,
-					TimeLineID *tli_p);
-static void stream_segment_close(XLogReaderState *state);
+static void handle_record(XLogReaderState *record);
 
 typedef struct
 {
@@ -54,6 +52,17 @@ typedef struct
 	/* Buffer for currently read records */
 	char	   *recvBuf;
 } WalReceiverConnDeopaque;
+
+/*
+ * RmgrNames is an array of resource manager names, to make error messages
+ * a bit nicer.
+ */
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask) \
+  name,
+
+static const char *RmgrNames[RM_MAX_ID + 1] = {
+#include "access/rmgrlist.h"
+};
 
 /*
  * Own reimplementation of walrcv_identify_system() that returns lsn.
@@ -126,7 +135,7 @@ receiver_main(Datum main_arg)
 	pqsignal(SIGTERM, die);
 	BackgroundWorkerUnblockSignals();
 
-	zenith_log(ReceiverTrace, "Starting receiver on '%s'", conn_string);
+	zenith_log(ReceiverLog, "Starting receiver on '%s'", conn_string);
 
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
@@ -142,7 +151,7 @@ receiver_main(Datum main_arg)
 	 */
 	system_id = zenith_identify_system(conn, &startpointTLI, &primary_lsn);
 
-	zenith_log(ReceiverTrace, "Receiver connected to '%s': timeline=%d, lsn=%X/%x",
+	zenith_log(ReceiverLog, "Receiver connected to '%s': timeline=%d, lsn=%X/%x",
 		system_id, startpointTLI, (uint32) (primary_lsn >> 32), (uint32) primary_lsn);
 
 	/* Build logical replication streaming options. */
@@ -153,19 +162,6 @@ receiver_main(Datum main_arg)
 
 	/* Start normal logical streaming replication. */
 	walrcv_startstreaming(conn, &options);
-
-	/* create xlogreader for physical replication */
-	xlogreader =
-		XLogReaderAllocate(wal_segment_size, NULL,
-						   XL_ROUTINE(.page_read = &stream_read_xlog_page,
-									  .segment_open = &stream_segment_open,
-									  .segment_close = &stream_segment_close),
-						   NULL);
-
-	if (!xlogreader)
-		zenith_log(ERROR, "out of memory");
-
-	XLogBeginRead(xlogreader, primary_lsn);
 
 	receiver_loop(conn, primary_lsn);
 }
@@ -312,7 +308,7 @@ static void
 process_records(StringInfo s, XLogRecPtr start_lsn)
 {
 
-	zenith_log(ReceiverTrace, "Got record pack size=%d, first_lsn=%X/%X",
+	zenith_log(ReceiverTrace, "got record pack size=%d, first_lsn=%X/%X",
 		s->len - s->cursor,
 		(uint32) (start_lsn >> 32), (uint32) start_lsn);
 
@@ -329,7 +325,7 @@ process_records(StringInfo s, XLogRecPtr start_lsn)
 
 		if (total_len <= len_in_block)
 		{
-			process_record(record, lsn_base + s->cursor);
+			process_record(record, start_lsn, lsn_base + s->cursor + MAXALIGN(record->xl_tot_len));
 			s->cursor += MAXALIGN(record->xl_tot_len);
 		}
 		else
@@ -371,25 +367,36 @@ process_records(StringInfo s, XLogRecPtr start_lsn)
 
 
 			Assert(record->xl_tot_len == total_len);
-			process_record((XLogRecord *) buf.data, start_lsn);
+			process_record((XLogRecord *) buf.data, start_lsn, lsn_base + s->cursor);
 		}
 	}
 	Assert(s->cursor == s->len);
 }
 
 static void
-process_record(XLogRecord *record, XLogRecPtr start_lsn)
+process_record(XLogRecord *decoded_record, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
 {
+	char	   *errormsg = "";
 
-	zenith_log(ReceiverTrace, "Processing record: xid=%d, xl_tot_len=%d, len_before_8k=%lu, lsn=%X/%X",
-		record->xl_xid,
-		record->xl_tot_len,
+	zenith_log(ReceiverTrace, "processing record: xid=%d, xl_tot_len=%d, len_before_8k=%lu, lsn=%X/%X",
+		decoded_record->xl_xid,
+		decoded_record->xl_tot_len,
 		XLOG_BLCKSZ - start_lsn % XLOG_BLCKSZ,
 		LSN_PARTS(start_lsn));
 
-	if (!is_valid_record(record))
+	if (!is_valid_record(decoded_record))
 		zenith_log(ERROR, "CRC check failed for record %X/%X", LSN_PARTS(start_lsn));
 
+	XLogReaderState reader_state = {
+		.ReadRecPtr = start_lsn,
+		.EndRecPtr = end_lsn,
+		.decoded_record = decoded_record
+	};
+
+	if (DecodeXLogRecord(&reader_state, decoded_record, &errormsg))
+		handle_record(&reader_state);
+	else
+		zenith_log(ERROR, "failed to decode WAL record: %s", errormsg);
 }
 
 static void
@@ -412,24 +419,155 @@ send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool reques
 }
 
 /*
- *
+ * Parse the record. For each data file it touches, look up the file_entry_t and
+ * write out a copy of the record
  */
-
-static int
-stream_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
-					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
+void
+handle_record(XLogReaderState *record)
 {
-	return 42;
-}
+	/*
+	 * Extract information on which blocks the current record modifies.
+	 */
+	// int			block_id;
+	RmgrId		rmid = XLogRecGetRmid(record);
+	uint8		info = XLogRecGetInfo(record);
+	uint8		rminfo = info & ~XLR_INFO_MASK;
+	enum {
+		SKIP = 0,
+		APPEND_REL_WAL,
+		APPEND_NONREL_WAL
+	} action;
 
-static void
-stream_segment_open(XLogReaderState *state, XLogSegNo nextSegNo,
-					TimeLineID *tli_p)
-{
-}
+	zenith_log(ReceiverTrace, "processing parsed WAL record: lsn=%X/%X, rmgr=%s, info=%02X",
+		LSN_PARTS(record->ReadRecPtr), RmgrNames[rmid], info);
 
-static void
-stream_segment_close(XLogReaderState *state)
-{
+	/* Is this a special record type that I recognize? */
 
+	if (rmid == RM_DBASE_ID && rminfo == XLOG_DBASE_CREATE)
+	{
+		/* TODO */
+		action = APPEND_NONREL_WAL;
+	}
+	else if (rmid == RM_DBASE_ID && rminfo == XLOG_DBASE_DROP)
+	{
+		/* TODO */
+		action = APPEND_NONREL_WAL;
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_CREATE)
+	{
+		action = SKIP;
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_TRUNCATE)
+	{
+		/* FIXME: This should probably go to per-rel WAL? */
+		action = APPEND_NONREL_WAL;
+	}
+	else if (rmid == RM_XACT_ID &&
+			 ((rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_COMMIT ||
+			  (rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_COMMIT_PREPARED))
+	{
+		/* These records can include "dropped rels". */
+		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
+		xl_xact_parsed_commit parsed;
+
+		ParseCommitRecord(info, xlrec, &parsed);
+		for (int i = 0; i < parsed.nrels; i++)
+		{
+		}
+		action = APPEND_NONREL_WAL;
+	}
+	else if (rmid == RM_XACT_ID &&
+			 ((rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_ABORT ||
+			  (rminfo & XLOG_XACT_OPMASK) == XLOG_XACT_ABORT_PREPARED))
+	{
+		/* These records can include "dropped rels". */
+		xl_xact_abort *xlrec = (xl_xact_abort *) XLogRecGetData(record);
+		xl_xact_parsed_abort parsed;
+
+		ParseAbortRecord(info, xlrec, &parsed);
+		for (int i = 0; i < parsed.nrels; i++)
+		{
+		}
+		action = APPEND_NONREL_WAL;
+	}
+	else if (info & XLR_SPECIAL_REL_UPDATE)
+	{
+		/*
+		 * This record type modifies a relation file in some special way, but
+		 * we don't recognize the type. That's bad - we don't know how to
+		 * track that change.
+		 */
+		zenith_log(ERROR, "WAL record modifies a relation, but record type is not recognized: "
+				 "lsn: %X/%X, rmgr: %s, info: %02X",
+				 (uint32) (record->ReadRecPtr >> 32), (uint32) (record->ReadRecPtr),
+				 RmgrNames[rmid], info);
+	}
+	else if (rmid == RM_XLOG_ID)
+	{
+		if (rminfo == XLOG_FPI || rminfo == XLOG_FPI_FOR_HINT)
+			action = APPEND_REL_WAL;
+		else
+			action = APPEND_NONREL_WAL;
+	}
+	else
+	{
+		switch (rmid)
+		{
+			case RM_CLOG_ID:
+			case RM_DBASE_ID:
+			case RM_TBLSPC_ID:
+			case RM_MULTIXACT_ID:
+			case RM_RELMAP_ID:
+			case RM_STANDBY_ID:
+			case RM_SEQ_ID:
+			case RM_COMMIT_TS_ID:
+			case RM_REPLORIGIN_ID:
+			case RM_LOGICALMSG_ID:
+				/* These go to the "non-relation" WAL */
+				action = APPEND_NONREL_WAL;
+				break;
+
+			case RM_SMGR_ID:
+			case RM_HEAP2_ID:
+			case RM_HEAP_ID:
+			case RM_BTREE_ID:
+			case RM_HASH_ID:
+			case RM_GIN_ID:
+			case RM_GIST_ID:
+			case RM_SPGIST_ID:
+			case RM_BRIN_ID:
+			case RM_GENERIC_ID:
+				/* These go to the per-relation WAL files */
+				action = APPEND_REL_WAL;
+				break;
+
+			default:
+				zenith_log(ERROR, "unknown resource manager");
+		}
+	}
+
+	if (action == APPEND_REL_WAL)
+	{
+		int block_id;
+
+		for (block_id = 0; block_id <= record->max_block_id; block_id++)
+		{
+			RelFileNode rnode;
+			ForkNumber	forknum;
+			BlockNumber blkno;
+
+			if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
+				continue;
+
+			zenith_log(ReceiverTrace,
+				"record has blkref #%u: rel=%u/%u/%u fork=%s blk=%u, fpw=%d, fpw_verify=%d",
+				block_id,
+				rnode.spcNode, rnode.dbNode, rnode.relNode,
+				forknum == MAIN_FORKNUM ? "main" : forkNames[forknum],
+				blkno,
+				XLogRecHasBlockImage(record, block_id),
+				XLogRecBlockImageApply(record, block_id)
+			);
+		}
+	}
 }
