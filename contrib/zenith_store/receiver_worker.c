@@ -575,9 +575,11 @@ handle_record(XLogReaderState *record)
 				XLogRecBlockImageApply(record, block_id)
 			);
 
-			PageWalHashKey key;
-			key.system_identifier = client_system_id;
+			PerPageWalHashKey key;
+			memset(&key, '\0', sizeof(PerPageWalHashKey));
+			key.system_identifier = 42; //client_system_id;
 			key.rnode = rnode;
+			key.forknum = forknum;
 			key.blkno = blkno;
 
 			memstore_insert(key, record->EndRecPtr, record->decoded_record);

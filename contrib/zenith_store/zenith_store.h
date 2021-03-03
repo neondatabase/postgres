@@ -17,6 +17,7 @@ typedef enum ZenithLogTag
 {
 	ReceiverLog = LOG,
 	ReceiverTrace = LOG,
+	RequestTrace = LOG,
 } ZenithLogTag;
 
 #define ZENITH_TAG "[ZENITH] "

@@ -26,12 +26,17 @@ $page_server->append_conf('postgresql.conf', qq{
 	zenith_store.connstr = '$connstr'
 });
 $page_server->start;
+$page_server->safe_psql("postgres", "CREATE EXTENSION zenith_store");
 
 # Create some data
 $node_primary->safe_psql("postgres", "CREATE TABLE t(key int primary key, value text)");
 foreach(1..10){
 	$node_primary->safe_psql("postgres", "INSERT INTO t VALUES($_, 'payload')");
 }
+
+sleep(5); # XXX: wait for replication; change this to some sexplicit await_lsn() call
+
+$page_server->safe_psql("postgres", "select zenith_store.get_page(42, 1663, 13231, 16384, 0, 0)");
 
 printf("---");
 sleep(36000);

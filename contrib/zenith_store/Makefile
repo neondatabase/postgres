@@ -3,6 +3,7 @@ EXTENSION = zenith_store
 OBJS = receiver_worker.o zenith_store.o memstore.o
 MODULE_big = zenith_store
 PGFILEDESC = "zenith_store"
+DATA = zenith_store--1.0.sql
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)

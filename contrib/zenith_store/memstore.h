@@ -33,29 +33,30 @@ typedef struct
 {
 	uint64		system_identifier;
 	RelFileNode rnode;
+	ForkNumber	forknum;
 	BlockNumber blkno;
-} PageWalHashKey;
+} PerPageWalHashKey;
 
-struct PageWalRecordEntry;
-typedef struct PageWalRecordEntry PageWalRecordEntry;
-
-typedef struct PageWalRecordEntry
+struct PerPageWalRecord;
+typedef struct PerPageWalRecord PerPageWalRecord;
+typedef struct PerPageWalRecord
 {
-	PageWalRecordEntry *next;
-	PageWalRecordEntry *prev;
+	PerPageWalRecord *next; /* to greater lsn */
+	PerPageWalRecord *prev; /* to lower lsn */
 	XLogRecPtr lsn;
 	XLogRecord *record;
-} PageWalRecordEntry;
+} PerPageWalRecord;
 
-typedef struct PageWalHashEntry
+typedef struct PerPageWalHashEntry
 {
-	PageWalHashKey key;
-	struct PageWalRecordEntry *next;
-} PageWalHashEntry;
+	PerPageWalHashKey key;
+	PerPageWalRecord *newest;
+	PerPageWalRecord *oldest;
+} PerPageWalHashEntry;
 
 void memstore_init(void);
 void memstore_init_shmem(void);
-void memstore_insert(PageWalHashKey key, XLogRecPtr lsn, XLogRecord *record);
-PageWalRecordEntry *memstore_get_last(PageWalHashKey key);
+void memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record);
+PerPageWalRecord *memstore_get_oldest(PerPageWalHashKey key);
 
 #endif							/* _MEMSTORE_H */
