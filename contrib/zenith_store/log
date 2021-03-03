@@ -1,0 +1,13 @@
+28.02.2021
+    * Receive WAL copy-messages
+
+01.03.2021
+    + wal receiver works
+    + triage incoming wal by -XLogReader- -> small loop
+
+02.03.2021
+    * collect history chains for each page in shmem
+
+03.03.2021
+    + collect history chains for each page in shmem
+    * function to make redo

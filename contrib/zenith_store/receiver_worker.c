@@ -31,7 +31,10 @@
 #include "libpq-fe.h"
 
 #include "zenith_store.h"
+#include "memstore.h"
 #include "receiver_worker.h"
+
+uint64 client_system_id;
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
@@ -151,7 +154,10 @@ receiver_main(Datum main_arg)
 	 */
 	system_id = zenith_identify_system(conn, &startpointTLI, &primary_lsn);
 
-	zenith_log(ReceiverLog, "Receiver connected to '%s': timeline=%d, lsn=%X/%x",
+	if (sscanf(system_id, "%lu", &client_system_id) != 1)
+		zenith_log(ERROR, "failed to parse client system id");
+
+	zenith_log(ReceiverLog, "Receiver connected to '%s': timeline=%d, lsn=%X/%X",
 		system_id, startpointTLI, (uint32) (primary_lsn >> 32), (uint32) primary_lsn);
 
 	/* Build logical replication streaming options. */
@@ -568,6 +574,13 @@ handle_record(XLogReaderState *record)
 				XLogRecHasBlockImage(record, block_id),
 				XLogRecBlockImageApply(record, block_id)
 			);
+
+			PageWalHashKey key;
+			key.system_identifier = client_system_id;
+			key.rnode = rnode;
+			key.blkno = blkno;
+
+			memstore_insert(key, record->EndRecPtr, record->decoded_record);
 		}
 	}
 }

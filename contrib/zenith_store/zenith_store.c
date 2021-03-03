@@ -15,7 +15,9 @@
 #include "postmaster/bgworker.h"
 #include "miscadmin.h"
 #include "lib/stringinfo.h"
+#include "storage/ipc.h"
 
+#include "memstore.h"
 #include "receiver_worker.h"
 
 char		   *conn_string;
@@ -23,6 +25,10 @@ char		   *conn_string;
 void		_PG_init(void);
 
 PG_MODULE_MAGIC;
+
+static shmem_startup_hook_type prev_shmem_startup_hook;
+
+static void zenith_store_shmem_startup(void);
 
 void
 _PG_init(void)
@@ -55,5 +61,18 @@ _PG_init(void)
 	snprintf(worker.bgw_name, BGW_MAXLEN, "zenith_store_receiver");
 	snprintf(worker.bgw_type, BGW_MAXLEN, "zenith_store_receiver");
 	RegisterBackgroundWorker(&worker);
+
+	memstore_init();
+
+	prev_shmem_startup_hook = shmem_startup_hook;
+	shmem_startup_hook = zenith_store_shmem_startup;
 }
 
+static void
+zenith_store_shmem_startup(void)
+{
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+
+	memstore_init_shmem();
+}

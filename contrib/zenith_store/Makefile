@@ -1,6 +1,6 @@
 # contrib/file_fdw/Makefile
 EXTENSION = zenith_store
-OBJS = receiver_worker.o zenith_store.o
+OBJS = receiver_worker.o zenith_store.o memstore.o
 MODULE_big = zenith_store
 PGFILEDESC = "zenith_store"
 
