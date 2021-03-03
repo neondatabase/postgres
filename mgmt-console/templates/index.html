@@ -14,26 +14,34 @@
       background-color: lightgrey;
       padding: 10px;
   }
-h1   {color: blue;}
-p    {color: red;}
 
-* {
-  box-sizing: border-box;
-}
+  h1   {color: blue;}
 
-.row {
-  display: flex;
-}
+  .column {
+      float: left;
+      width: 50%;
+      padding: 10px;
+  }
+  /* Clear floats after the columns */
+  .row:after {
+      content: "";
+      display: table;
+      clear: both;
+  }
 
-/* Create two equal columns that sits next to each other */
-.column1 {
-  flex: 30%;
-  padding: 10px;
-}
-.column2 {
-  flex: 70%;
-  padding: 10px;
-}
+  .sidenav {
+      float: left;
+      width: 150px;
+      padding: 10px;
+      background-color: pink;
+  }
+
+  .sidenav-item {
+      padding:10px 0px;
+      border:none;
+      display:block;
+  }
+
 </style>
 
 </head>

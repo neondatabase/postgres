@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import ReactDOM from 'react-dom';
 import Loader from "react-loader-spinner";
+import { Router, Route, Link, IndexRoute, hashHistory, browserHistory } from 'react-router';
 
 function ServerStatus(props) {
     const datadir = props.server.datadir;
@@ -271,8 +272,27 @@ function ActionButtons(props) {
     );
 }
 
+function Sidenav(props)
+{
+    const toPage = (page) => (event) => {
+	event.preventDefault()
+	props.switchPage(page);
+    };
+    return (
+	<div>
+	    <h3 className="sidenav-item">Menu</h3>
+	    <a href="/servers" onClick={toPage('servers')} className="sidenav-item">Servers</a>
+	    <a href="/storage" onClick={toPage('storage')} className="sidenav-item">Storage</a>
+	    <a href="/demo" onClick={toPage('demo')} className="sidenav-item">Demo</a>
+	    <a href="#import" className="sidenav-item">Import / Export</a>
+	    <a href="#jobs" className="sidenav-item">Jobs</a>
+	</div>
+    );
+}
+
 function App()
 {
+    const [page, setPage] = useState('servers');
     const [serverStatus, setServerStatus] = useState({});
     const [bucketSummary, setBucketSummary] = useState({});
     const [lastOperation, setLastOperation] = useState('');
@@ -300,6 +320,14 @@ function App()
 	setOperationResult(result);
 	reloadStatus();
     }
+
+    function clearOperation()
+    {
+	setLastOperation('')
+	setInProgress('');
+	setOperationResult('');
+	console.log("cleared");
+    }
     
     function reloadStatus()
     {
@@ -312,25 +340,49 @@ function App()
 	});
     }
 
-    return (
-	<div className="row">
-	    <div className="column1">
-		<ServerList startOperation={ startOperation }
-			    serverStatus={ serverStatus }
-			    bucketSummary={ bucketSummary }/>
-		<BucketSummary  startOperation={ startOperation }
+    const content = () => {
+	console.log(page);
+	if (page === 'servers') {
+	    return (
+		    <ServerList startOperation={ startOperation }
+				serverStatus={ serverStatus }
 				bucketSummary={ bucketSummary }/>
-	    </div>
-	    <div className="column2">
+		);
+	} else if (page === 'storage') {
+	    return (
+		<BucketSummary startOperation={ startOperation }
+			       bucketSummary={ bucketSummary }/>
+	    );
+	} else if (page === 'demo') {
+	    return (
 		<ActionButtons startOperation={ startOperation }
 			       bucketSummary={ bucketSummary }/>
-		
+	    );
+	}
+    }
+
+    function switchPage(page)
+    {
+	console.log("topage " + page);
+	setPage(page)
+	clearOperation();
+    };
+
+    return (
+	<div className="row">
+	    <div className="sidenav">
+		<Sidenav switchPage={switchPage} className="column"/>
+	    </div>
+	    <div className="column">
+		<div>
+		    { content() }
+		</div>
 		<OperationStatus lastOperation={ lastOperation }
 				 inProgress = { inProgress }
 				 operationResult = { operationResult }/>
 	    </div>
 	</div>
-    )
+    );
 }
 
 ReactDOM.render(<App/>, document.getElementById('reactApp'));
