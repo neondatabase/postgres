@@ -15,6 +15,10 @@ from botocore.client import Config
 from botocore.handlers import set_list_objects_encoding_type_url
 
 from flask import Flask
+
+import waldump
+
+
 app = Flask(__name__)
 
 app.config['BASIC_AUTH_USERNAME'] = 'zenith'
@@ -59,6 +63,14 @@ s3_client = boto3.client('s3',
 @app.route("/")
 def index():
     return render_template("index.html")
+
+@app.route("/waldump")
+def render_waldump():
+    return render_template("waldump.html")
+
+@app.route('/fetch_wal')
+def fetch_wal():
+    return waldump.fetch_wal(request, s3bucket);
 
 @app.route("/server_status")
 def server_status():
