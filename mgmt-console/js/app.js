@@ -38,14 +38,14 @@ function StandbyList(props) {
 	formdata.append("walpos", walposStr);
 
 	props.startOperation('Creating new standby at ' + walposStr + '...',
-			     fetch("/create_standby", { method: 'POST', body: formdata }));
+			     fetch("/api/create_standby", { method: 'POST', body: formdata }));
     }
 
     function destroy_standby(datadir) {
 	const formdata = new FormData();
 	formdata.append("datadir", datadir);
 	props.startOperation('Destroying ' + datadir + '...',
-			     fetch("/destroy_server", { method: 'POST', body: formdata }));
+			     fetch("/api/destroy_server", { method: 'POST', body: formdata }));
     }
 
     const handleSliderChange = (event) => {
@@ -124,12 +124,12 @@ function ServerList(props) {
 	const formdata = new FormData();
 	formdata.append("datadir", 'primary');
 	props.startOperation('Destroying primary...',
-			     fetch("/destroy_server", { method: 'POST', body: formdata }));
+			     fetch("/api/destroy_server", { method: 'POST', body: formdata }));
     }    
 
     function restore_primary() {
 	props.startOperation('Restoring primary...',
-			     fetch("/restore_primary", { method: 'POST' }));
+			     fetch("/api/restore_primary", { method: 'POST' }));
     }    
     
     if (primary)
@@ -164,7 +164,7 @@ function BucketSummary(props) {
 
     function slicedice() {
 	startOperation('Slicing sequential WAL to per-relation WAL...',
-		       fetch("/slicedice", { method: 'POST' }));
+		       fetch("/api/slicedice", { method: 'POST' }));
     }
     
     if (!bucketSummary.nonrelimages)
@@ -247,17 +247,17 @@ function ActionButtons(props) {
     
     function reset_demo() {
 	startOperation('resetting everything...',
-		       fetch("/reset_demo", { method: 'POST' }));
+		       fetch("/api/reset_demo", { method: 'POST' }));
     }
 
     function init_primary() {
 	startOperation('Initializing new primary...',
-		       fetch("/init_primary", { method: 'POST' }));
+		       fetch("/api/init_primary", { method: 'POST' }));
     }
 
     function zenith_push() {
 	startOperation('Pushing new base image...',
-		       fetch("/zenith_push", { method: 'POST' }));
+		       fetch("/api/zenith_push", { method: 'POST' }));
     }
 	
     return (
@@ -331,11 +331,11 @@ function App()
     
     function reloadStatus()
     {
-	fetch('/server_status').then(res => res.json()).then(data => {
+	fetch('/api/server_status').then(res => res.json()).then(data => {
 	    setServerStatus(data);
 	});
 
-	fetch('/bucket_summary').then(res => res.json()).then(data => {
+	fetch('/api/bucket_summary').then(res => res.json()).then(data => {
 	    setBucketSummary(data);
 	});
     }

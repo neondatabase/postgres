@@ -64,15 +64,16 @@ s3_client = boto3.client('s3',
 def index():
     return render_template("index.html")
 
-@app.route("/waldump")
+
+@app.route("/api/waldump")
 def render_waldump():
     return render_template("waldump.html")
 
-@app.route('/fetch_wal')
+@app.route('/api/fetch_wal')
 def fetch_wal():
     return waldump.fetch_wal(request, s3bucket);
 
-@app.route("/server_status")
+@app.route("/api/server_status")
 def server_status():
     dirs = os.listdir("pgdatadirs")
     dirs.sort()
@@ -102,7 +103,7 @@ def server_status():
 
     return {'primary': primary, 'standbys': standbys}
 
-@app.route('/list_bucket')
+@app.route('/api/list_bucket')
 def list_bucket():
 
     response = 'cloud bucket contents:<br>\n'
@@ -115,7 +116,7 @@ def list_bucket():
 def walpos_str(walpos):
     return '{:X}/{:X}'.format(walpos >> 32, walpos & 0xFFFFFFFF)
 
-@app.route('/bucket_summary')
+@app.route('/api/bucket_summary')
 def bucket_summary():
 
     nonrelimages = []
@@ -173,7 +174,7 @@ def print_cmd_result_ex(cmd, returncode, stdout):
 
     return res
 
-@app.route('/init_primary', methods=['GET', 'POST'])
+@app.route('/api/init_primary', methods=['GET', 'POST'])
 def init_primary():
     
     initdb_result = run("initdb -D pgdatadirs/primary --username=zenith --pwfile=pg-password.txt", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
@@ -207,7 +208,7 @@ def init_primary():
 
     return responsestr
 
-@app.route('/zenith_push', methods=['GET', 'POST'])
+@app.route('/api/zenith_push', methods=['GET', 'POST'])
 def zenith_push():
     # Stop the primary if it's running
     stop_result = run(args=["pg_ctl", "stop", "-D", "pgdatadirs/primary"], stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=False, start_new_session=True, close_fds=True)
@@ -226,7 +227,7 @@ def zenith_push():
 
     return responsestr
 
-@app.route('/create_standby', methods=['GET', 'POST'])
+@app.route('/api/create_standby', methods=['GET', 'POST'])
 def create_standby():
 
     walpos = request.form.get('walpos')
@@ -267,7 +268,7 @@ def create_standby():
 
     return responsestr
 
-@app.route('/destroy_server', methods=['GET', 'POST'])
+@app.route('/api/destroy_server', methods=['GET', 'POST'])
 def destroy_primary():
 
     datadir = request.form.get('datadir')
@@ -286,7 +287,7 @@ def destroy_primary():
 
     return responsestr
 
-@app.route('/restore_primary', methods=['GET', 'POST'])
+@app.route('/api/restore_primary', methods=['GET', 'POST'])
 def restore_primary():
 
     # Call zenith_restore
@@ -308,7 +309,7 @@ def restore_primary():
 
     return responsestr
 
-@app.route('/slicedice', methods=['GET', 'POST'])
+@app.route('/api/slicedice', methods=['GET', 'POST'])
 def run_slicedice():
     result = run("zenith_slicedice", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
     
@@ -316,7 +317,7 @@ def run_slicedice():
 
     return responsestr
 
-@app.route('/reset_demo', methods=['POST'])
+@app.route('/api/reset_demo', methods=['POST'])
 def reset_all():
     result = run("pkill -9 postgres", stdout=PIPE, stderr=STDOUT, universal_newlines=True, shell=True)
 
