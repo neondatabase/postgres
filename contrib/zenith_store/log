@@ -10,4 +10,4 @@
 
 03.03.2021
     + collect history chains for each page in shmem
-    * function to make redo
+    + function to make redo

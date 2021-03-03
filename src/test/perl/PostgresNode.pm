@@ -116,7 +116,7 @@ INIT
 
 	# Set PGHOST for backward compatibility.  This doesn't work for own_host
 	# nodes, so prefer to not rely on this when writing new tests.
-	$use_tcp            = !$TestLib::use_unix_sockets;
+	$use_tcp            = 1; #!$TestLib::use_unix_sockets;
 	$test_localhost     = "127.0.0.1";
 	$last_host_assigned = 1;
 	$test_pghost        = $use_tcp ? $test_localhost : TestLib::tempdir_short;

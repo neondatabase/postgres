@@ -462,7 +462,7 @@ static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
 								bool *hit);
-static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
+// static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf, bool fixOwner);
 static void BufferSync(int flags);
@@ -1607,7 +1607,7 @@ ReleaseAndReadBuffer(Buffer buffer,
  * Returns true if buffer is BM_VALID, else false.  This provision allows
  * some callers to avoid an extra spinlock cycle.
  */
-static bool
+bool
 PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);

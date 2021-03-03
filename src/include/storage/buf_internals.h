@@ -338,4 +338,7 @@ extern void DropRelFileNodeLocalBuffers(RelFileNode rnode, ForkNumber forkNum,
 extern void DropRelFileNodeAllLocalBuffers(RelFileNode rnode);
 extern void AtEOXact_LocalBuffers(bool isCommit);
 
+/* XXX */
+extern bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
+
 #endif							/* BUFMGR_INTERNALS_H */

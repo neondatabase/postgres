@@ -15,6 +15,11 @@
 #include "utils/hsearch.h"
 #include "storage/shmem.h"
 #include "fmgr.h"
+#include "access/xlogreader.h"
+#include "access/xlog_internal.h"
+#include "access/xlog.h"
+#include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 
 #include "memstore.h"
 #include "zenith_store.h"
@@ -152,16 +157,69 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 	key.forknum = forknum;
 	key.blkno = blkno;
 
-	PerPageWalRecord *record = memstore_get_oldest(key);
+	PerPageWalRecord *record_entry = memstore_get_oldest(key);
 
-	/* do recovery here */
-	int n = 0;
-	for (; record; record = record->next)
+	if (!record_entry)
+		zenith_log(ERROR, "page not found");
+
+	/* recovery here */
+	int			chain_len = 0;
+	char	   *errormsg;
+	for (; record_entry; record_entry = record_entry->next)
 	{
-		n++;
-	}
+		XLogReaderState reader_state = {
+			.ReadRecPtr = 0,
+			.EndRecPtr = record_entry->lsn,
+			.decoded_record = record_entry->record
+		};
 
-	zenith_log(RequestTrace, "Got request: chain len is %d", n);
+		if (!DecodeXLogRecord(&reader_state, record_entry->record, &errormsg))
+			zenith_log(ERROR, "failed to decode WAL record: %s", errormsg);
+
+		InRecovery = true;
+		RmgrTable[record_entry->record->xl_rmid].rm_redo(&reader_state);
+		InRecovery = false;
+
+		chain_len++;
+	}
+	zenith_log(RequestTrace, "Page restored: chain len is %d", chain_len);
+
+	/* Take a verbatim copy of the page */
+	Buffer		buf;
+	BufferTag	newTag;			/* identity of requested block */
+	uint32		newHash;		/* hash value for newTag */
+	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
+	int			buf_id;
+	bool		valid = false;
+	BufferDesc *bufdesc = NULL;
+
+	/* create a tag so we can lookup the buffer */
+	INIT_BUFFERTAG(newTag, key.rnode, forknum, blkno);
+
+	/* determine its hash code and partition lock ID */
+	newHash = BufTableHashCode(&newTag);
+	newPartitionLock = BufMappingPartitionLock(newHash);
+
+	/* see if the block is in the buffer pool already */
+	LWLockAcquire(newPartitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&newTag, newHash);
+
+	if (buf_id >= 0)
+	{
+		bufdesc = GetBufferDescriptor(buf_id);
+		valid = PinBuffer(bufdesc, NULL);
+	}
+	/* Can release the mapping lock as soon as we've pinned it */
+	LWLockRelease(newPartitionLock);
+
+	if (!valid)
+		zenith_log(ERROR, "Can't pin buffer");
+
+	buf = BufferDescriptorGetBuffer(bufdesc);
+	LockBuffer(buf, BUFFER_LOCK_SHARE);
+	memcpy(raw_page_data, BufferGetPage(buf), BLCKSZ);
+	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+	ReleaseBuffer(buf);
 
 	PG_RETURN_BYTEA_P(raw_page);
 }
