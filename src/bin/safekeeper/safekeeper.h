@@ -1,0 +1,103 @@
+#ifndef __SAFEKEEPER_H__
+#define __SAFEKEEPER_H__
+
+#include "postgres_fe.h"
+#include "access/xlog_internal.h"
+#include "libpq-int.h"
+#include "utils/uuid.h"
+
+#define SK_MAGIC            0xcafeceefu
+#define SK_FORMAT_VERSION   1
+#define SK_PROTOCOL_VERSION 1
+#define UNKNOWN_SERVER_VERSION 0
+
+#define MAX_SAFEKEEPERS     32
+#define MAX_SEND_SIZE       (XLOG_BLCKSZ * 16)
+#define XLOG_HDR_SIZE       (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
+#define XLOG_HDR_START_POS  1        /* offset of start position in header */
+#define XLOG_HDR_END_POS    9        /* offset of end position in header */
+
+/*
+ * All copy date message ('w') are linked in L1 send list and asynhronoously sent to receivers.
+ * When message is sent to all receivers, it is remover from send list.
+ */
+typedef struct WalMessage
+{
+	struct WalMessage* next;
+	char*  data;         /* message data */
+	uint32 size;         /* message size */
+	uint32 ackMask;      /* mask of receivers acknowledged receiving of this message */
+	XLogRecPtr walPos;   /* message position in WAL */
+} WalMessage;
+
+typedef enum
+{
+	SS_OFFLINE,
+	SS_CONNECTING,
+	SS_HANDSHAKE,
+	SS_VOTE,
+	SS_WAIT_VERDICT,
+	SS_IDLE,
+	SS_SEND_WAL,
+	SS_RECV_ACK
+} SafeKeeperState;
+
+/*
+ * Unique node identifier used by RAFT
+ */
+typedef struct NodeId
+{
+	pg_uuid_t uuid;
+	uint64    term;
+} NodeId;
+
+/*
+ * Information about Postgres server broadcasted by safekeeper_proxy to safekeeper
+ */
+typedef struct ServerInfo
+{
+	uint32     protocolVersion;   /* proxy-safekeeer protocol version */
+	uint32     pgVersion;     /* Postgres server version */
+	NodeId     nodeId;
+	TimeLineID timeline;
+	XLogRecPtr walEnd;
+	int        walSegSize;
+} ServerInfo;
+
+/*
+ * Information of about storage node
+ */
+typedef struct SafeKeeperInfo
+{
+	uint32     magic;             /* magic for verifying content the control file */
+	uint32     formatVersion;     /* safekeeper format version */
+	ServerInfo server;
+} SafeKeeperInfo;
+
+/*
+ * Descriptor of safekeeper
+ */
+typedef struct Safekeeper
+{
+    char const* host;
+    char const* port;
+	XLogRecPtr  ackPos;   /* acknowledged position */
+	pgsocket    sock;     /* socket descriptor */
+	WalMessage* currMsg;  /* message been send to the receiver */
+	int         asyncOffs;/* offset for asynchronus read/write operations */
+	SafeKeeperState state;/* safekeeper state machine state */
+    SafeKeeperInfo  info; /* safekeeper info */
+} Safekeeper;
+
+
+int CompareNodeId(NodeId* id1, NodeId* id2);
+pgsocket CreateSocket(char const* host, char const* port, int n_peers);
+pgsocket ConnectSocketAsync(char const* host, char const* port, bool* established);
+bool    WriteSocket(pgsocket sock, void const* buf, size_t size);
+ssize_t ReadSocketAsync(pgsocket sock, void* buf, size_t size);
+ssize_t WriteSocketAsync(pgsocket sock, void const* buf, size_t size);
+bool LoadData(char const* path, void* data, size_t size);
+bool SaveData(char const* path, void const* data, size_t size);
+int CompareLsn(const void *a, const void *b);
+
+#endif
