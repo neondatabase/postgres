@@ -62,6 +62,8 @@ typedef struct SMgrRelationData
 	int			smgr_which;		/* storage manager selector */
 
 	bool		possibly_lazy[MAX_FORKNUM + 1];
+	//TODO reset when we remove the file ?
+	uint64	last_cachedLSN[MAX_FORKNUM + 1];
 
 	/*
 	 * for md.c; per-fork arrays of the number of open segments

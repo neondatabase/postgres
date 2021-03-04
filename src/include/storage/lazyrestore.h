@@ -41,7 +41,7 @@ extern void lazyrestore_truncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void lazyrestore_immedsync(SMgrRelation reln, ForkNumber forknum);
 
-
+extern bool reln_is_lazy(SMgrRelation reln, ForkNumber forknum, bool ok_missing);
 extern void restore_if_lazy(SMgrRelation reln, ForkNumber forknum);
 
 /* lazyrestore sync callbacks */

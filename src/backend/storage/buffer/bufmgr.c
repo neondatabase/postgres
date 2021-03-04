@@ -737,12 +737,6 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	bool		isExtend;
 	bool		isLocalBuf = SmgrIsTemp(smgr);
 
-	/* Check if it's lazy */
-	if (smgr->possibly_lazy[forkNum])
-	{
-		restore_if_lazy(smgr, forkNum);
-	}
-
 	*hit = false;
 
 	/* Make sure we will have room to remember the buffer pin */

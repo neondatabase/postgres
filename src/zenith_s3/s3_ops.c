@@ -122,6 +122,7 @@ s3_ListObjects(CURL *curl, const char *s3path)
 	for (;;)
 	{
 		urlpath = psprintf("/%s/", bucket);
+
 		if (continuation_token)
 		{
 			char	   *marker;
@@ -139,7 +140,7 @@ s3_ListObjects(CURL *curl, const char *s3path)
 		else
 		{
 			query_string = NULL;
-			fprintf(stderr, "listing %s...\n", endpoint);
+			fprintf(stderr, "listing %s...\n", urlpath);
 		}
 
 		if (query_string)
@@ -173,7 +174,7 @@ s3_ListObjects(CURL *curl, const char *s3path)
 		else
 		{
 			//Failed
-			pg_fatal("got http error: %ld on path %s", http_code, s3path);
+			pg_fatal("got http error: %ld on path %s", http_code, urlpath);
 		}
 
 		if (!continuation_token)

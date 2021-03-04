@@ -565,8 +565,8 @@ main(int argc, char **argv)
 	{
 		system("touch standby.signal");
 		system("echo \"hot_standby=on\" >> postgresql.conf");
-		system(psprintf("echo \"recovery_target_lsn='%X/%X'\" >> postgresql.conf",
-						(uint32) (private.endptr >> 32), (uint32) private.endptr));
+		// system(psprintf("echo \"recovery_target_lsn='%X/%X'\" >> postgresql.conf",
+		// 				(uint32) (private.endptr >> 32), (uint32) private.endptr));
 	}
 
 	curl_easy_cleanup(curl);

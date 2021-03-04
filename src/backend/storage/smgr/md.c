@@ -141,6 +141,21 @@ static BlockNumber _mdnblocks(SMgrRelation reln, ForkNumber forknum,
 							  MdfdVec *seg);
 
 
+
+static char *
+lazyrelpath(RelFileNodeBackend rnode, ForkNumber forknum)
+{
+	char	   *path;
+	char	   *lazypath;
+
+	path = relpath(rnode, forknum);
+	lazypath = psprintf("%s_lazy", path);
+	pfree(path);
+
+	elog(LOG, "lazyrelpath %s", lazypath);
+	return lazypath;
+}
+
 /*
  *	mdinit() -- Initialize private state for magnetic disk storage manager.
  */
@@ -199,7 +214,10 @@ mdcreate(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 							reln->smgr_rnode.node.dbNode,
 							isRedo);
 
-	path = relpath(reln->smgr_rnode, forkNum);
+	if (reln->possibly_lazy[forkNum])
+		path = lazyrelpath(reln->smgr_rnode, forkNum);
+	else
+		path = relpath(reln->smgr_rnode, forkNum);
 
 	fd = PathNameOpenFile(path, O_RDWR | O_CREAT | O_EXCL | PG_BINARY);
 
@@ -316,6 +334,7 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	char	   *path;
 	int			ret;
 
+	//TODO make a lazy versions
 	path = relpath(rnode, forkNum);
 
 	/*
@@ -485,7 +504,10 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 	if (reln->md_num_open_segs[forknum] > 0)
 		return &reln->md_seg_fds[forknum][0];
 
-	path = relpath(reln->smgr_rnode, forknum);
+	if (reln->possibly_lazy[forknum])
+		path = lazyrelpath(reln->smgr_rnode, forknum);
+	else
+		path = relpath(reln->smgr_rnode, forknum);
 
 	fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
 
@@ -1121,7 +1143,10 @@ _mdfd_segpath(SMgrRelation reln, ForkNumber forknum, BlockNumber segno)
 	char	   *path,
 			   *fullpath;
 
-	path = relpath(reln->smgr_rnode, forknum);
+	if (reln->possibly_lazy[forknum])
+		path = lazyrelpath(reln->smgr_rnode, forknum);
+	else
+		path = relpath(reln->smgr_rnode, forknum);
 
 	if (segno > 0)
 	{

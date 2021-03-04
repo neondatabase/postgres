@@ -48,6 +48,7 @@ static bool parse_relwal_filename(const char *path, char **basefname, XLogRecPtr
 
 static bool currently_restoring = false;
 
+
 /*
  *	lazyrestore_init() -- Initialize private state
  */
@@ -155,8 +156,8 @@ lazyrestore_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	mdunlink(rnode, forkNum, isRedo);
 }
 
-static bool
-reln_is_lazy(SMgrRelation reln, ForkNumber forknum)
+bool
+reln_is_lazy(SMgrRelation reln, ForkNumber forknum, bool ok_missing)
 {
 	char	   *path;
 	int			fd;
@@ -169,7 +170,7 @@ reln_is_lazy(SMgrRelation reln, ForkNumber forknum)
 
 	if (fd < 0)
 	{
-		if (errno != ENOENT)
+		if (errno != ENOENT && !ok_missing)
 			ereport(ERROR,
 					(errcode_for_file_access(),
 					 errmsg("could not open file \"%s\": %m", path)));
@@ -195,7 +196,7 @@ restore_if_lazy(SMgrRelation reln, ForkNumber forknum)
 	}
 
 	/* Is it lazy? */
-	if (reln_is_lazy(reln, forknum))
+	if (reln_is_lazy(reln, forknum, true))
 	{
 		bool		save_InRecovery = InRecovery;
 
@@ -280,8 +281,12 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	ListCell   *lc;
 	XLogRecPtr	last_replayed_recptr;
 
+
 	/*
 	 * Get current WAL position. We need to reconstruct the file "as of" this position.
+	 */
+	/* TODO who adwances these positions for processing nodes?
+	 * lazy replay shouldn't advance them, as it only restores part of data?
 	 */
 	if (!RecoveryInProgress())
 	{
@@ -292,6 +297,19 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 	}
 	else
 		walpos = GetXLogReplayRecPtr(&tli);
+
+	/* We already have a file that is new enough */
+	if (reln->last_cachedLSN[forknum] >= walpos)
+	{
+		elog(LOG, "restore_reln %s last_cachedLSN %X/%X walpos %X/%X\n",
+		 		lazyrelpath(reln->smgr_rnode, forknum),
+				 (uint32) (reln->last_cachedLSN[forknum] >> 32),
+				 (uint32) reln->last_cachedLSN[forknum],
+  				 (uint32) (walpos >> 32), 
+				(uint32) walpos);
+
+		return;
+	}
 
 	curl = curl_easy_init();
 	if (!curl)
@@ -393,17 +411,20 @@ restore_reln(SMgrRelation reln, ForkNumber forknum)
 					 errmsg("could not remove file \"%s\": %m", "tmpwal")));
 	}
 
-	/* remove the _lazy file so that we don't try to restore it again */
 	lazypath = lazyrelpath(reln->smgr_rnode, forknum);
-	unlink(lazypath);
-	ret = unlink(lazypath);
-	if (ret < 0 && errno != ENOENT)
+
+	/* We should have restored data to a lazy file, using correct smgr. */
+	/* FIXME: Ensure that all lazy functions work with lazy files */
+	if (rename(basepath, lazypath) != 0)
+	{
 		ereport(WARNING,
 				(errcode_for_file_access(),
-				 errmsg("could not remove file \"%s\": %m", lazypath)));
+					errmsg("could not rename file \"%s\": %m",
+						basepath)));
+		return;
+	}
 
-	/* clean up (FIXME: consider using a temp memory context to avoid leaks) */
-	pfree(lazypath);
+	reln->last_cachedLSN[forknum] = last_replayed_recptr;
 
 	curl_easy_cleanup(curl);
 }
@@ -491,6 +512,7 @@ lazyrestore_extend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	restore_if_lazy(reln, forknum);
 
+	/* FIXME Why would we ever want to extend lazy rel? */
 	mdextend(reln, forknum, blocknum, buffer, skipFsync);
 }
 
@@ -574,6 +596,7 @@ lazyrestore_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 * Remember the LSN of the flushed page. Make sure we process
 	 * the WAL up to that point.
 	 */
+	reln->last_cachedLSN[forknum] = PageGetLSN((Page) buffer);
 }
 
 /*
@@ -594,9 +617,10 @@ lazyrestore_nblocks(SMgrRelation reln, ForkNumber forknum)
 void
 lazyrestore_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
-	/* FIXME: Do nothing. It's WAL-logged */
-	mdtruncate(reln, forknum, nblocks);
-	
+	/* do nothing, we rely on WAL */
+	/* FIXME Shouldn't we update last_cachedLSN here too? */
+	/* FIXME When do we actually truncate lazy files? */
+	return;	
 }
 
 /*
@@ -613,8 +637,8 @@ lazyrestore_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 void
 lazyrestore_immedsync(SMgrRelation reln, ForkNumber forknum)
 {
-	/* FIXME: do nothing, we rely on WAL */
-	mdimmedsync(reln, forknum);
+	/* do nothing, we rely on WAL */
+	return;
 }
 
 /*
@@ -628,8 +652,14 @@ lazyrestore_unlinkfiletag(const FileTag *ftag, char *path)
 {
 	char	   *p;
 
+	RelFileNodeBackend rnode;
+	rnode.backend = InvalidBackendId;
+	rnode.node.spcNode = ftag->rnode.spcNode;
+	rnode.node.dbNode = ftag->rnode.dbNode;
+	rnode.node.relNode = ftag->rnode.relNode;
+
 	/* Compute the path. */
-	p = relpathperm(ftag->rnode, MAIN_FORKNUM);
+	p = lazyrelpath(rnode, MAIN_FORKNUM);
 	strlcpy(path, p, MAXPGPATH);
 	pfree(p);
 
