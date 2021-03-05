@@ -268,6 +268,12 @@ StartReplication(PGconn* conn)
 	XLogRecPtr startpos = GetAcknowledgedWALPosition();
 
 	/*
+	 * If there is no data at safekeepers then use server's LSN
+	 */
+	if (startpos == 0)
+		startpos = serverInfo.walEnd;
+
+	/*
 	 * Always start streaming at the beginning of a segment
 	 */
 	startpos -= XLogSegmentOffset(startpos, serverInfo.walSegSize);
@@ -276,6 +282,8 @@ StartReplication(PGconn* conn)
 	snprintf(query, sizeof(query), "START_REPLICATION %X/%X TIMELINE %u",
 			 (uint32) (startpos >> 32), (uint32)startpos,
 			 serverInfo.timeline);
+	if (verbose)
+		pg_log_info("%s", query);
 	res = PQexec(conn, query);
 	if (PQresultStatus(res) != PGRES_COPY_BOTH)
 	{
@@ -307,7 +315,7 @@ BroadcastWalStream(PGconn* conn)
 	FD_ZERO(&writeSet);
 	maxFds = server;
 
-	/* Initate connections to all safekeeper nodes */
+	/* Initiate connections to all safekeeper nodes */
 	for (i = 0; i < n_safekeepers; i++)
 	{
 		ResetConnection(i);
@@ -354,7 +362,7 @@ BroadcastWalStream(PGconn* conn)
 				msg->next = NULL;
 				msg->ackMask = 0;
 				msg->walPos = fe_recvint64(&copybuf[XLOG_HDR_START_POS]);
-				/* Set walEnd to the end of the record */
+				/* Set walEnd to the end of the record - we will use it at safekeepr to calculate wal record size */
 				fe_sendint64(msg->walPos + msg->size - XLOG_HDR_SIZE, &copybuf[XLOG_HDR_END_POS]);
 				BroadcastMessage(msg);
 			}
@@ -505,7 +513,7 @@ BroadcastWalStream(PGconn* conn)
 					  }
 					  case SS_RECV_ACK:
 					  {
-						  /* Read safekeepr response with flushed WAL position */
+						  /* Read safekeeper response with flushed WAL position */
 						  rc = ReadSocketAsync(safekeeper[i].sock,
 											   (char*)&safekeeper[i].ackPos + safekeeper[i].asyncOffs,
 											   sizeof(safekeeper[i].ackPos) - safekeeper[i].asyncOffs);
@@ -666,7 +674,7 @@ main(int argc, char **argv)
 			exit(1);
 		}
 		*port++ = '\0';
-		sep = strchr(host, ',');
+		sep = strchr(port, ',');
 		if (sep != NULL)
 			*sep++ = '\0';
 		if (n_safekeepers+1 >= MAX_SAFEKEEPERS)

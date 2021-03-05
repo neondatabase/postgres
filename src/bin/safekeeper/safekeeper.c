@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include "common/file_perm.h"
+#include "common/file_utils.h"
 #include "common/logging.h"
 #include "getopt_long.h"
 #include "libpq-fe.h"
@@ -292,14 +293,16 @@ ReadSocket(void* buf, size_t size)
 
 	while (size != 0)
 	{
-		rc = recv(streamer, src, size, 0);
+		rc = (streamer == PGINVALID_SOCKET) ? -1 : recv(streamer, src, size, 0);
 		if (rc < 0) {
-			if (errno == EWOULDBLOCK || errno == EAGAIN)
+			if (streamer == PGINVALID_SOCKET || errno == EWOULDBLOCK || errno == EAGAIN)
 			{
 				fd_set readSet;
 				FD_ZERO(&readSet);
-				FD_SET(streamer, &readSet);
 				FD_SET(gateway, &readSet);
+				if (streamer != PGINVALID_SOCKET)
+					FD_SET(streamer, &readSet);
+
 				while ((rc = select(Max(streamer,gateway)+1, &readSet, NULL, NULL, NULL)) < 0 && errno == EINTR);
 				if (rc > 0)
 				{
@@ -312,8 +315,11 @@ ReadSocket(void* buf, size_t size)
 				}
 				pg_log_error("Select failed: %s",
 							 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
-				closesocket(streamer);
-				streamer = PGINVALID_SOCKET;
+				if (streamer != PGINVALID_SOCKET)
+				{
+					closesocket(streamer);
+					streamer = PGINVALID_SOCKET;
+				}
 				return false;
 			}
 			if (errno == EINTR)
@@ -446,11 +452,14 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 	XLogSegNo segno;
 	char  walfile_name[MAXPGPATH];
 	char  walfile_path[MAXPGPATH];
+	char  walfile_partial_path[MAXPGPATH];
 	int   walfile = -1;
 	int	  xlogoff;
 	int	  bytes_left = recSize;
 	int	  bytes_written = 0;
 	int   WalSegSz = myInfo.server.walSegSize;
+	bool  partial = false;
+	char* curr_file = walfile_path;
 
 	/* Extract WAL location for this block */
 	xlogoff = XLogSegmentOffset(startpoint, WalSegSz);
@@ -475,18 +484,26 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 
 			sprintf(walfile_path, "%s/%s", basedir, walfile_name);
 			walfile = open(walfile_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+			partial = false;
 			if (walfile < 0)
 			{
-				pg_log_error("Failed to open WAL file %s: %s",
-							 walfile_path, strerror(errno));
-				return false;
+			    sprintf(walfile_partial_path, "%s/%s.partial", basedir, walfile_name);
+				curr_file = walfile_partial_path;
+				walfile = open(walfile_partial_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+				if (walfile < 0)
+				{
+					pg_log_error("Failed to open WAL file %s: %s",
+								 curr_file, strerror(errno));
+					return false;
+				}
+				partial = true;
 			}
 		}
 
 		if (write(walfile, rec + bytes_written, bytes_to_write) != bytes_to_write)
 		{
 			pg_log_error("could not write %u bytes to WAL file \"%s\": %s",
-						 bytes_to_write, walfile_path, strerror(errno));
+						 bytes_to_write, curr_file, strerror(errno));
 			return false;
 		}
 
@@ -495,7 +512,7 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 			if (fsync(walfile) < 0)
 			{
 				pg_log_error("failed to sync file \"%s\": %s",
-							 walfile_path, strerror(errno));
+							 curr_file, strerror(errno));
 				return false;
 			}
 		}
@@ -512,8 +529,17 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 			if (!close(walfile))
 			{
 				pg_log_error("failed to close file \"%s\": %s",
-							 walfile_path, strerror(errno));
+							 curr_file, strerror(errno));
 				return false;
+			}
+			if (partial)
+			{
+				if (durable_rename(walfile_partial_path, walfile_path) != 0)
+				{
+					pg_log_error("failed to rename file \"%s\" to \"%s\": %s",
+								 walfile_partial_path, walfile_path, strerror(errno));
+					return false;
+				}
 			}
 			xlogoff = 0;
 			walfile = -1;
@@ -529,7 +555,6 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 static void
 ReceiveWalStream(void)
 {
-	char	   sebuf[PG_STRERROR_R_BUFLEN];
 	XLogRecPtr startPos;
 	XLogRecPtr endPos;
 	size_t     recSize;
@@ -545,17 +570,6 @@ ReceiveWalStream(void)
 
 	while (true)
 	{
-		if (streamer == PGINVALID_SOCKET)
-		{
-			streamer = accept(gateway, NULL, NULL);
-			if (streamer == PGINVALID_SOCKET)
-			{
-				if (errno != EINTR)
-					pg_log_error("Failed to accept connection: %s",
-								 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
-				continue;
-			}
-		}
 		/* Receive message header */
 		if (!ReadSocket(hdr, sizeof hdr))
 			continue;
@@ -563,7 +577,7 @@ ReceiveWalStream(void)
 		if (hdr[0] == 'q')
 		{
 			pg_log_info("Server stops streaming");
-			exit(1);
+			exit(0);
 		}
 		Assert(hdr[0] == 'w');
 
