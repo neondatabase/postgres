@@ -22,8 +22,16 @@ SetSocketOptions(pgsocket sock)
 	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
 				   (char *) &on, sizeof(on)) < 0)
 	{
-		pg_log_info("setsockopt(%s) failed: %s", "TCP_NODELAY",
-					SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		pg_log_error("setsockopt(%s) failed: %s", "TCP_NODELAY",
+					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		closesocket(sock);
+		return false;
+	}
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+				   (char *) &on, sizeof(on)) < 0)
+	{
+		pg_log_error("setsockopt(%s) failed: %s", "SO_REUSEADDR",
+					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 		closesocket(sock);
 		return false;
 	}
@@ -36,14 +44,10 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 	struct addrinfo *addrs = NULL,
 		*addr,
 		hints;
-	int	tries = 0;
 	int	ret;
 	pgsocket sock = PGINVALID_SOCKET;
 	char sebuf[PG_STRERROR_R_BUFLEN];
 
-	/*
-	 * Create the UDP socket for sending and receiving statistic messages
-	 */
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -55,20 +59,16 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 	ret = pg_getaddrinfo_all(host, port, &hints, &addrs);
 	if (ret || !addrs)
 	{
-		pg_log_error("Could not resolve \"localhost\": %s",
-					 gai_strerror(ret));
+		pg_log_error("Could not resolve \"%s\": %s",
+					 host, gai_strerror(ret));
 		return -1;
 	}
 	for (addr = addrs; addr; addr = addr->ai_next)
 	{
-		sock = PGINVALID_SOCKET;
-		if (++tries > 1)
-			pg_log_info("trying another address for the statistics collector");
-
 		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
-			pg_log_info("could not create socket for statistics collector: %s",
+			pg_log_error("could not create socket: %s",
 						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			continue;
 		}
@@ -87,7 +87,7 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 				*established = false;
 				break;
 			}
-			pg_log_info("Could not establish connection to %s:%s: %s",
+			pg_log_error("Could not establish connection to %s:%s: %s",
 						host, port, SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			closesocket(sock);
 		}
@@ -106,14 +106,10 @@ CreateSocket(char const* host, char const* port, int n_peers)
 	struct addrinfo *addrs = NULL,
 		*addr,
 		hints;
-	int	tries = 0;
 	int	ret;
 	char sebuf[PG_STRERROR_R_BUFLEN];
 	pgsocket sock = PGINVALID_SOCKET;
 
-	/*
-	 * Create the UDP socket for sending and receiving statistic messages
-	 */
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = AF_UNSPEC;
 	hints.ai_socktype = SOCK_STREAM;
@@ -125,21 +121,17 @@ CreateSocket(char const* host, char const* port, int n_peers)
 	ret = pg_getaddrinfo_all(host, port, &hints, &addrs);
 	if (ret || !addrs)
 	{
-		pg_log_error("Could not resolve \"localhost\": %s",
-					 gai_strerror(ret));
+		pg_log_error("Could not resolve \"%s\": %s",
+					 host, gai_strerror(ret));
 		return -1;
 	}
 	for (addr = addrs; addr; addr = addr->ai_next)
 	{
-		sock = PGINVALID_SOCKET;
-		if (++tries > 1)
-			pg_log_info("trying another address for the statistics collector");
-
 		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
-			pg_log_info("could not create socket for statistics collector: %s",
-						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("could not create socket: %s",
+						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			continue;
 		}
 		/*
@@ -148,15 +140,15 @@ CreateSocket(char const* host, char const* port, int n_peers)
 		 */
 		if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0)
 		{
-			pg_log_info("Could not bind socket for statistics collector: %s",
-						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Could not bind socket: %s",
+						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			closesocket(sock);
 			continue;
 		}
 		ret = listen(sock, n_peers);
 		if (ret < 0)
 		{
-			pg_log_info("Could not listen: %s", SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Could not listen: %s", SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			closesocket(sock);
 			continue;
 		}
