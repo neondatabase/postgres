@@ -20,6 +20,11 @@
 #include "access/xlog.h"
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
+#include "storage/proc.h"
+#include "storage/pageserver.h"
+
+#include "libpq/libpq.h"
+#include "libpq/pqformat.h"
 
 #include "memstore.h"
 #include "zenith_store.h"
@@ -105,7 +110,7 @@ memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record)
 
 
 PerPageWalRecord *
-memstore_get_oldest(PerPageWalHashKey key)
+memstore_get_oldest(PerPageWalHashKey *key)
 {
 	bool found;
 	PerPageWalHashEntry *hash_entry;
@@ -113,7 +118,7 @@ memstore_get_oldest(PerPageWalHashKey key)
 
 	LWLockAcquire(memStore->lock, LW_SHARED);
 
-	hash_entry = (PerPageWalHashEntry *) hash_search(memStore->pages, &key, HASH_FIND, &found);
+	hash_entry = (PerPageWalHashEntry *) hash_search(memStore->pages, key, HASH_FIND, &found);
 
 	if (found) {
 		result = hash_entry->oldest;
@@ -130,33 +135,9 @@ memstore_get_oldest(PerPageWalHashKey key)
 
 PG_FUNCTION_INFO_V1(zenith_store_get_page);
 
-Datum
-zenith_store_get_page(PG_FUNCTION_ARGS)
+void
+get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 {
-	uint64		sysid = PG_GETARG_INT64(0);
-	Oid			tspaceno = PG_GETARG_OID(1);
-	Oid			dbno = PG_GETARG_OID(2);
-	Oid			relno = PG_GETARG_OID(3);
-	ForkNumber	forknum = PG_GETARG_INT32(4);
-	int64		blkno = PG_GETARG_INT64(5);
-
-	bytea	   *raw_page;
-	char	   *raw_page_data;
-
-	/* Initialize buffer to copy to */
-	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
-	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
-	raw_page_data = VARDATA(raw_page);
-
-	PerPageWalHashKey key;
-	memset(&key, '\0', sizeof(PerPageWalHashKey));
-	key.system_identifier = sysid;
-	key.rnode.spcNode = tspaceno;
-	key.rnode.dbNode = dbno;
-	key.rnode.relNode = relno;
-	key.forknum = forknum;
-	key.blkno = blkno;
-
 	PerPageWalRecord *record_entry = memstore_get_oldest(key);
 
 	if (!record_entry)
@@ -194,7 +175,7 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 	BufferDesc *bufdesc = NULL;
 
 	/* create a tag so we can lookup the buffer */
-	INIT_BUFFERTAG(newTag, key.rnode, forknum, blkno);
+	INIT_BUFFERTAG(newTag, key.rnode, key.forknum, key.blkno);
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
@@ -217,9 +198,106 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 
 	buf = BufferDescriptorGetBuffer(bufdesc);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
-	memcpy(raw_page_data, BufferGetPage(buf), BLCKSZ);
+	memcpy(*raw_page_data, BufferGetPage(buf), BLCKSZ);
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	ReleaseBuffer(buf);
+}
+
+
+Datum
+zenith_store_get_page(PG_FUNCTION_ARGS)
+{
+	uint64		sysid = PG_GETARG_INT64(0);
+	Oid			tspaceno = PG_GETARG_OID(1);
+	Oid			dbno = PG_GETARG_OID(2);
+	Oid			relno = PG_GETARG_OID(3);
+	ForkNumber	forknum = PG_GETARG_INT32(4);
+	int64		blkno = PG_GETARG_INT64(5);
+
+	bytea	   *raw_page;
+	char	   *raw_page_data;
+
+	/* Initialize buffer to copy to */
+	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
+	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
+	raw_page_data = VARDATA(raw_page);
+
+	PerPageWalHashKey key;
+	memset(&key, '\0', sizeof(PerPageWalHashKey));
+	key.system_identifier = sysid;
+	key.rnode.spcNode = tspaceno;
+	key.rnode.dbNode = dbno;
+	key.rnode.relNode = relno;
+	key.forknum = forknum;
+	key.blkno = blkno;
+
+	get_page_by_key(&key, &raw_page_data);
 
 	PG_RETURN_BYTEA_P(raw_page);
 }
+
+
+Datum
+zenith_store_dispatcher(PG_FUNCTION_ARGS)
+{
+	StringInfoData s;
+
+	pq_beginmessage(&s, 'W');
+	pq_sendbyte(&s, 0);			/* copy_is_binary */
+	pq_sendint16(&s, 0);		/* numAttributes */
+	pq_endmessage(&s);
+	pq_flush();
+
+	pq_startmsgread();
+
+	MyProc->xmin = InvalidTransactionId;
+
+	for (;;)
+	{
+		StringInfoData msg;
+
+		if (pq_getmessage(&msg, 0) != 0)
+			zenith_log(ERROR, "failed to read client request");
+
+		PerPageWalHashKey key;
+		memset(&key, '\0', sizeof(PerPageWalHashKey));
+
+		// XXX: move serialization / deserialization in one place
+		char tag = pq_getmsgbyte(&msg);
+		key.system_identifier = 42;
+		key.rnode.spcNode = pq_getmsgint(&msg, 4);
+		key.rnode.dbNode = pq_getmsgint(&msg, 4);
+		key.rnode.relNode = pq_getmsgint(&msg, 4);
+		key.forknum = pq_getmsgbyte(&msg);
+		key.blkno = pq_getmsgint(&msg, 4);
+
+		if (tag == SMGR_EXISTS)
+		{
+
+		}
+		else if (tag == SMGR_TRUNC)
+		{
+
+		}
+		else if (tag == SMGR_UNLINK)
+		{
+			
+		}
+		else if (tag == SMGR_NBLOCKS)
+		{
+			
+		}
+		else if (tag == SMGR_READ)
+		{
+			char *raw_page_data = (char *) palloc(BLCKSZ);
+			get_page_by_key(&key, &raw_page_data);
+
+			
+		}
+		else
+			Assert(false);
+
+		CHECK_FOR_INTERRUPTS();
+	}
+}
+

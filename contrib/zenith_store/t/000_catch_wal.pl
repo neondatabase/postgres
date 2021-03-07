@@ -6,6 +6,8 @@ use Test::More tests => 1;
 
 $TestLib::use_unix_sockets = 0;
 
+$PostgresNode::last_port_assigned = 15431;
+
 # Initialize primary node
 my $node_primary = get_new_node('primary');
 $node_primary->init(

@@ -24,6 +24,7 @@
 #include "storage/lazyrestore.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
+#include "storage/pageserver.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
@@ -101,6 +102,24 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = lazyrestore_nblocks,
 		.smgr_truncate = lazyrestore_truncate,
 		.smgr_immedsync = lazyrestore_immedsync,
+	},
+	/* zenith_smgr */
+	{
+		.smgr_init = zenith_init,
+		.smgr_shutdown = NULL,
+		.smgr_open = zenith_open,
+		.smgr_close = zenith_close,
+		.smgr_create = zenith_create,
+		.smgr_exists = zenith_exists,
+		.smgr_unlink = zenith_unlink,
+		.smgr_extend = zenith_extend,
+		.smgr_prefetch = zenith_prefetch,
+		.smgr_read = zenith_read,
+		.smgr_write = zenith_write,
+		.smgr_writeback = zenith_writeback,
+		.smgr_nblocks = zenith_nblocks,
+		.smgr_truncate = zenith_truncate,
+		.smgr_immedsync = zenith_immedsync,
 	}
 };
 
@@ -197,12 +216,20 @@ smgropen(RelFileNode rnode, BackendId backend)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
 
 		/*
+		 * Use pageserver whenever page_server_connstring is not null.
+		 * We may integrate this with lazyrestore, but not it is one of two options.
+		 */
+		if (page_server_connstring && page_server_connstring[0])
+		{
+			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? 0 : 1;
+		}
+		/*
 		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the
 		 * calls. Instead, there is a direct call to restore_if_lazy() in
 		 * ReadBuffer_common()
 		 */
 		/* use main forknum because it must always be present  */
-		if (reln_is_lazy(reln, MAIN_FORKNUM, true))
+		else if (reln_is_lazy(reln, MAIN_FORKNUM, true))
 		{
 			for (int i = 0; i <= MAX_FORKNUM; ++i)
 				reln->possibly_lazy[i] = true;
@@ -215,6 +242,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 				reln->possibly_lazy[i] = false;
 			reln->smgr_which = 0; /* md */
 		}
+
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);

@@ -20,8 +20,6 @@
 
 06.03.2021
     + do not crash in wal receiver on all pg_regrees data
-
-
-
+    * implement smgr to the remote pageserver
 
 

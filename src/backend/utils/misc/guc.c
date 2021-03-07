@@ -79,6 +79,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/pageserver.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
@@ -4502,6 +4503,16 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"page_server", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Connection string to the page server."),
+			NULL
+		},
+		&page_server_connstring,
+		"",
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */
