@@ -11,3 +11,17 @@
 03.03.2021
     + collect history chains for each page in shmem
     + function to make redo
+
+04.03.2021
+    * do not crash in wal receiver on all pg_regrees data
+
+05.03.2021
+    * do not crash in wal receiver on all pg_regrees data
+
+06.03.2021
+    + do not crash in wal receiver on all pg_regrees data
+
+
+
+
+

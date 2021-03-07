@@ -38,11 +38,13 @@ uint64 client_system_id;
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
+#define WAL_BUFF_RETAIN_SIZE 10*XLOG_BLCKSZ
+#define WAL_BUFF_CLEANUP_THRESHOLD 1*XLOG_BLCKSZ
+
 #define LSN_PARTS(lsn) (uint32) ((lsn) >> 32), (uint32) (lsn)
 
 static void receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received);
-static void process_record(XLogRecord *record, XLogRecPtr start_lsn, XLogRecPtr end_lsn);
-static void process_records(StringInfo s, XLogRecPtr start_lsn);
+static void process_records(XLogReaderState *reader_state, XLogRecPtr start_lsn);
 static void send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool requestReply);
 static void handle_record(XLogReaderState *record);
 
@@ -148,11 +150,13 @@ receiver_main(Datum main_arg)
 	if (conn == NULL)
 		zenith_log(ERROR, "could not connect to the processing node: %s", err);
 
-	/*
-	 * We don't really use the output identify_system for anything but it
-	 * does some initializations on the upstream so let's still call it.
-	 */
 	system_id = zenith_identify_system(conn, &startpointTLI, &primary_lsn);
+
+	/*
+	 * Always start streaming from beginning of the page -- xlogreader
+	 * depends on that.
+	 */
+	primary_lsn = primary_lsn - (primary_lsn % XLOG_BLCKSZ);
 
 	if (sscanf(system_id, "%lu", &client_system_id) != 1)
 		zenith_log(ERROR, "failed to parse client system id");
@@ -166,11 +170,77 @@ receiver_main(Datum main_arg)
 	options.slotname = "zenith_store";
 	options.proto.physical.startpointTLI = startpointTLI;
 
-	/* Start normal logical streaming replication. */
+	/* Start streaming replication. */
 	walrcv_startstreaming(conn, &options);
 
 	receiver_loop(conn, primary_lsn);
 }
+
+typedef struct
+{
+	XLogRecPtr start_lsn; /* LSN of the first entry in .data */
+	StringInfoData wal;
+} RecvBuffer;
+
+static int
+read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
+			   XLogRecPtr targetRecPtr, char *readBuff)
+{
+	RecvBuffer *recv_buffer = (RecvBuffer *) state->private_data;
+
+	Assert(recv_buffer->wal.cursor == 0);
+	Assert(recv_buffer->start_lsn % XLOG_BLCKSZ == 0);
+	Assert(reqLen <= XLOG_BLCKSZ);
+
+	zenith_log(ReceiverTrace,
+		"read_xlog_page: targetPagePtr=%X/%X targetRecPtr=%X/%X, req_len=%d, start_lsn=%X/%X, last_lsn=%X/%X",
+		LSN_PARTS(targetPagePtr),
+		LSN_PARTS(targetRecPtr),
+		reqLen,
+		LSN_PARTS(recv_buffer->start_lsn),
+		LSN_PARTS(recv_buffer->start_lsn + recv_buffer->wal.len)
+	);
+
+	int off = targetPagePtr - recv_buffer->start_lsn;
+	Assert(off >= 0);
+
+	int recv_len = recv_buffer->wal.len - off;
+	if (recv_len < reqLen)
+		return -1;
+
+	int copy_len = recv_len < XLOG_BLCKSZ ? recv_len : XLOG_BLCKSZ;
+
+	memcpy(readBuff, recv_buffer->wal.data + off, copy_len);
+
+
+	/*
+	 * FIXME: now received WAL would just indefinitely grow. XLogReadRecord() may request
+	 * pages from the past and I didn't yet understood what correct lookbehind boundary would be.
+	 * 10 pages are not enough. Would that boundary be just segsize?
+	 */
+
+	// /* free data from time to time */
+	// if (targetPagePtr > recv_buffer->start_lsn + WAL_BUFF_RETAIN_SIZE + WAL_BUFF_CLEANUP_THRESHOLD)
+	// {
+	// 	Assert(recv_buffer->wal.len > WAL_BUFF_RETAIN_SIZE + WAL_BUFF_CLEANUP_THRESHOLD);
+
+	// 	memmove(recv_buffer->wal.data,
+	// 		recv_buffer->wal.data + WAL_BUFF_CLEANUP_THRESHOLD,
+	// 		recv_buffer->wal.len - WAL_BUFF_CLEANUP_THRESHOLD
+	// 	);
+	// 	recv_buffer->wal.len -= WAL_BUFF_CLEANUP_THRESHOLD;
+	// 	recv_buffer->start_lsn += WAL_BUFF_CLEANUP_THRESHOLD;
+
+	// 	zenith_log(ReceiverTrace,
+	// 		"read_xlog_page compaction: old_start=%X/%X new_start=%X/%X",
+	// 		LSN_PARTS(recv_buffer->start_lsn - WAL_BUFF_CLEANUP_THRESHOLD),
+	// 		LSN_PARTS(recv_buffer->start_lsn)
+	// 	);
+	// }
+
+	return copy_len;
+}
+
 
 /*
  * Receiver main loop.
@@ -181,6 +251,22 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 	TimestampTz last_recv_timestamp = GetCurrentTimestamp();
 	bool		ping_sent = false;
 	TimeLineID	tli;
+
+	XLogReaderState *xlogreader;
+	XLogReaderRoutine dummy_routine = { &read_xlog_page, NULL, NULL };
+
+	RecvBuffer recv_buffer;
+	initStringInfo(&recv_buffer.wal);
+	recv_buffer.start_lsn = InvalidXLogRecPtr;
+
+	bool first = true;
+
+	xlogreader = XLogReaderAllocate(wal_segment_size, NULL, &dummy_routine, &recv_buffer);
+	if (!xlogreader)
+		ereport(ERROR,
+				(errcode(ERRCODE_OUT_OF_MEMORY),
+				 errmsg("out of memory"),
+				 errdetail("Failed while allocating a WAL reading processor.")));
 
 	/* This outer loop iterates once per wait. */
 	for (;;)
@@ -239,10 +325,29 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 					if (last_received < start_lsn)
 						last_received = start_lsn;
 
-					if (last_received < end_lsn)
-						last_received = end_lsn;
+					zenith_log(ReceiverTrace, "got records pack size=%d, first_lsn=%X/%X",
+						s.len - s.cursor,
+						(uint32) (start_lsn >> 32), (uint32) start_lsn);
 
-					process_records(&s, start_lsn);
+					if (first)
+					{
+						Assert(start_lsn % XLOG_BLCKSZ == 0);
+						recv_buffer.start_lsn = start_lsn;
+
+						// XXX: change that to XLogFindNextRecord()
+						start_lsn += XLogPageHeaderSize((XLogPageHeader) (s.data + s.cursor));
+
+						XLogBeginRead(xlogreader, start_lsn);
+
+						XLogSegNo	targetSegNo;
+						XLByteToSeg(recv_buffer.start_lsn, targetSegNo, xlogreader->segcxt.ws_segsize);
+						xlogreader->seg.ws_segno = targetSegNo;
+
+						first = false;
+					}
+
+					appendBinaryStringInfoNT(&recv_buffer.wal, s.data + s.cursor, s.len - s.cursor);
+					process_records(xlogreader, start_lsn);
 				}
 				else if (c == 'k')
 				{
@@ -290,119 +395,25 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 	walrcv_endstreaming(conn, &tli);
 }
 
-static bool
-is_valid_record(XLogRecord *record)
-{
-	pg_crc32c	crc;
-
-	/* Calculate the CRC */
-	INIT_CRC32C(crc);
-	COMP_CRC32C(crc, ((char *) record) + SizeOfXLogRecord, record->xl_tot_len - SizeOfXLogRecord);
-	/* include the record header last */
-	COMP_CRC32C(crc, (char *) record, offsetof(XLogRecord, xl_crc));
-	FIN_CRC32C(crc);
-
-	if (!EQ_CRC32C(record->xl_crc, crc))
-	{
-		return false;
-	}
-
-	return true;
-}
-
 static void
-process_records(StringInfo s, XLogRecPtr start_lsn)
+process_records(XLogReaderState *reader, XLogRecPtr start_lsn)
 {
-
-	zenith_log(ReceiverTrace, "got record pack size=%d, first_lsn=%X/%X",
-		s->len - s->cursor,
-		(uint32) (start_lsn >> 32), (uint32) start_lsn);
-
-	const XLogRecPtr lsn_base = start_lsn - s->cursor;
-
-	while (s->cursor < s->len)
+	for (;;)
 	{
-		// XXX: do XLogRecord sanity check akin to ValidXLogRecordHeader()
-		XLogRecord *record = (XLogRecord *) (s->data + s->cursor);
-		uint32 total_len = record->xl_tot_len;
-		uint32 len_in_block = XLOG_BLCKSZ - (lsn_base + s->cursor) % XLOG_BLCKSZ;
+		XLogRecord *record;
+		char	   *err = NULL;
 
-		start_lsn = lsn_base + s->cursor;
+		record = XLogReadRecord(reader, &err);
+		if (err)
+			zenith_log(ERROR, "%s", err);
+		if (!record)
+			break; // XXX: check that it is because of insufficient data
 
-		if (total_len <= len_in_block)
-		{
-			process_record(record, start_lsn, lsn_base + s->cursor + MAXALIGN(record->xl_tot_len));
-			s->cursor += MAXALIGN(record->xl_tot_len);
-		}
+		if (DecodeXLogRecord(reader, record, &err))
+			handle_record(reader);
 		else
-		{
-			/* Record does cross a page boundary */
-			StringInfoData buf;
-			initStringInfo(&buf);
-			appendBinaryStringInfoNT(&buf, s->data + s->cursor, len_in_block);
-			s->cursor += len_in_block;
-
-			XLogPageHeaderData *pageHeader;
-			uint32 gotlen = len_in_block;
-			do
-			{
-				Assert((lsn_base + s->cursor) % XLOG_BLCKSZ == 0);
-
-				pageHeader = (XLogPageHeaderData *) (s->data + s->cursor);
-				if (!(pageHeader->xlp_info & XLP_FIRST_IS_CONTRECORD))
-					zenith_log(ERROR, "there is no contrecord flag at %X/%X", LSN_PARTS(start_lsn));
-
-				if (pageHeader->xlp_rem_len == 0 ||
-					total_len != (pageHeader->xlp_rem_len + gotlen))
-				{
-					zenith_log(ERROR, "invalid contrecord length %u (expected %lld) at %X/%X",
-							pageHeader->xlp_rem_len,
-							((long long) total_len) - gotlen,
-							LSN_PARTS(lsn_base + s->cursor));
-				}
-
-				s->cursor += XLogPageHeaderSize(pageHeader);
-				len_in_block = XLOG_BLCKSZ - XLogPageHeaderSize(pageHeader);
-				if (pageHeader->xlp_rem_len < len_in_block)
-					len_in_block = pageHeader->xlp_rem_len;
-
-				appendBinaryStringInfoNT(&buf, s->data + s->cursor, len_in_block);
-				s->cursor += MAXALIGN(len_in_block);
-				gotlen += len_in_block;
-			} while (gotlen < total_len);
-
-
-			Assert(record->xl_tot_len == total_len);
-			process_record((XLogRecord *) buf.data, start_lsn, lsn_base + s->cursor);
-		}
+			zenith_log(ERROR, "failed to decode WAL record: %s", err);
 	}
-	Assert(s->cursor == s->len);
-}
-
-static void
-process_record(XLogRecord *decoded_record, XLogRecPtr start_lsn, XLogRecPtr end_lsn)
-{
-	char	   *errormsg = "";
-
-	zenith_log(ReceiverTrace, "processing record: xid=%d, xl_tot_len=%d, len_before_8k=%lu, lsn=%X/%X",
-		decoded_record->xl_xid,
-		decoded_record->xl_tot_len,
-		XLOG_BLCKSZ - start_lsn % XLOG_BLCKSZ,
-		LSN_PARTS(start_lsn));
-
-	if (!is_valid_record(decoded_record))
-		zenith_log(ERROR, "CRC check failed for record %X/%X", LSN_PARTS(start_lsn));
-
-	XLogReaderState reader_state = {
-		.ReadRecPtr = start_lsn,
-		.EndRecPtr = end_lsn,
-		.decoded_record = decoded_record
-	};
-
-	if (DecodeXLogRecord(&reader_state, decoded_record, &errormsg))
-		handle_record(&reader_state);
-	else
-		zenith_log(ERROR, "failed to decode WAL record: %s", errormsg);
 }
 
 static void
