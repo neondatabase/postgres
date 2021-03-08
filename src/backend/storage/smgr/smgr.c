@@ -131,6 +131,7 @@ static const f_smgr smgrsw[] = {
 };
 
 static const int NSmgr = lengthof(smgrsw);
+int smgr_which = 0;
 
 /*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
@@ -250,7 +251,6 @@ smgropen(RelFileNode rnode, BackendId backend)
 		{
 			reln->smgr_which = SmgrMd; /* md */
 		}
-
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);

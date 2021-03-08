@@ -16,6 +16,7 @@
 #define XLOG_HDR_SIZE       (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
 #define XLOG_HDR_START_POS  1        /* offset of start position in header */
 #define XLOG_HDR_END_POS    9        /* offset of end position in header */
+#define KEEPALIVE_RR_OFFS   17       /* offset of reply requested field in keep alive request */
 
 /*
  * All copy date message ('w') are linked in L1 send list and asynhronoously sent to receivers.

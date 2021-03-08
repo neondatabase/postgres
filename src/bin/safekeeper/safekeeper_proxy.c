@@ -129,6 +129,7 @@ ResetConnection(int i)
 		}
 		else
 		{
+			FD_SET(safekeeper[i].sock, &writeSet);
 			safekeeper[i].state = SS_CONNECTING;
 		}
 	}
@@ -158,7 +159,7 @@ GetAcknowledgedWALPosition(void)
 
 
 static bool
-HandleSafekeeperResponse(void)
+HandleSafekeeperResponse(PGconn* conn)
 {
 	XLogRecPtr minQuorumLsn = GetAcknowledgedWALPosition();
 	if (minQuorumLsn > lastAckPos)
@@ -227,6 +228,7 @@ BroadcastMessage(WalMessage* msg)
 			{
 				safekeeper[i].asyncOffs = 0;
 				safekeeper[i].state = SS_RECV_ACK;
+				safekeeper[i].currMsg = msg;
 			}
 			else
 			{
@@ -369,6 +371,14 @@ BroadcastWalStream(PGconn* conn)
 			else
 			{
 				Assert(copybuf[0] == 'k'); /* keep alive */
+				if (copybuf[KEEPALIVE_RR_OFFS]
+					&& !SendFeedback(conn, lastAckPos, feGetCurrentTimestamp(), true))
+				{
+					FD_CLR(server, &readSet);
+					closesocket(server);
+					server = PGINVALID_SOCKET;
+					streaming = false;
+				}
 				pfree(copybuf);
 			}
 		}
@@ -382,35 +392,6 @@ BroadcastWalStream(PGconn* conn)
 				{
 					switch (safekeeper[i].state)
 					{
-					  case SS_CONNECTING:
-					  {
-						  int			optval;
-						  ACCEPT_TYPE_ARG3 optlen = sizeof(optval);
-						  if (getsockopt(safekeeper[i].sock, SOL_SOCKET, SO_ERROR, (char *) &optval, &optlen) < 0 || optval != 0)
-						  {
-							  pg_log_error("Failed to connect to node '%s:%s': %s",
-										   safekeeper[i].host, safekeeper[i].port,
-										   SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
-							  closesocket(safekeeper[i].sock);
-							  FD_CLR(safekeeper[i].sock, &readSet);
-							  safekeeper[i].sock =  PGINVALID_SOCKET;
-							  safekeeper[i].state = SS_OFFLINE;
-						  }
-						  else
-						  {
-							  /* Start handshake: send informatio about server */
-							  if (WriteSocket(safekeeper[i].sock, &serverInfo, sizeof serverInfo))
-							  {
-								  safekeeper[i].state = SS_HANDSHAKE;
-								  safekeeper[i].asyncOffs = 0;
-							  }
-							  else
-							  {
-								  ResetConnection(i);
-							  }
-						  }
-						  break;
-					  }
 					  case SS_HANDSHAKE:
 					  {
 						  /* Receive safekeeper node state */
@@ -523,11 +504,11 @@ BroadcastWalStream(PGconn* conn)
 						  }
 						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].ackPos))
 						  {
-							  Assert(safekeeper[i].ackPos == fe_recvint64(&receievers[i].currMsg->data[XLOG_HDR_END_POS]));
+							  Assert(safekeeper[i].ackPos == fe_recvint64(&safekeeper[i].currMsg->data[XLOG_HDR_END_POS]));
 							  safekeeper[i].currMsg->ackMask |= 1 << i; /* this safekeeper confirms receiving of this message */
 							  safekeeper[i].state = SS_IDLE;
 							  safekeeper[i].asyncOffs = 0;
-							  if (!HandleSafekeeperResponse())
+							  if (!HandleSafekeeperResponse(conn))
 							  {
 								  FD_CLR(server, &readSet);
 								  closesocket(server);
@@ -546,22 +527,57 @@ BroadcastWalStream(PGconn* conn)
 				}
 				else if (FD_ISSET(safekeeper[i].sock, &ws))
 				{
-					if (safekeeper[i].state != SS_SEND_WAL)
+					switch (safekeeper[i].state)
 					{
+					  case SS_CONNECTING:
+					  {
+						  int			optval;
+						  ACCEPT_TYPE_ARG3 optlen = sizeof(optval);
+						  if (getsockopt(safekeeper[i].sock, SOL_SOCKET, SO_ERROR, (char *) &optval, &optlen) < 0 || optval != 0)
+						  {
+							  pg_log_error("Failed to connect to node '%s:%s': %s",
+										   safekeeper[i].host, safekeeper[i].port,
+										   SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+							  closesocket(safekeeper[i].sock);
+							  FD_CLR(safekeeper[i].sock, &readSet);
+							  safekeeper[i].sock =  PGINVALID_SOCKET;
+							  safekeeper[i].state = SS_OFFLINE;
+						  }
+						  else
+						  {
+							  /* Start handshake: send informatio about server */
+							  FD_CLR(safekeeper[i].sock, &writeSet);
+							  if (WriteSocket(safekeeper[i].sock, &serverInfo, sizeof serverInfo))
+							  {
+								  safekeeper[i].state = SS_HANDSHAKE;
+								  safekeeper[i].asyncOffs = 0;
+							  }
+							  else
+							  {
+								  ResetConnection(i);
+							  }
+						  }
+						  break;
+					  }
+					  case SS_SEND_WAL:
+					  {
+						  rc = WriteSocketAsync(safekeeper[i].sock, safekeeper[i].currMsg->data + safekeeper[i].asyncOffs, safekeeper[i].currMsg->size - safekeeper[i].asyncOffs);
+						  if (rc < 0)
+						  {
+							  ResetConnection(i);
+						  }
+						  else if ((safekeeper[i].asyncOffs += rc) == safekeeper[i].currMsg->size)
+						  {
+							  /* WAL block completely sent */
+							  safekeeper[i].state = SS_RECV_ACK;
+							  safekeeper[i].asyncOffs = 0;
+							  FD_CLR(safekeeper[i].sock, &writeSet);
+						  }
+						  break;
+					  }
+					  default:
 						pg_log_error("Unexpected write state %d", safekeeper[i].state);
 						exit(1);
-					}
-					rc = WriteSocketAsync(safekeeper[i].sock, safekeeper[i].currMsg->data + safekeeper[i].asyncOffs, safekeeper[i].currMsg->size - safekeeper[i].asyncOffs);
-					if (rc < 0)
-					{
-						ResetConnection(i);
-					}
-					else if ((safekeeper[i].asyncOffs += rc) == safekeeper[i].currMsg->size)
-					{
-						/* WAL block completely sent */
-						safekeeper[i].state = SS_RECV_ACK;
-						safekeeper[i].asyncOffs = 0;
-						FD_CLR(safekeeper[i].sock, &writeSet);
 					}
 				}
 			}
@@ -595,7 +611,7 @@ main(int argc, char **argv)
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
-	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
+	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("safekeeper"));
 
 	if (argc > 1)
 	{

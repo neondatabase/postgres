@@ -331,6 +331,14 @@ ReadSocket(void* buf, size_t size)
 			streamer = PGINVALID_SOCKET;
 			return false;
 		}
+		else if (rc == 0)
+		{
+			pg_log_error("Stream closed by peer: %s",
+						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			closesocket(streamer);
+			streamer = PGINVALID_SOCKET;
+			return false;
+		}
 		src += rc;
 		size -= rc;
 	}
@@ -358,6 +366,13 @@ SwitchStreamer(void)
 			return false;
 		}
 	}
+	if (!pg_set_noblock(sock))
+	{
+		pg_log_error("Failed to switch socket to non-blocking mode: %s",
+					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		closesocket(sock);
+		return false;
+	}
 	/* Start handshake: first of get information about server */
 	oldStreamer = streamer;
 	streamer = sock;
@@ -384,6 +399,10 @@ SwitchStreamer(void)
 		pg_log_info("Server version doesn't match %d vs. %d", serverInfo.pgVersion, myInfo.server.pgVersion);
 		myInfo.server.pgVersion = serverInfo.pgVersion;
 	}
+	/* Remember server info... */
+	myInfo.server = serverInfo;
+	myInfo.server.nodeId = nodeId; /* ... with the proposed node-id */
+
 	/* Determine WAL end at storage node */
 	myInfo.server.walEnd = FindStreamingStart(&myInfo.server.timeline, serverInfo.walSegSize);
 
@@ -414,10 +433,6 @@ SwitchStreamer(void)
 		closesocket(sock);
 		return false;
 	}
-
-	/* Remember server info... */
-	myInfo.server = serverInfo;
-	myInfo.server.nodeId = nodeId; /* ... with the proposed node-id */
 
 	/* Need to persisist our vote first */
 	if (!SaveData(controlPath, &myInfo, sizeof myInfo))
@@ -483,7 +498,7 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 			XLogFileName(walfile_name, myInfo.server.timeline, segno, WalSegSz);
 
 			sprintf(walfile_path, "%s/%s", basedir, walfile_name);
-			walfile = open(walfile_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+			walfile = open(walfile_path, O_WRONLY | PG_BINARY, pg_file_create_mode);
 			partial = false;
 			if (walfile < 0)
 			{
@@ -584,7 +599,7 @@ ReceiveWalStream(void)
 		startPos = fe_recvint64(&hdr[XLOG_HDR_START_POS]);
 		endPos = fe_recvint64(&hdr[XLOG_HDR_END_POS]);
 		recSize = (size_t)(endPos - startPos);
-		Assert(recSize < MAX_SEND_SIZE);
+		Assert(recSize <= MAX_SEND_SIZE);
 
 		/* Receive message body */
 		if (!ReadSocket(buf, recSize))
@@ -693,7 +708,7 @@ main(int argc, char **argv)
 	}
 
 	sprintf(controlPath, "%s/safekeeper.control", basedir);
-	if (!LoadData(controlPath, &myInfo.server.nodeId, sizeof myInfo.server.nodeId))
+	if (!LoadData(controlPath, &myInfo, sizeof myInfo))
 	{
 		pg_log_error("Failed to load safekeeper control file");
 		myInfo.magic = SK_MAGIC;

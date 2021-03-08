@@ -1,5 +1,6 @@
 #include "safekeeper.h"
 #include "common/logging.h"
+#include "common/file_perm.h"
 #include "common/ip.h"
 #include <netinet/tcp.h>
 #include <unistd.h>
@@ -82,7 +83,7 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 		while ((ret = connect(sock, addr->ai_addr, addr->ai_addrlen)) < 0 && errno == EINTR);
 		if (ret < 0)
 		{
-			if (errno == EWOULDBLOCK || errno == EAGAIN)
+			if (errno == EINPROGRESS)
 			{
 				*established = false;
 				break;
@@ -172,7 +173,12 @@ WriteSocket(pgsocket sock, void const* buf, size_t size)
 			if (errno == EINTR)
 				continue;
 			pg_log_error("Socket write failed: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+							 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			return false;
+		}
+		else if (rc == 0)
+		{
+			pg_log_error("Connection was closed by peer");
 			return false;
 		}
 		size -= rc;
@@ -200,6 +206,11 @@ ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			return -1;
 		}
+		else if (rc == 0)
+		{
+			pg_log_error("Connection was closed by peer");
+			break;
+		}
 		offs += rc;
 	}
 	return offs;
@@ -224,6 +235,11 @@ WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			return -1;
 		}
+		else if (rc == 0)
+		{
+			pg_log_error("Connection was closed by peer");
+			break;
+		}
 		offs += rc;
 	}
 	return offs;
@@ -232,7 +248,7 @@ WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 bool
 SaveData(char const* path, void const* data, size_t size)
 {
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | PG_BINARY, 0);
+	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | PG_BINARY, pg_file_create_mode);
 	if (fd < 0)
 	{
 		pg_log_error("Failed to create file %s: %s",
