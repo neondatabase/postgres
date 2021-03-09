@@ -210,6 +210,42 @@ usage(void)
 
 
 /*
+ * Send message to the particular node
+ */
+static void
+SendMessageToNode(int i, WalMessage* msg)
+{
+	ssize_t rc;
+
+	/* If there is no pending message then send new one */
+	if (safekeeper[i].currMsg == NULL)
+		safekeeper[i].currMsg = msg;
+	else
+		msg = safekeeper[i].currMsg;
+
+	if (msg != NULL)
+	{
+		rc= WriteSocketAsync(safekeeper[i].sock, msg->data, msg->size);
+		if (rc < 0)
+		{
+			ResetConnection(i);
+		}
+		else if ((size_t)rc == msg->size) /* message was completely sent */
+		{
+			safekeeper[i].asyncOffs = 0;
+			safekeeper[i].state = SS_RECV_ACK;
+		}
+		else
+		{
+			/* wait until socket is avaialble for write */
+			safekeeper[i].state = SS_SEND_WAL;
+			safekeeper[i].asyncOffs = rc;
+			FD_SET(safekeeper[i].sock, &writeSet);
+		}
+	}
+}
+
+/*
  * Broadcast message for all online safekeepers.
  */
 static void
@@ -217,30 +253,17 @@ BroadcastMessage(WalMessage* msg)
 {
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].state == SS_IDLE)
+		if (safekeeper[i].state == SS_IDLE && safekeeper[i].currMsg == NULL)
 		{
-			ssize_t rc = WriteSocketAsync(safekeeper[i].sock, msg->data, msg->size);
-			if (rc < 0)
-			{
-				ResetConnection(i);
-			}
-			else if ((size_t)rc == msg->size) /* message was completely sent */
-			{
-				safekeeper[i].asyncOffs = 0;
-				safekeeper[i].state = SS_RECV_ACK;
-				safekeeper[i].currMsg = msg;
-			}
-			else
-			{
-				/* wait until socket is avaialble for write */
-				safekeeper[i].state = SS_SEND_WAL;
-				safekeeper[i].asyncOffs = rc;
-				FD_SET(safekeeper[i].sock, &writeSet);
-			}
+			SendMessageToNode(i, msg);
 		}
 	}
 }
 
+
+/*
+ * Send termination message to safekeepers
+ */
 static void
 StopSafekeepers(void)
 {
@@ -333,7 +356,7 @@ BroadcastWalStream(PGconn* conn)
 			pg_log_error("Select failed: %s", SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			break;
 		}
-		if (FD_ISSET(server, &rs)) /* New message from server */
+		if (server != PGINVALID_SOCKET && FD_ISSET(server, &rs)) /* New message from server */
 		{
 			char* copybuf;
 			WalMessage* msg;
@@ -345,7 +368,8 @@ BroadcastWalStream(PGconn* conn)
 				else
 					pg_log_info("End of WAL stream reached");
 				FD_CLR(server, &readSet);
-				close(server);
+				closesocket(server);
+				server = PGINVALID_SOCKET;
 				streaming = false;
 				continue;
 			}
@@ -488,6 +512,11 @@ BroadcastWalStream(PGconn* conn)
 										  exit(1);
 									  }
 								  }
+								  else
+								  {
+									  /* We are already streaming WAL: send all pending messages to the attached safekeeper */
+									  SendMessageToNode(i, msgQueueHead);
+								  }
 							  }
 						  }
 						  break;
@@ -504,10 +533,13 @@ BroadcastWalStream(PGconn* conn)
 						  }
 						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].ackPos))
 						  {
+							  WalMessage* next = safekeeper[i].currMsg->next;
 							  Assert(safekeeper[i].ackPos == fe_recvint64(&safekeeper[i].currMsg->data[XLOG_HDR_END_POS]));
 							  safekeeper[i].currMsg->ackMask |= 1 << i; /* this safekeeper confirms receiving of this message */
 							  safekeeper[i].state = SS_IDLE;
 							  safekeeper[i].asyncOffs = 0;
+							  safekeeper[i].currMsg = NULL;
+							  SendMessageToNode(i, next);
 							  if (!HandleSafekeeperResponse(conn))
 							  {
 								  FD_CLR(server, &readSet);
@@ -702,6 +734,7 @@ main(int argc, char **argv)
 		safekeeper[n_safekeepers].port = port;
 		safekeeper[n_safekeepers].state = SS_OFFLINE;
 		safekeeper[n_safekeepers].sock = PGINVALID_SOCKET;
+		safekeeper[n_safekeepers].currMsg = NULL;
 		n_safekeepers += 1;
 	}
 	if (n_safekeepers < 1)
