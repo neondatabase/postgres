@@ -1,36 +1,54 @@
 /*-------------------------------------------------------------------------
  *
- * pageserver.h
+ * pagestore_client.h
  *
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * src/include/storage/pageserver.h
+ * src/include/storage/pagestore_client.h
  *
  *-------------------------------------------------------------------------
  */
 #ifndef pageserver_h
 #define pageserver_h
 
+#include "postgres.h"
+
 #include "storage/relfilenode.h"
 #include "storage/block.h"
 #include "storage/smgr.h"
+#include "lib/stringinfo.h"
+#include "libpq/pqformat.h"
+#include "utils/memutils.h"
 
-/*
- * Requests.
- */
+#include "pg_config.h"
 
 typedef enum
 {
-	SMGR_EXISTS,
-	SMGR_TRUNC,
-	SMGR_UNLINK,
+	/* pagestore_client -> pagestore */
+	T_ZenithExistsRequest,
+	T_ZenithTruncRequest,
+	T_ZenithUnlinkRequest,
+	T_ZenithNblocksRequest,
+	T_ZenithReadRequest,
 
-	SMGR_NBLOCKS,
+	/* pagestore -> pagestore_client */
+	T_ZenithStatusResponse,
+	T_ZenithReadResponse,
+	T_ZenithNblocksResponse,
+} ZenithMessageTag;
 
-	SMGR_READ,
-} ZenithRequestTag;
+
+/* base struct for c-style inheritance */
+typedef struct
+{
+	ZenithMessageTag tag;
+} ZenithMessage;
+
+#define messageTag(m)		(((const ZenithMessage *)(m))->tag)
+
+extern char const *const ZenithMessageStr[];
 
 typedef struct
 {
@@ -41,28 +59,22 @@ typedef struct
 
 typedef struct
 {
-	ZenithRequestTag tag;
+	ZenithMessageTag tag;
+	uint64		system_id;
 	PageKey		page_key;
 } ZenithRequest;
 
-/*
- * Responses
- */
-
-typedef enum
-{
-	T_ZenithStatusResponse,
-	T_ZenithReadResponse,
-	T_ZenithNblocksResponse,
-} ZenithResponseTag;
-
 typedef struct
 {
-	ZenithResponseTag tag;
-	bool	status;
+	ZenithMessageTag tag;
+	bool	ok;
 	const char   *page;
-	int		n_blocks;
+	uint32	n_blocks;
 } ZenithResponse;
+
+StringInfoData zm_pack(ZenithMessage *msg, bool include_libpq_type);
+ZenithMessage *zm_unpack(StringInfo s);
+char *zm_to_string(ZenithMessage *msg);
 
 /*
  * API
@@ -70,13 +82,12 @@ typedef struct
 
 typedef struct
 {
-	ZenithResponse	(*request) (ZenithRequest request);
+	ZenithResponse*	(*request) (ZenithRequest request);
 } page_server_api;
 
 extern page_server_api *page_server;
 
 extern char *page_server_connstring;
-
 
 /* zenith storage manager functionality */
 

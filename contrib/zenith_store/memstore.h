@@ -57,6 +57,6 @@ typedef struct PerPageWalHashEntry
 void memstore_init(void);
 void memstore_init_shmem(void);
 void memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record);
-PerPageWalRecord *memstore_get_oldest(PerPageWalHashKey key);
+PerPageWalRecord *memstore_get_oldest(PerPageWalHashKey *key);
 
 #endif							/* _MEMSTORE_H */

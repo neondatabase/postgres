@@ -22,4 +22,14 @@
     + do not crash in wal receiver on all pg_regrees data
     * implement smgr to the remote pageserver
 
+07.03.2021
+    * implement smgr to the remote pageserver
 
+08.03.2021
+    + link libpqpageserver properly
+
+09.03.2021
+    * implement smgr to the remote pageserver
+
+09.03.2021
+    * implement smgr to the remote pageserver

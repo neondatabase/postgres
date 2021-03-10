@@ -21,7 +21,8 @@
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
 #include "storage/proc.h"
-#include "storage/pageserver.h"
+#include "storage/pagestore_client.h"
+#include "miscadmin.h"
 
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
@@ -135,13 +136,16 @@ memstore_get_oldest(PerPageWalHashKey *key)
 
 PG_FUNCTION_INFO_V1(zenith_store_get_page);
 
-void
+static void
 get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 {
 	PerPageWalRecord *record_entry = memstore_get_oldest(key);
 
 	if (!record_entry)
-		zenith_log(ERROR, "page not found");
+	{
+		memset(*raw_page_data, '\0', BLCKSZ);
+		return;
+	}
 
 	/* recovery here */
 	int			chain_len = 0;
@@ -175,7 +179,7 @@ get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 	BufferDesc *bufdesc = NULL;
 
 	/* create a tag so we can lookup the buffer */
-	INIT_BUFFERTAG(newTag, key.rnode, key.forknum, key.blkno);
+	INIT_BUFFERTAG(newTag, key->rnode, key->forknum, key->blkno);
 
 	/* determine its hash code and partition lock ID */
 	newHash = BufTableHashCode(&newTag);
@@ -237,65 +241,111 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 }
 
 
+PG_FUNCTION_INFO_V1(zenith_store_dispatcher);
+
 Datum
 zenith_store_dispatcher(PG_FUNCTION_ARGS)
 {
 	StringInfoData s;
 
+	/* switch client to COPYBOTH */
 	pq_beginmessage(&s, 'W');
 	pq_sendbyte(&s, 0);			/* copy_is_binary */
 	pq_sendint16(&s, 0);		/* numAttributes */
 	pq_endmessage(&s);
 	pq_flush();
 
-	pq_startmsgread();
+	zenith_log(RequestTrace, "got connection");
 
-	MyProc->xmin = InvalidTransactionId;
+	// MyProc->xmin = InvalidTransactionId;
 
 	for (;;)
 	{
 		StringInfoData msg;
+		initStringInfo(&msg);
 
+		ModifyWaitEvent(FeBeWaitSet, 0, WL_SOCKET_READABLE, NULL);
+
+		pq_startmsgread();
+		pq_getbyte(); /* libpq message type 'd' */
 		if (pq_getmessage(&msg, 0) != 0)
 			zenith_log(ERROR, "failed to read client request");
 
+		ZenithMessage *raw_req = zm_unpack(&msg);
+
+		zenith_log(RequestTrace, "got page request: %s", ZenithMessageStr[raw_req->tag]);
+
+		if (messageTag(raw_req) != T_ZenithExistsRequest
+			&& messageTag(raw_req) != T_ZenithTruncRequest
+			&& messageTag(raw_req) != T_ZenithUnlinkRequest
+			&& messageTag(raw_req) != T_ZenithNblocksRequest
+			&& messageTag(raw_req) != T_ZenithReadRequest)
+		{
+			zenith_log(ERROR, "invalid request");
+		}
+		ZenithRequest *req = (ZenithRequest *) raw_req;
+
 		PerPageWalHashKey key;
 		memset(&key, '\0', sizeof(PerPageWalHashKey));
+		key.system_identifier = req->system_id;
+		key.rnode = req->page_key.rnode;
+		key.forknum = req->page_key.forknum;
+		key.blkno = req->page_key.blkno;
 
-		// XXX: move serialization / deserialization in one place
-		char tag = pq_getmsgbyte(&msg);
-		key.system_identifier = 42;
-		key.rnode.spcNode = pq_getmsgint(&msg, 4);
-		key.rnode.dbNode = pq_getmsgint(&msg, 4);
-		key.rnode.relNode = pq_getmsgint(&msg, 4);
-		key.forknum = pq_getmsgbyte(&msg);
-		key.blkno = pq_getmsgint(&msg, 4);
+		ZenithResponse resp;
+		memset(&resp, '\0', sizeof(ZenithResponse));
 
-		if (tag == SMGR_EXISTS)
+		if (req->tag == T_ZenithExistsRequest)
 		{
-
+			resp.tag = T_ZenithStatusResponse;
+			resp.ok = true;
 		}
-		else if (tag == SMGR_TRUNC)
+		else if (req->tag == T_ZenithTruncRequest)
 		{
-
+			resp.tag = T_ZenithStatusResponse;
+			resp.ok = true;
 		}
-		else if (tag == SMGR_UNLINK)
+		else if (req->tag == T_ZenithUnlinkRequest)
 		{
-			
+			resp.tag = T_ZenithStatusResponse;
+			resp.ok = true;
 		}
-		else if (tag == SMGR_NBLOCKS)
+		else if (req->tag == T_ZenithNblocksRequest)
 		{
-			
+			resp.tag = T_ZenithNblocksResponse;
+			resp.n_blocks = 0;
+			resp.ok = true;
 		}
-		else if (tag == SMGR_READ)
+		else if (req->tag == T_ZenithReadRequest)
 		{
 			char *raw_page_data = (char *) palloc(BLCKSZ);
 			get_page_by_key(&key, &raw_page_data);
 
-			
+			resp.tag = T_ZenithReadResponse;
+			resp.page = raw_page_data;
+			resp.ok = true;
 		}
 		else
 			Assert(false);
+
+		/* respond */
+		StringInfoData resp_str = zm_pack((ZenithMessage *) &resp, false);
+		resp_str.cursor = 'd';
+
+	zenith_log(LOG, "[XXXXXX] sending copy data %x:%x:%x:%x:%x:%x l=%d",
+		*resp_str.data & 0xff,
+		*(resp_str.data + 1) & 0xff,
+		*(resp_str.data + 2) & 0xff,
+		*(resp_str.data + 3) & 0xff,
+		*(resp_str.data + 4) & 0xff,
+		*(resp_str.data + 5) & 0xff,
+		resp_str.len
+		);
+
+		pq_endmessage(&resp_str);
+		pq_flush();
+
+		zenith_log(RequestTrace, "responded: %s", ZenithMessageStr[raw_req->tag]);
 
 		CHECK_FOR_INTERRUPTS();
 	}

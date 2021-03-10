@@ -1,14 +1,14 @@
 #-------------------------------------------------------------------------
 #
 # Makefile--
-#    Makefile for src/backend/storage/smgr//libpqpageserver
+#    Makefile for src/backend/storage/smgr/libpqpagestore
 #
 # IDENTIFICATION
-#    src/backend/storage/smgr//libpqpageserver/Makefile
+#    src/backend/storage/smgr/libpqpagestore/Makefile
 #
 #-------------------------------------------------------------------------
 
-subdir = src/backend/storage/smgr/libpqpageserver
+subdir = src/backend/storage/smgr/libpqpagestore
 top_builddir = ../../../../..
 include $(top_builddir)/src/Makefile.global
 
@@ -16,12 +16,12 @@ override CPPFLAGS := -I$(srcdir) -I$(libpq_srcdir) $(CPPFLAGS)
 
 OBJS = \
 	$(WIN32RES) \
-	libpqpageserver.o
+	libpqpagestore.o
 SHLIB_LINK_INTERNAL = $(libpq)
 SHLIB_LINK = $(filter -lintl, $(LIBS))
 SHLIB_PREREQS = submake-libpq
-PGFILEDESC = "libpqpageserver"
-NAME = libpqpageserver
+PGFILEDESC = "libpqpagestore"
+NAME = libpqpagestore
 
 all: all-shared-lib
 

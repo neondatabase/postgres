@@ -79,7 +79,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
-#include "storage/pageserver.h"
+#include "storage/pagestore_client.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
@@ -4506,7 +4506,7 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"page_server", PGC_POSTMASTER, UNGROUPED,
+		{"page_server_connstring", PGC_POSTMASTER, UNGROUPED,
 			gettext_noop("Connection string to the page server."),
 			NULL
 		},

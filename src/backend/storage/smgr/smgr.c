@@ -24,7 +24,7 @@
 #include "storage/lazyrestore.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
-#include "storage/pageserver.h"
+#include "storage/pagestore_client.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
