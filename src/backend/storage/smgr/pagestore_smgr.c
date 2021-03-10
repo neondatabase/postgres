@@ -34,6 +34,7 @@ char const *const ZenithMessageStr[] =
 	"ZenithUnlinkRequest",
 	"ZenithNblocksRequest",
 	"ZenithReadRequest",
+	"ZenithCreateRequest",
 	"ZenithStatusResponse",
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
@@ -57,6 +58,7 @@ zm_pack(ZenithMessage *msg, bool include_libpq_type)
 		case T_ZenithUnlinkRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
+		case T_ZenithCreateRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -104,6 +106,7 @@ zm_unpack(StringInfo s)
 		case T_ZenithUnlinkRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
+		case T_ZenithCreateRequest:
 		{
 			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
 
@@ -215,7 +218,17 @@ void
 zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 {
 	/* noop */
-	elog(SmgrTrace, "[ZENITH_SMGR] create noop");
+	if (!loaded)
+		zenith_load();
+
+	ZenithResponse *resp = page_server->request((ZenithRequest) {
+		.tag = T_ZenithCreateRequest,
+		.page_key = {
+			.rnode = reln->smgr_rnode.node,
+			.forknum = forkNum
+		}
+	});
+	pfree(resp);
 }
 
 /*

@@ -98,8 +98,6 @@ zenith_call(ZenithRequest request)
 
 	StringInfoData req_buff = zm_pack((ZenithMessage *) &request, false);
 
-	zenith_log(LOG, "[ZENITH_SMGR] Sending %s request", ZenithMessageStr[request.tag]);
-
 	/* send request */
 	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
 	{
@@ -113,16 +111,6 @@ zenith_call(ZenithRequest request)
 	StringInfoData resp_buff;
 	initStringInfo(&resp_buff);
 	resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
-
-	zenith_log(LOG, "[ZENITH_SMGR] got copy data %x:%x:%x:%x:%x:%x l=%d",
-		*(char *)resp_buff.data,
-		*(char *)(resp_buff.data + 1),
-		*(char *)(resp_buff.data + 2),
-		*(char *)(resp_buff.data + 3),
-		*(char *)(resp_buff.data + 4),
-		*(char *)(resp_buff.data + 5),
-		resp_buff.len
-		);
 
 	if (resp_buff.len == -1)
 		zenith_log(ERROR, "end of COPY");

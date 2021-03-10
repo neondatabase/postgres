@@ -51,6 +51,7 @@ my $payload = 'X' x 100;
 $node_primary->safe_psql("postgres", "CREATE TABLE t(key int primary key, value text)");
 $node_primary->safe_psql("postgres", "INSERT INTO t SELECT generate_series(1,100000), '$payload'");
 
+note("insert done");
 
 sleep(5); # XXX: wait for replication; change this to some sexplicit await_lsn() call
 

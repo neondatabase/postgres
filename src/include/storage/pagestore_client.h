@@ -32,6 +32,7 @@ typedef enum
 	T_ZenithUnlinkRequest,
 	T_ZenithNblocksRequest,
 	T_ZenithReadRequest,
+	T_ZenithCreateRequest,
 
 	/* pagestore -> pagestore_client */
 	T_ZenithStatusResponse,

@@ -23,6 +23,7 @@ typedef struct
 {
 	LWLock	   *lock;
 	HTAB	   *pages;
+	HTAB	   *rels;
 } MemStore;
 
 /*
@@ -53,6 +54,22 @@ typedef struct PerPageWalHashEntry
 	PerPageWalRecord *newest;
 	PerPageWalRecord *oldest;
 } PerPageWalHashEntry;
+
+/*
+ * Relations hashtab. Stores n_pages and is used to check relation existence.
+ */
+typedef struct
+{
+	uint64		system_identifier;
+	RelFileNode rnode;
+	ForkNumber	forknum;
+} RelsHashKey;
+
+typedef struct
+{
+	RelsHashKey key;
+	uint32		n_pages;
+} RelsHashEntry;
 
 void memstore_init(void);
 void memstore_init_shmem(void);

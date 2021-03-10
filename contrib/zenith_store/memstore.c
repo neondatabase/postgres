@@ -49,10 +49,6 @@ memstore_init_shmem()
 	HASHCTL		info;
 	bool		found;
 
-	memset(&info, 0, sizeof(info));
-	info.keysize = sizeof(PerPageWalHashKey);
-	info.entrysize = sizeof(PerPageWalHashEntry);
-
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 
 	memStore = ShmemInitStruct("memStore",
@@ -62,9 +58,20 @@ memstore_init_shmem()
 	if (!found)
 		memStore->lock = &(GetNamedLWLockTranche("memStoreLock"))->lock;
 
-	memStore->pages = ShmemInitHash("memStorePAges",
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(PerPageWalHashKey);
+	info.entrysize = sizeof(PerPageWalHashEntry);
+	memStore->pages = ShmemInitHash("memStorePages",
 		10*1000, /* minsize */
 		20*1000, /* maxsize */
+		&info, HASH_ELEM | HASH_BLOBS);
+
+	memset(&info, 0, sizeof(info));
+	info.keysize = sizeof(RelsHashKey);
+	info.entrysize = sizeof(RelsHashEntry);
+	memStore->rels = ShmemInitHash("memStoreRels",
+		100, /* minsize */
+		2000, /* maxsize */
 		&info, HASH_ELEM | HASH_BLOBS);
 
 	LWLockRelease(AddinShmemInitLock);
@@ -96,6 +103,22 @@ memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record)
 	{
 		Assert(!hash_entry->newest);
 		Assert(!hash_entry->oldest);
+
+		bool rfound;
+		RelsHashKey rkey;
+		memset(&rkey, '\0', sizeof(RelsHashKey));
+		rkey.system_identifier = key.system_identifier;
+		rkey.forknum = key.forknum;
+		rkey.rnode = key.rnode;
+
+		RelsHashEntry *rel_entry = hash_search(memStore->rels, &rkey, HASH_ENTER, &rfound);
+		if (!rfound)
+			rel_entry->n_pages = 0;
+
+		if (key.blkno > rel_entry->n_pages)
+		{
+			rel_entry->n_pages = key.blkno + 1;
+		}
 	}
 
 	PerPageWalRecord *prev_newest = hash_entry->newest;
@@ -207,7 +230,6 @@ get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 	ReleaseBuffer(buf);
 }
 
-
 Datum
 zenith_store_get_page(PG_FUNCTION_ARGS)
 {
@@ -279,26 +301,31 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			&& messageTag(raw_req) != T_ZenithTruncRequest
 			&& messageTag(raw_req) != T_ZenithUnlinkRequest
 			&& messageTag(raw_req) != T_ZenithNblocksRequest
-			&& messageTag(raw_req) != T_ZenithReadRequest)
+			&& messageTag(raw_req) != T_ZenithReadRequest
+			&& messageTag(raw_req) != T_ZenithCreateRequest)
 		{
-			zenith_log(ERROR, "invalid request");
+			zenith_log(ERROR, "invalid request tag %d", messageTag(raw_req));
 		}
 		ZenithRequest *req = (ZenithRequest *) raw_req;
-
-		PerPageWalHashKey key;
-		memset(&key, '\0', sizeof(PerPageWalHashKey));
-		key.system_identifier = req->system_id;
-		key.rnode = req->page_key.rnode;
-		key.forknum = req->page_key.forknum;
-		key.blkno = req->page_key.blkno;
 
 		ZenithResponse resp;
 		memset(&resp, '\0', sizeof(ZenithResponse));
 
 		if (req->tag == T_ZenithExistsRequest)
 		{
+			bool found;
+			RelsHashKey rkey;
+			memset(&rkey, '\0', sizeof(RelsHashKey));
+			rkey.system_identifier = req->system_id;
+			rkey.forknum = req->page_key.forknum;
+			rkey.rnode = req->page_key.rnode;
+
+			LWLockAcquire(memStore->lock, LW_SHARED);
+			hash_search(memStore->rels, &rkey, HASH_FIND, &found);
+			LWLockRelease(memStore->lock);
+
 			resp.tag = T_ZenithStatusResponse;
-			resp.ok = true;
+			resp.ok = found;
 		}
 		else if (req->tag == T_ZenithTruncRequest)
 		{
@@ -310,15 +337,58 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			resp.tag = T_ZenithStatusResponse;
 			resp.ok = true;
 		}
+		else if (req->tag == T_ZenithCreateRequest)
+		{
+			bool found;
+			RelsHashKey rkey;
+			RelsHashEntry *rentry;
+			memset(&rkey, '\0', sizeof(RelsHashKey));
+			rkey.system_identifier = req->system_id;
+			rkey.forknum = req->page_key.forknum;
+			rkey.rnode = req->page_key.rnode;
+
+			LWLockAcquire(memStore->lock, LW_SHARED);
+			rentry = (RelsHashEntry *) hash_search(memStore->rels, &rkey, HASH_ENTER, &found);
+			rentry->n_pages = 0;
+			LWLockRelease(memStore->lock);
+
+			Assert(!found);
+			resp.tag = T_ZenithStatusResponse;
+			resp.ok = found;
+		}
 		else if (req->tag == T_ZenithNblocksRequest)
 		{
+			bool found;
+			uint32 n_pages;
+			RelsHashKey rkey;
+			RelsHashEntry *rentry;
+			memset(&rkey, '\0', sizeof(RelsHashKey));
+			rkey.system_identifier = req->system_id;
+			rkey.forknum = req->page_key.forknum;
+			rkey.rnode = req->page_key.rnode;
+
+			LWLockAcquire(memStore->lock, LW_SHARED);
+			rentry = (RelsHashEntry *) hash_search(memStore->rels, &rkey, HASH_ENTER, &found);
+			if (!found)
+				rentry->n_pages = 0;
+			n_pages = rentry->n_pages;
+			LWLockRelease(memStore->lock);
+
 			resp.tag = T_ZenithNblocksResponse;
-			resp.n_blocks = 0;
+			resp.n_blocks = n_pages;
 			resp.ok = true;
 		}
 		else if (req->tag == T_ZenithReadRequest)
 		{
+			PerPageWalHashKey key;
 			char *raw_page_data = (char *) palloc(BLCKSZ);
+
+			memset(&key, '\0', sizeof(PerPageWalHashKey));
+			key.system_identifier = req->system_id;
+			key.rnode = req->page_key.rnode;
+			key.forknum = req->page_key.forknum;
+			key.blkno = req->page_key.blkno;
+
 			get_page_by_key(&key, &raw_page_data);
 
 			resp.tag = T_ZenithReadResponse;
@@ -331,17 +401,6 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 		/* respond */
 		StringInfoData resp_str = zm_pack((ZenithMessage *) &resp, false);
 		resp_str.cursor = 'd';
-
-	zenith_log(LOG, "[XXXXXX] sending copy data %x:%x:%x:%x:%x:%x l=%d",
-		*resp_str.data & 0xff,
-		*(resp_str.data + 1) & 0xff,
-		*(resp_str.data + 2) & 0xff,
-		*(resp_str.data + 3) & 0xff,
-		*(resp_str.data + 4) & 0xff,
-		*(resp_str.data + 5) & 0xff,
-		resp_str.len
-		);
-
 		pq_endmessage(&resp_str);
 		pq_flush();
 
