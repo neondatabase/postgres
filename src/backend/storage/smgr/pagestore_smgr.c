@@ -17,9 +17,12 @@
 #include "storage/pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
+#include "access/xlogdefs.h"
+#include "storage/bufmgr.h"
 #include "fmgr.h"
+#include "miscadmin.h"
 
-const int SmgrTrace = LOG;
+const int SmgrTrace = DEBUG5;
 
 bool loaded = false;
 
@@ -35,19 +38,18 @@ char const *const ZenithMessageStr[] =
 	"ZenithNblocksRequest",
 	"ZenithReadRequest",
 	"ZenithCreateRequest",
+	"ZenithExtendRequest",
 	"ZenithStatusResponse",
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
 };
 
 StringInfoData
-zm_pack(ZenithMessage *msg, bool include_libpq_type)
+zm_pack(ZenithMessage *msg)
 {
 	StringInfoData	s;
 
 	initStringInfo(&s);
-	if (include_libpq_type)
-		pq_sendbyte(&s, 'd');
 	pq_sendbyte(&s, msg->tag);
 
 	switch (messageTag(msg))
@@ -59,6 +61,7 @@ zm_pack(ZenithMessage *msg, bool include_libpq_type)
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
 		case T_ZenithCreateRequest:
+		case T_ZenithExtendRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -107,6 +110,7 @@ zm_unpack(StringInfo s)
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
 		case T_ZenithCreateRequest:
+		case T_ZenithExtendRequest:
 		{
 			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
 
@@ -160,7 +164,61 @@ zm_unpack(StringInfo s)
 char *
 zm_to_string(ZenithMessage *msg)
 {
-	StringInfoData s;
+	StringInfoData	s;
+
+	initStringInfo(&s);
+
+	appendStringInfoString(&s, "{");
+	appendStringInfo(&s, "\"type\": \"%s\"", ZenithMessageStr[msg->tag]);
+
+	switch (messageTag(msg))
+	{
+		/* pagestore_client -> pagestore */
+		case T_ZenithExistsRequest:
+		case T_ZenithTruncRequest:
+		case T_ZenithUnlinkRequest:
+		case T_ZenithNblocksRequest:
+		case T_ZenithReadRequest:
+		case T_ZenithCreateRequest:
+		case T_ZenithExtendRequest:
+		{
+			ZenithRequest *msg_req = (ZenithRequest *) msg;
+
+			appendStringInfo(&s, ", \"page_key\": \"%d.%d.%d.%d.%u\"}",
+				msg_req->page_key.rnode.spcNode,
+				msg_req->page_key.rnode.dbNode,
+				msg_req->page_key.rnode.relNode,
+				msg_req->page_key.forknum,
+				msg_req->page_key.blkno
+			);
+
+			break;
+		}
+
+		/* pagestore -> pagestore_client */
+		case T_ZenithStatusResponse:
+		case T_ZenithNblocksResponse:
+		{
+			ZenithResponse *msg_resp = (ZenithResponse *) msg;
+
+			appendStringInfo(&s, ", \"ok\": %d, \"n_blocks\": %u}",
+				msg_resp->ok,
+				msg_resp->n_blocks
+			);
+
+			break;
+		}
+		case T_ZenithReadResponse:
+		{
+			ZenithResponse *msg_resp = (ZenithResponse *) msg;
+
+			appendStringInfo(&s, ", \"ok\": %d, \"n_blocks\": %u, \"page\": \"XXX\"}",
+				msg_resp->ok,
+				msg_resp->n_blocks
+			);
+			break;
+		}
+	}
 	return s.data;
 }
 
@@ -275,11 +333,21 @@ zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
  *		causes intervening file space to become filled with zeroes.
  */
 void
-zenith_extend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				char *buffer, bool skipFsync)
 {
-	/* noop */
-	elog(SmgrTrace, "[ZENITH_SMGR] extend noop");
+	if (!loaded)
+		zenith_load();
+
+	ZenithResponse *resp = page_server->request((ZenithRequest) {
+		.tag = T_ZenithExtendRequest,
+		.page_key = {
+			.rnode = reln->smgr_rnode.node,
+			.forknum = forkNum,
+			.blkno = blkno
+		}
+	});
+	pfree(resp);
 }
 
 /*
@@ -362,7 +430,10 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		char *buffer, bool skipFsync)
 {
 	/* noop */
-	elog(SmgrTrace, "[ZENITH_SMGR] write noop");
+	XLogRecPtr lsn2 = PageGetLSN(buffer);
+	elog(SmgrTrace, "[ZENITH_SMGR] write noop lsn2=%X/%X",
+		(uint32) ((lsn2) >> 32), (uint32) (lsn2)
+	);
 }
 
 /*

@@ -96,16 +96,16 @@ zenith_call(ZenithRequest request)
 	if (!connected)
 		zenith_connect();
 
-	StringInfoData req_buff = zm_pack((ZenithMessage *) &request, false);
+	StringInfoData req_buff = zm_pack((ZenithMessage *) &request);
 
 	/* send request */
 	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
 	{
-		zenith_log(ERROR, "[ZENITH_SMGR] failed to send page request: %s",
+		zenith_log(ERROR, "failed to send page request: %s",
 					PQerrorMessage(pageserver_conn));
 	}
 
-	zenith_log(LOG, "[ZENITH_SMGR] Sent %s request", ZenithMessageStr[request.tag]);
+	zenith_log(LOG, "Sent request: %s", zm_to_string((ZenithMessage *) &request));
 
 	/* read response */
 	StringInfoData resp_buff;
@@ -117,11 +117,17 @@ zenith_call(ZenithRequest request)
 	else if (resp_buff.len == -2)
 		zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
 
-	// pq_getmsgbyte(&resp_buff); /* 'd' */
 	ZenithMessage *resp = zm_unpack(&resp_buff);
 	Assert(messageTag(resp) == T_ZenithStatusResponse
 		|| messageTag(resp) == T_ZenithNblocksResponse
 		|| messageTag(resp) == T_ZenithReadResponse);
+
+	zenith_log(LOG, "Got response: %s", zm_to_string((ZenithMessage *) resp));
+
+	/*
+	 * XXX: zm_to_string leak strings. Check with what memory contex all this methods
+	 * are called.
+	 */
 
 	return (ZenithResponse *) resp;
 }

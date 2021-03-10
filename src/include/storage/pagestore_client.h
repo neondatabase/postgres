@@ -33,6 +33,7 @@ typedef enum
 	T_ZenithNblocksRequest,
 	T_ZenithReadRequest,
 	T_ZenithCreateRequest,
+	T_ZenithExtendRequest,
 
 	/* pagestore -> pagestore_client */
 	T_ZenithStatusResponse,
@@ -73,7 +74,7 @@ typedef struct
 	uint32	n_blocks;
 } ZenithResponse;
 
-StringInfoData zm_pack(ZenithMessage *msg, bool include_libpq_type);
+StringInfoData zm_pack(ZenithMessage *msg);
 ZenithMessage *zm_unpack(StringInfo s);
 char *zm_to_string(ZenithMessage *msg);
 

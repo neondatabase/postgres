@@ -32,6 +32,8 @@
 
 MemStore *memStore;
 
+static MemoryContext RestoreCxt;
+
 void
 memstore_init()
 {
@@ -115,7 +117,7 @@ memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record)
 		if (!rfound)
 			rel_entry->n_pages = 0;
 
-		if (key.blkno > rel_entry->n_pages)
+		if (key.blkno >= rel_entry->n_pages)
 		{
 			rel_entry->n_pages = key.blkno + 1;
 		}
@@ -243,6 +245,10 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 	bytea	   *raw_page;
 	char	   *raw_page_data;
 
+	RestoreCxt = AllocSetContextCreate(TopMemoryContext,
+										   "RestoreSmgr",
+										   ALLOCSET_DEFAULT_SIZES);
+
 	/* Initialize buffer to copy to */
 	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
 	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
@@ -269,6 +275,7 @@ Datum
 zenith_store_dispatcher(PG_FUNCTION_ARGS)
 {
 	StringInfoData s;
+	int			rmid;
 
 	/* switch client to COPYBOTH */
 	pq_beginmessage(&s, 'W');
@@ -279,7 +286,12 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 
 	zenith_log(RequestTrace, "got connection");
 
-	// MyProc->xmin = InvalidTransactionId;
+	/* Initialize resource managers */
+	for (rmid = 0; rmid <= RM_MAX_ID; rmid++)
+	{
+		if (RmgrTable[rmid].rm_startup != NULL)
+			RmgrTable[rmid].rm_startup();
+	}
 
 	for (;;)
 	{
@@ -302,7 +314,8 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			&& messageTag(raw_req) != T_ZenithUnlinkRequest
 			&& messageTag(raw_req) != T_ZenithNblocksRequest
 			&& messageTag(raw_req) != T_ZenithReadRequest
-			&& messageTag(raw_req) != T_ZenithCreateRequest)
+			&& messageTag(raw_req) != T_ZenithCreateRequest
+			&& messageTag(raw_req) != T_ZenithExtendRequest)
 		{
 			zenith_log(ERROR, "invalid request tag %d", messageTag(raw_req));
 		}
@@ -347,14 +360,14 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			rkey.forknum = req->page_key.forknum;
 			rkey.rnode = req->page_key.rnode;
 
-			LWLockAcquire(memStore->lock, LW_SHARED);
+			LWLockAcquire(memStore->lock, LW_EXCLUSIVE);
 			rentry = (RelsHashEntry *) hash_search(memStore->rels, &rkey, HASH_ENTER, &found);
 			rentry->n_pages = 0;
 			LWLockRelease(memStore->lock);
 
 			Assert(!found);
 			resp.tag = T_ZenithStatusResponse;
-			resp.ok = found;
+			resp.ok = true;
 		}
 		else if (req->tag == T_ZenithNblocksRequest)
 		{
@@ -367,7 +380,7 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			rkey.forknum = req->page_key.forknum;
 			rkey.rnode = req->page_key.rnode;
 
-			LWLockAcquire(memStore->lock, LW_SHARED);
+			LWLockAcquire(memStore->lock, LW_EXCLUSIVE);
 			rentry = (RelsHashEntry *) hash_search(memStore->rels, &rkey, HASH_ENTER, &found);
 			if (!found)
 				rentry->n_pages = 0;
@@ -395,11 +408,32 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			resp.page = raw_page_data;
 			resp.ok = true;
 		}
+		else if (req->tag == T_ZenithExtendRequest)
+		{
+			bool found;
+			RelsHashKey rkey;
+			RelsHashEntry *rentry;
+			memset(&rkey, '\0', sizeof(RelsHashKey));
+			rkey.system_identifier = req->system_id;
+			rkey.forknum = req->page_key.forknum;
+			rkey.rnode = req->page_key.rnode;
+
+			LWLockAcquire(memStore->lock, LW_EXCLUSIVE);
+			rentry = (RelsHashEntry *) hash_search(memStore->rels, &rkey, HASH_ENTER, &found);
+			if (!found)
+				rentry->n_pages = 0;
+			if (req->page_key.blkno >= rentry->n_pages)
+				rentry->n_pages = req->page_key.blkno + 1;
+			LWLockRelease(memStore->lock);
+
+			resp.tag = T_ZenithStatusResponse;
+			resp.ok = true;
+		}
 		else
 			Assert(false);
 
 		/* respond */
-		StringInfoData resp_str = zm_pack((ZenithMessage *) &resp, false);
+		StringInfoData resp_str = zm_pack((ZenithMessage *) &resp);
 		resp_str.cursor = 'd';
 		pq_endmessage(&resp_str);
 		pq_flush();

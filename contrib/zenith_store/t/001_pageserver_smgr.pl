@@ -49,7 +49,7 @@ $page_server->safe_psql("postgres", "CREATE EXTENSION zenith_store");
 #
 my $payload = 'X' x 100;
 $node_primary->safe_psql("postgres", "CREATE TABLE t(key int primary key, value text)");
-$node_primary->safe_psql("postgres", "INSERT INTO t SELECT generate_series(1,100000), '$payload'");
+$node_primary->safe_psql("postgres", "INSERT INTO t SELECT generate_series(1,1000000), '$payload'");
 
 note("insert done");
 

@@ -576,7 +576,7 @@ handle_record(XLogReaderState *record)
 			if (!XLogRecGetBlockTag(record, block_id, &rnode, &forknum, &blkno))
 				continue;
 
-			zenith_log(ReceiverTrace,
+			zenith_log(record->max_block_id > 0 ? LOG : ReceiverTrace,
 				"record has blkref #%u: rel=%u/%u/%u fork=%s blk=%u, fpw=%d, fpw_verify=%d",
 				block_id,
 				rnode.spcNode, rnode.dbNode, rnode.relNode,
