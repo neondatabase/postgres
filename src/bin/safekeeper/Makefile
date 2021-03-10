@@ -27,8 +27,8 @@ OBJS = $(WIN32RES) \
 
 all: safekeeper safekeeper_proxy
 
-safekeeper: safekeeper.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) safekeeper.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+safekeeper: safekeeper.o walsender.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+	$(CC) $(CFLAGS) safekeeper.o walsender.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 safekeeper_proxy: safekeeper_proxy.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) safekeeper_proxy.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)

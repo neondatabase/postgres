@@ -110,7 +110,6 @@ ResetConnection(int i)
 	{
 		pg_log_info("%s with node %s:%s",
 					established ? "Connected" : "Connecting", safekeeper[i].host, safekeeper[i].port);
-		FD_SET(safekeeper[i].sock, &readSet);
 		if (safekeeper[i].sock > maxFds)
 			maxFds = safekeeper[i].sock;
 
@@ -119,6 +118,7 @@ ResetConnection(int i)
 			/* Start handshake: first of all send information about server */
 			if (WriteSocket(safekeeper[i].sock, &serverInfo, sizeof serverInfo))
 			{
+				FD_SET(safekeeper[i].sock, &readSet);
 				safekeeper[i].state = SS_HANDSHAKE;
 				safekeeper[i].asyncOffs = 0;
 			}
@@ -569,17 +569,24 @@ BroadcastWalStream(PGconn* conn)
 						  {
 							  pg_log_error("Failed to connect to node '%s:%s': %s",
 										   safekeeper[i].host, safekeeper[i].port,
-										   SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+										   SOCK_STRERROR(optval, sebuf, sizeof(sebuf)));
 							  closesocket(safekeeper[i].sock);
-							  FD_CLR(safekeeper[i].sock, &readSet);
+							  FD_CLR(safekeeper[i].sock, &writeSet);
 							  safekeeper[i].sock =  PGINVALID_SOCKET;
 							  safekeeper[i].state = SS_OFFLINE;
 						  }
 						  else
 						  {
-							  /* Start handshake: send informatio about server */
+							  uint32 len = 0;
 							  FD_CLR(safekeeper[i].sock, &writeSet);
-							  if (WriteSocket(safekeeper[i].sock, &serverInfo, sizeof serverInfo))
+							  FD_SET(safekeeper[i].sock, &readSet);
+							  /*
+							   * Start handshake: send information about server.
+							   * Frist of all send 0 as package size: it allows safe keeper to distinguish
+							   * connection from safekeeper_proxy from standard replication connection from pagers.
+							   */
+							  if (WriteSocket(safekeeper[i].sock, &len, sizeof len)
+								  && WriteSocket(safekeeper[i].sock, &serverInfo, sizeof serverInfo))
 							  {
 								  safekeeper[i].state = SS_HANDSHAKE;
 								  safekeeper[i].asyncOffs = 0;

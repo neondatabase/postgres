@@ -17,6 +17,9 @@
 #define XLOG_HDR_START_POS  1        /* offset of start position in header */
 #define XLOG_HDR_END_POS    9        /* offset of end position in header */
 #define KEEPALIVE_RR_OFFS   17       /* offset of reply requested field in keep alive request */
+#define LIBPQ_HDR_SIZE      5        /* 1 byte with message type + 4 bytes length */
+#define LIBPQ_MSG_SIZE_OFFS 1        /* offset of message size innise libpq header */
+#define LIBPQ_DATA_SIZE(sz) ((sz)-4) /* size of libpq message includes 4-bytes size field */
 
 /*
  * All copy date message ('w') are linked in L1 send list and asynhronoously sent to receivers.
@@ -91,14 +94,21 @@ typedef struct Safekeeper
 } Safekeeper;
 
 
-int CompareNodeId(NodeId* id1, NodeId* id2);
-pgsocket CreateSocket(char const* host, char const* port, int n_peers);
-pgsocket ConnectSocketAsync(char const* host, char const* port, bool* established);
-bool    WriteSocket(pgsocket sock, void const* buf, size_t size);
-ssize_t ReadSocketAsync(pgsocket sock, void* buf, size_t size);
-ssize_t WriteSocketAsync(pgsocket sock, void const* buf, size_t size);
-bool LoadData(char const* path, void* data, size_t size);
-bool SaveData(char const* path, void const* data, size_t size);
-int CompareLsn(const void *a, const void *b);
+int        CompareNodeId(NodeId* id1, NodeId* id2);
+pgsocket   CreateSocket(char const* host, char const* port, int n_peers);
+pgsocket   ConnectSocketAsync(char const* host, char const* port, bool* established);
+bool       WriteSocket(pgsocket sock, void const* buf, size_t size);
+bool       ReadSocket(pgsocket sock, void* buf, size_t size);
+ssize_t    ReadSocketAsync(pgsocket sock, void* buf, size_t size);
+ssize_t    WriteSocketAsync(pgsocket sock, void const* buf, size_t size);
+bool       LoadData(char const* path, void* data, size_t size);
+bool       SaveData(char const* path, void const* data, size_t size);
+int        CompareLsn(const void *a, const void *b);
+void       StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize);
+void       StopWalSenders(void);
+void       NotifyWalSenders(XLogRecPtr lsn);
+void       fe_sendint32(int32 i, char *buf);
+int32      fe_recvint32(char *buf);
+XLogRecPtr FindStreamingStart(TimeLineID *tli);
 
 #endif

@@ -52,7 +52,7 @@ static char	controlPath[MAXPGPATH];
 static pgsocket gateway = PGINVALID_SOCKET;
 static pgsocket streamer = PGINVALID_SOCKET;
 
-static bool SwitchStreamer(void);
+static bool AcceptNewConnection(void);
 
 static void
 usage(void)
@@ -116,15 +116,15 @@ close_destination_dir(DIR *dest_dir, char *dest_folder)
  *
  * If there are no WAL files in the directory, returns InvalidXLogRecPtr.
  */
-static XLogRecPtr
-FindStreamingStart(TimeLineID *tli, int WalSegSz)
+XLogRecPtr
+FindStreamingStart(TimeLineID *tli)
 {
 	DIR		   *dir;
 	struct dirent *dirent;
 	XLogSegNo	high_segno = 0;
 	TimeLineID	high_tli = 0;
 	bool		high_ispartial = false;
-
+	int         WalSegSz = myInfo.server.walSegSize;
 	dir = get_destination_dir(basedir);
 
 	while (errno = 0, (dirent = readdir(dir)) != NULL)
@@ -282,10 +282,10 @@ FindStreamingStart(TimeLineID *tli, int WalSegSz)
 }
 
 /*
- * Read non-blocking socket and accept conncetion from new proxy.
+ * Read from non-blocking socket and accept new connections.
  */
 static bool
-ReadSocket(void* buf, size_t size)
+ReadStream(void* buf, size_t size)
 {
 	ssize_t rc;
 	char*   src = (char*)buf;
@@ -308,7 +308,7 @@ ReadSocket(void* buf, size_t size)
 				{
 					if (FD_ISSET(gateway, &readSet))
 					{
-						if (SwitchStreamer())
+						if (AcceptNewConnection())
 							return false;
 					}
 					continue;
@@ -319,6 +319,11 @@ ReadSocket(void* buf, size_t size)
 				{
 					closesocket(streamer);
 					streamer = PGINVALID_SOCKET;
+				}
+				else
+				{
+					/* Bad gateway */
+					exit(1);
 				}
 				return false;
 			}
@@ -346,15 +351,17 @@ ReadSocket(void* buf, size_t size)
 }
 
 /*
- * Check if we should switch to new streamer
+ * Accept new connection and if it is safekeeper_proxy than use Paxos-like algorithm to ansure that only one safekeeper_proxy is active.
+ * Returns true if we safekeeper is switched to new streamer.
  */
 static bool
-SwitchStreamer(void)
+AcceptNewConnection(void)
 {
 	pgsocket   sock;
 	pgsocket   oldStreamer;
 	ServerInfo serverInfo;
 	NodeId     nodeId;
+	uint32     len;
 	char	   sebuf[PG_STRERROR_R_BUFLEN];
 
 	while ((sock = accept(gateway, NULL, NULL)) == PGINVALID_SOCKET)
@@ -366,6 +373,7 @@ SwitchStreamer(void)
 			return false;
 		}
 	}
+	/* Use non-blocking IO to make it possible to accept new connection while waiting for stream data */
 	if (!pg_set_noblock(sock))
 	{
 		pg_log_error("Failed to switch socket to non-blocking mode: %s",
@@ -373,10 +381,39 @@ SwitchStreamer(void)
 		closesocket(sock);
 		return false;
 	}
-	/* Start handshake: first of get information about server */
+	/* Start handshake */
 	oldStreamer = streamer;
 	streamer = sock;
-	if (!ReadSocket(&serverInfo, sizeof serverInfo))
+	/*
+	 * If it is statandard libpq connection (for example opened by Pager),
+     * then there should be length of startup packet.
+     * In case of safekeeper_proxy we pass 0 a length,
+     * to distinguish it from standard replication connection.
+	 */
+	if (!ReadStream(&len, sizeof len))
+	{
+		pg_log_error("Failed to receive message length");
+		closesocket(sock);
+		streamer = oldStreamer;
+		return false;
+	}
+	if (len != 0) /* Standard replication connection with startup package */
+	{
+		streamer = oldStreamer;
+		if (myInfo.server.walSegSize == 0)
+		{
+			pg_log_error("Can not start replication before connecting to safekeeper_proxy");
+			closesocket(sock);
+		}
+		else
+		{
+			/* Start new Wal sender thread */
+			StartWalSender(sock, basedir, fe_recvint32((char*)&len), myInfo.server.walSegSize);
+		}
+		return false;
+	}
+	/* Otherwise it is connection from safekeeper_proxy and we shoudl read information abotu server */
+	if (!ReadStream(&serverInfo, sizeof serverInfo))
 	{
 		pg_log_error("Failed to receive server info");
 		closesocket(sock);
@@ -404,7 +441,7 @@ SwitchStreamer(void)
 	myInfo.server.nodeId = nodeId; /* ... with the proposed node-id */
 
 	/* Determine WAL end at storage node */
-	myInfo.server.walEnd = FindStreamingStart(&myInfo.server.timeline, serverInfo.walSegSize);
+	myInfo.server.walEnd = FindStreamingStart(&myInfo.server.timeline);
 
 	/* Report my identifier to proxy */
 	if (!WriteSocket(sock, &myInfo, sizeof myInfo))
@@ -415,7 +452,7 @@ SwitchStreamer(void)
 		return false;
 	}
 	/* Wait for suggested term */
-	if (!ReadSocket(&nodeId, sizeof nodeId))
+	if (!ReadStream(&nodeId, sizeof nodeId))
 	{
 		pg_log_error("Failed to receive handshake response");
 		closesocket(sock);
@@ -475,6 +512,7 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 	int   WalSegSz = myInfo.server.walSegSize;
 	bool  partial = false;
 	char* curr_file = walfile_path;
+	static char zero_block[XLOG_BLCKSZ];
 
 	/* Extract WAL location for this block */
 	xlogoff = XLogSegmentOffset(startpoint, WalSegSz);
@@ -497,25 +535,41 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 			XLByteToSeg(startpoint, segno, WalSegSz);
 			XLogFileName(walfile_name, myInfo.server.timeline, segno, WalSegSz);
 
+			/* Try to open already completed segment */
 			sprintf(walfile_path, "%s/%s", basedir, walfile_name);
 			walfile = open(walfile_path, O_WRONLY | PG_BINARY, pg_file_create_mode);
 			partial = false;
 			if (walfile < 0)
 			{
+				/* Try to open existed partial file */
 			    sprintf(walfile_partial_path, "%s/%s.partial", basedir, walfile_name);
 				curr_file = walfile_partial_path;
-				walfile = open(walfile_partial_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+				walfile = open(walfile_partial_path, O_WRONLY | PG_BINARY, pg_file_create_mode);
 				if (walfile < 0)
 				{
-					pg_log_error("Failed to open WAL file %s: %s",
-								 curr_file, strerror(errno));
-					return false;
+					/* Create and fill new partial file */
+					walfile = open(walfile_partial_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
+					if (walfile < 0)
+					{
+						pg_log_error("Failed to open WAL file %s: %s",
+									 curr_file, strerror(errno));
+						return false;
+					}
+					for (int i = WalSegSz/XLOG_BLCKSZ; --i >= 0;)
+					{
+						if (write(walfile, zero_block, XLOG_BLCKSZ) != XLOG_BLCKSZ)
+						{
+							pg_log_error("Failed to initialize WAL file %s: %s",
+										 curr_file, strerror(errno));
+							return false;
+						}
+					}
 				}
 				partial = true;
 			}
 		}
 
-		if (write(walfile, rec + bytes_written, bytes_to_write) != bytes_to_write)
+		if (pg_pwrite(walfile, rec + bytes_written, bytes_to_write, xlogoff) != bytes_to_write)
 		{
 			pg_log_error("could not write %u bytes to WAL file \"%s\": %s",
 						 bytes_to_write, curr_file, strerror(errno));
@@ -538,10 +592,13 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 		startpoint += bytes_to_write;
 		xlogoff += bytes_to_write;
 
+		/* Ping wal sender that new data is available */
+		NotifyWalSenders(startpoint);
+
 		/* Did we reach the end of a WAL segment? */
 		if (XLogSegmentOffset(startpoint, WalSegSz) == 0)
 		{
-			if (!close(walfile))
+			if (close(walfile) != 0)
 			{
 				pg_log_error("failed to close file \"%s\": %s",
 							 curr_file, strerror(errno));
@@ -559,6 +616,12 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 			xlogoff = 0;
 			walfile = -1;
 		}
+	}
+	if (walfile >= 0 && close(walfile) != 0)
+	{
+		pg_log_error("failed to close file \"%s\": %s",
+					 curr_file, strerror(errno));
+		return false;
 	}
 	return true;
 }
@@ -586,13 +649,13 @@ ReceiveWalStream(void)
 	while (true)
 	{
 		/* Receive message header */
-		if (!ReadSocket(hdr, sizeof hdr))
+		if (!ReadStream(hdr, sizeof hdr))
 			continue;
 
 		if (hdr[0] == 'q')
 		{
 			pg_log_info("Server stops streaming");
-			exit(0);
+			break;
 		}
 		Assert(hdr[0] == 'w');
 
@@ -602,7 +665,7 @@ ReceiveWalStream(void)
 		Assert(recSize <= MAX_SEND_SIZE);
 
 		/* Receive message body */
-		if (!ReadSocket(buf, recSize))
+		if (!ReadStream(buf, recSize))
 			continue;
 
 		/* Save message in file */
@@ -616,6 +679,7 @@ ReceiveWalStream(void)
 			streamer = PGINVALID_SOCKET;
 		}
 	}
+	StopWalSenders();
 }
 
 int

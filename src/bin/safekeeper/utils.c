@@ -135,6 +135,9 @@ CreateSocket(char const* host, char const* port, int n_peers)
 						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 			continue;
 		}
+		if (!SetSocketOptions(sock))
+			continue;
+
 		/*
 		 * Bind it to a kernel assigned port on localhost and get the assigned
 		 * port via getsockname().
@@ -153,8 +156,7 @@ CreateSocket(char const* host, char const* port, int n_peers)
 			closesocket(sock);
 			continue;
 		}
-		if (SetSocketOptions(sock))
-			break;
+		break;
 	}
 	return sock;
 }
@@ -187,6 +189,34 @@ WriteSocket(pgsocket sock, void const* buf, size_t size)
 	return true;
 }
 
+bool
+ReadSocket(pgsocket sock, void* buf, size_t size)
+{
+	char* dst = (char*)buf;
+	char sebuf[PG_STRERROR_R_BUFLEN];
+
+	while (size != 0)
+	{
+		ssize_t rc = recv(sock, dst, size, 0);
+		if (rc < 0)
+		{
+			if (errno == EINTR)
+				continue;
+			pg_log_error("Socket read failed: %s",
+						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			return false;
+		}
+		else if (rc == 0)
+		{
+			pg_log_error("Connection was closed by peer");
+			return false;
+		}
+		size -= rc;
+		dst += rc;
+	}
+	return true;
+}
+
 ssize_t
 ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 {
@@ -209,7 +239,7 @@ ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 		else if (rc == 0)
 		{
 			pg_log_error("Connection was closed by peer");
-			break;
+			return -1;
 		}
 		offs += rc;
 	}
@@ -238,7 +268,7 @@ WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 		else if (rc == 0)
 		{
 			pg_log_error("Connection was closed by peer");
-			break;
+			return -1;
 		}
 		offs += rc;
 	}
@@ -306,4 +336,28 @@ CompareLsn(const void *a, const void *b)
 		return 0;
 	else
 		return 1;
+}
+
+/*
+ * Converts an int32 to network byte order.
+ */
+void
+fe_sendint32(int32 i, char *buf)
+{
+	uint32		n32 = pg_hton32(i);
+
+	memcpy(buf, &n32, sizeof(n32));
+}
+
+/*
+ * Converts an int32 from network byte order to native format.
+ */
+int32
+fe_recvint32(char *buf)
+{
+	uint32		n32;
+
+	memcpy(&n32, buf, sizeof(n32));
+
+	return pg_ntoh32(n32);
 }
