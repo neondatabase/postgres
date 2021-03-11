@@ -6,20 +6,21 @@
 #include "libpq-int.h"
 #include "utils/uuid.h"
 
-#define SK_MAGIC            0xcafeceefu
-#define SK_FORMAT_VERSION   1
-#define SK_PROTOCOL_VERSION 1
+#define SK_MAGIC               0xCafeCeefu
+#define SK_FORMAT_VERSION      1
+#define SK_PROTOCOL_VERSION    1
 #define UNKNOWN_SERVER_VERSION 0
 
-#define MAX_SAFEKEEPERS     32
-#define MAX_SEND_SIZE       (XLOG_BLCKSZ * 16)
-#define XLOG_HDR_SIZE       (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
-#define XLOG_HDR_START_POS  1        /* offset of start position in header */
-#define XLOG_HDR_END_POS    9        /* offset of end position in header */
-#define KEEPALIVE_RR_OFFS   17       /* offset of reply requested field in keep alive request */
-#define LIBPQ_HDR_SIZE      5        /* 1 byte with message type + 4 bytes length */
-#define LIBPQ_MSG_SIZE_OFFS 1        /* offset of message size innise libpq header */
-#define LIBPQ_DATA_SIZE(sz) ((sz)-4) /* size of libpq message includes 4-bytes size field */
+#define MAX_SAFEKEEPERS        32
+#define MAX_SEND_SIZE         (XLOG_BLCKSZ * 16)
+#define XLOG_HDR_SIZE         (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
+#define XLOG_HDR_START_POS    1        /* offset of start position in header */
+#define XLOG_HDR_END_POS      9        /* offset of end position in header */
+#define KEEPALIVE_RR_OFFS     17       /* offset of reply requested field in keep alive request */
+#define LIBPQ_HDR_SIZE        5        /* 1 byte with message type + 4 bytes length */
+#define REPLICA_FEEDBACK_SIZE 39       /* Size of replica's feedback */
+#define LIBPQ_MSG_SIZE_OFFS   1        /* offset of message size innise libpq header */
+#define LIBPQ_DATA_SIZE(sz)   ((sz)-4) /* size of libpq message includes 4-bytes size field */
 
 /*
  * All copy date message ('w') are linked in L1 send list and asynhronoously sent to receivers.
@@ -61,8 +62,9 @@ typedef struct NodeId
 typedef struct ServerInfo
 {
 	uint32     protocolVersion;   /* proxy-safekeeer protocol version */
-	uint32     pgVersion;     /* Postgres server version */
+	uint32     pgVersion;         /* Postgres server version */
 	NodeId     nodeId;
+	uint64     systemId;          /* Postgres system identifier */
 	TimeLineID timeline;
 	XLogRecPtr walEnd;
 	int        walSegSize;
@@ -104,11 +106,13 @@ ssize_t    WriteSocketAsync(pgsocket sock, void const* buf, size_t size);
 bool       LoadData(char const* path, void* data, size_t size);
 bool       SaveData(char const* path, void const* data, size_t size);
 int        CompareLsn(const void *a, const void *b);
-void       StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize);
+void       StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize, uint64 systemId);
 void       StopWalSenders(void);
 void       NotifyWalSenders(XLogRecPtr lsn);
 void       fe_sendint32(int32 i, char *buf);
 int32      fe_recvint32(char *buf);
+void       fe_sendint16(int16 i, char *buf);
+int16      fe_recvint16(char *buf);
 XLogRecPtr FindStreamingStart(TimeLineID *tli);
 
 #endif

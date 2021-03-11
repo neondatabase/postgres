@@ -647,6 +647,7 @@ main(int argc, char **argv)
 	char       *host;
 	char       *port;
 	char       *sep;
+	char       *sysid;
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -773,7 +774,7 @@ main(int argc, char **argv)
 	 * replication connection and haven't connected using a database specific
 	 * connection.
 	 */
-	if (!RunIdentifySystem(conn, NULL, &serverInfo.timeline, &serverInfo.walEnd, &db_name))
+	if (!RunIdentifySystem(conn, &sysid, &serverInfo.timeline, &serverInfo.walEnd, &db_name))
 		exit(1);
 
 
@@ -786,6 +787,7 @@ main(int argc, char **argv)
 	serverInfo.pgVersion = PG_VERSION_NUM;
 	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
 	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
+	sscanf(sysid, INT64_FORMAT, &serverInfo.systemId);
 
 	/*
 	 * Check that there is a database associated with connection, none should

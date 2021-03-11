@@ -361,3 +361,27 @@ fe_recvint32(char *buf)
 
 	return pg_ntoh32(n32);
 }
+
+/*
+ * Converts an int16 to network byte order.
+ */
+void
+fe_sendint16(int16 i, char *buf)
+{
+	uint16		n16 = pg_hton16(i);
+
+	memcpy(buf, &n16, sizeof(n16));
+}
+
+/*
+ * Converts an int16 from network byte order to native format.
+ */
+int16
+fe_recvint16(char *buf)
+{
+	uint16		n16;
+
+	memcpy(&n16, buf, sizeof(n16));
+
+	return pg_ntoh16(n16);
+}

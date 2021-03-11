@@ -408,7 +408,7 @@ AcceptNewConnection(void)
 		else
 		{
 			/* Start new Wal sender thread */
-			StartWalSender(sock, basedir, fe_recvint32((char*)&len), myInfo.server.walSegSize);
+			StartWalSender(sock, basedir, fe_recvint32((char*)&len), myInfo.server.walSegSize, myInfo.server.systemId);
 		}
 		return false;
 	}

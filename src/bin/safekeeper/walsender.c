@@ -30,6 +30,7 @@ typedef struct WalSender
 	char const* basedir;
 	int         startupPacketLength;
 	int         walSegSize;
+	uint64      systemId;
 } WalSender;
 
 static WalSender walSenders = {&walSenders, &walSenders}; /* L2-List of active WAL senders */
@@ -84,10 +85,28 @@ WalSenderMain(void* arg)
 	char   hdr[LIBPQ_HDR_SIZE];
 	char   walfile_name[MAXPGPATH];
 	char   walfile_path[MAXPGPATH];
+	char   response[REPLICA_FEEDBACK_SIZE];
 	int    walfile = -1;
+	int    rc;
 	uint32 msgSize;
 	uint32 sendSize;
 	char*  msgBuf = pg_malloc(LIBPQ_HDR_SIZE + XLOG_HDR_SIZE + MAX_SEND_SIZE);
+	char const identifySystemResponseDesc[] = {
+		0x54,0x00,0x00,0x00,0x6f,0x00,0x04,0x73,
+		0x79,0x73,0x74,0x65,0x6d,0x69,0x64,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x19,0xff,0xff,0xff,0xff,0xff,0xff,
+		0x00,0x00,0x74,0x69,0x6d,0x65,0x6c,0x69,
+		0x6e,0x65,0x00,0x00,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x17,0x00,0x04,0xff,
+		0xff,0xff,0xff,0x00,0x00,0x78,0x6c,0x6f,
+		0x67,0x70,0x6f,0x73,0x00,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x19,0xff,
+		0xff,0xff,0xff,0xff,0xff,0x00,0x00,0x64,
+		0x62,0x6e,0x61,0x6d,0x65,0x00,0x00,0x00,
+		0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x19,
+		0xff,0xff,0xff,0xff,0xff,0xff,0x00,0x00
+	};
 
 	EnqueueWalSender(ws);
 
@@ -121,46 +140,115 @@ WalSenderMain(void* arg)
 		goto Epilogue;
 	}
 
-	if (!ReadSocket(ws->sock, hdr, sizeof hdr))
+	/* Process replication command until we found START_REPLICATION */
+	while (true)
 	{
-		pg_log_error("Failed to read replication message header");
-		goto Epilogue;
-	}
+		if (!ReadSocket(ws->sock, hdr, sizeof hdr))
+		{
+			pg_log_error("Failed to read replication message header");
+			goto Epilogue;
+		}
 		if (hdr[0] != 'Q')
-	{
-		pg_log_error("Unexpected message %c", hdr[0]);
-		goto Epilogue;
-	}
-	len = fe_recvint32(&hdr[LIBPQ_MSG_SIZE_OFFS]);
-	query = pg_malloc(LIBPQ_DATA_SIZE(len));
-	if (!ReadSocket(ws->sock, query, LIBPQ_DATA_SIZE(len)))
-	{
-		pg_log_error("Failed to read replication message body");
-		goto Epilogue;
-	}
-	if (sscanf(query, "START_REPLICATION %X/%X TIMELINE %u",
-			   &hi, &lo, &timeline) != 3)
-	{
-		pg_log_error("Unexpected command '%s': START_REPLICATION expected", query);
-		goto Epilogue;
-	}
-	startpos = ((XLogRecPtr)hi << 32) | lo;
-	if (startpos == 0)
-		startpos = FindStreamingStart(&timeline);
+		{
+			pg_log_error("Unexpected message %c", hdr[0]);
+			goto Epilogue;
+		}
+		len = fe_recvint32(&hdr[LIBPQ_MSG_SIZE_OFFS]);
+		query = pg_malloc(LIBPQ_DATA_SIZE(len));
+		if (!ReadSocket(ws->sock, query, LIBPQ_DATA_SIZE(len)))
+		{
+			pg_log_error("Failed to read replication message body");
+			goto Epilogue;
+		}
+		if (strcmp(query, "IDENTIFY_SYSTEM") == 0)
+		{
+			char lsn_buf[32];
+			char timeline_buf[32];
+			char sysid_buf[32];
+			int lsn_len;
+			int timeline_len;
+			int sysid_len;
 
-	msg = msgBuf;
-	*msg++ = 'W';
-	fe_sendint32(7, msg);
-	msg += 4;
-	*msg++ = '\0';
-	*msg++ = '\0';
-	*msg++ = '\0';
-	if (!WriteSocket(ws->sock, msgBuf, msg - msgBuf))
-	{
-		pg_log_error("Failed to initiate COPY protocol");
-		goto Epilogue;
-	}
+			startpos = FindStreamingStart(&timeline);
+			lsn_len = sprintf(lsn_buf, "%X/%X", (uint32)(startpos>>32), (uint32)startpos);
+			timeline_len = sprintf(timeline_buf, "%d", timeline);
+			sysid_len = sprintf(sysid_buf, INT64_FORMAT, ws->systemId);
 
+			msg = msgBuf;
+			memcpy(msg, identifySystemResponseDesc, sizeof identifySystemResponseDesc);
+			msg += sizeof(identifySystemResponseDesc);
+
+			*msg++ = 'D';
+			fe_sendint32(4 + 2 + 4 + sysid_len + 4 + timeline_len + 4 + lsn_len + 4, msg);
+			msg += 4;
+
+			fe_sendint16(4, msg); /* 4 columns */
+			msg += 2;
+
+			fe_sendint32(sysid_len, msg);
+			msg += 4;
+			memcpy(msg, sysid_buf, sysid_len);
+			msg += sysid_len;
+
+			fe_sendint32(timeline_len, msg);
+			msg += 4;
+			memcpy(msg, timeline_buf, timeline_len);
+			msg += timeline_len;
+
+			fe_sendint32(lsn_len, msg);
+			msg += 4;
+			memcpy(msg, lsn_buf, lsn_len);
+			msg += lsn_len;
+
+			fe_sendint32(-1, msg); /* null */
+			msg += 4;
+
+			*msg++ = 'C';
+			fe_sendint32(4 + sizeof("IDENTIFY_SYSTEM"), msg);
+			msg += 4;
+			memcpy(msg, "IDENTIFY_SYSTEM", sizeof("IDENTIFY_SYSTEM"));
+			msg += sizeof("IDENTIFY_SYSTEM");
+
+			*msg++ = 'Z';
+			fe_sendint32(5, msg);
+			msg += 4;
+			*msg++ = 'I';
+
+			if (!WriteSocket(ws->sock, msgBuf, msg - msgBuf))
+			{
+				pg_log_error("Failed to write IDENTIFY_SYSTEM response");
+				goto Epilogue;
+			}
+			pg_free(query);
+			query = NULL;
+		}
+		else
+		{
+			if (sscanf(query, "START_REPLICATION %X/%X TIMELINE %u",
+					   &hi, &lo, &timeline) != 3)
+			{
+				pg_log_error("Unexpected command '%s': START_REPLICATION expected", query);
+				goto Epilogue;
+			}
+			startpos = ((XLogRecPtr)hi << 32) | lo;
+			if (startpos == 0)
+				startpos = FindStreamingStart(&timeline);
+
+			msg = msgBuf;
+			*msg++ = 'W';
+			fe_sendint32(7, msg);
+			msg += 4;
+			*msg++ = '\0';
+			*msg++ = '\0';
+			*msg++ = '\0';
+			if (!WriteSocket(ws->sock, msgBuf, msg - msgBuf))
+			{
+				pg_log_error("Failed to initiate COPY protocol");
+				goto Epilogue;
+			}
+			break;
+		}
+	}
 	/*
 	 * Always start streaming at the beginning of a segment
 	 */
@@ -177,6 +265,16 @@ WalSenderMain(void* arg)
 		pthread_mutex_unlock(&mutex);
 		if (!streaming)
 			break;
+
+		/* Consume replica's feedbacks if any */
+		while ((rc = recv(ws->sock, &response, sizeof response, MSG_DONTWAIT)) > 0)
+		{
+			if (response[0] != 'd' || rc+1 != fe_recvint32(&response[LIBPQ_MSG_SIZE_OFFS]))
+			{
+				pg_log_info("Unexpected message %c with size %d",
+							response[0], fe_recvint32(&response[LIBPQ_MSG_SIZE_OFFS]));
+			}
+		}
 
 		/* Open file if not opened yet */
 		if (walfile < 0)
@@ -248,7 +346,7 @@ WalSenderMain(void* arg)
  * Start new thread for WAL sender at given socket.
  */
 void
-StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize)
+StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize, uint64 systemId)
 {
 	WalSender* ws = (WalSender*)pg_malloc(sizeof(WalSender));
 	int rc;
@@ -256,6 +354,7 @@ StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int 
 	ws->basedir = basedir;
 	ws->startupPacketLength = startupPacketLength;
 	ws->walSegSize = walSegSize;
+	ws->systemId = systemId;
 	rc = pthread_create(&ws->thread, NULL, WalSenderMain, ws);
 	if (rc != 0)
 	{
