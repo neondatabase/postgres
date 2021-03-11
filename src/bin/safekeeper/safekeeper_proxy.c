@@ -550,9 +550,15 @@ BroadcastWalStream(PGconn* conn)
 						  }
 						  break;
 					  }
+					  case SS_IDLE:
+					  {
+						  pg_log_info("Safekeer %s:%s drops connection", safekeeper[i].host, safekeeper[i].port);
+						  ResetConnection(i);
+						  break;
+					  }
 					  default:
 					  {
-						  pg_log_error("Unexpected read state %d", safekeeper[i].state);
+						  pg_log_error("Unexpected safekeeper %s:%s read state %d", safekeeper[i].host, safekeeper[i].port, safekeeper[i].state);
 						  exit(1);
 					  }
 					}

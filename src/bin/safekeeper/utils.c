@@ -217,6 +217,33 @@ ReadSocket(pgsocket sock, void* buf, size_t size)
 	return true;
 }
 
+bool
+ReadSocketNowait(pgsocket sock, void* buf, size_t size)
+{
+	char sebuf[PG_STRERROR_R_BUFLEN];
+	while (true)
+	{
+		ssize_t rc = recv(sock, buf, size, MSG_DONTWAIT);
+		if (rc < 0)
+		{
+			if (errno == EINTR)
+				continue;
+			if (errno == EAGAIN || errno == EWOULDBLOCK)
+				return false;
+			pg_log_error("Socket read failed: %s",
+						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		}
+		else if (rc == 0)
+			pg_log_error("Connection was closed by peer");
+		else if ((size_t)rc == size)
+			return true;
+		else
+			pg_log_error("Read only %d bytes instread of %d", (int)rc, (int)size);
+		return false;
+	}
+	return true;
+}
+
 ssize_t
 ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 {

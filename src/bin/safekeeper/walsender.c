@@ -87,7 +87,6 @@ WalSenderMain(void* arg)
 	char   walfile_path[MAXPGPATH];
 	char   response[REPLICA_FEEDBACK_SIZE];
 	int    walfile = -1;
-	int    rc;
 	uint32 msgSize;
 	uint32 sendSize;
 	char*  msgBuf = pg_malloc(LIBPQ_HDR_SIZE + XLOG_HDR_SIZE + MAX_SEND_SIZE);
@@ -267,13 +266,16 @@ WalSenderMain(void* arg)
 			break;
 
 		/* Consume replica's feedbacks if any */
-		while ((rc = recv(ws->sock, &response, sizeof response, MSG_DONTWAIT)) > 0)
+		while (ReadSocketNowait(ws->sock, hdr, sizeof hdr))
 		{
-			if (response[0] != 'd' || rc+1 != fe_recvint32(&response[LIBPQ_MSG_SIZE_OFFS]))
-			{
-				pg_log_info("Unexpected message %c with size %d",
-							response[0], fe_recvint32(&response[LIBPQ_MSG_SIZE_OFFS]));
-			}
+			int len;
+			if (hdr[0] != 'd')
+				pg_log_info("Unexpected replica's feedback %c", hdr[0]);
+			len = fe_recvint32(&hdr[LIBPQ_MSG_SIZE_OFFS]) - 4;
+			if (len > REPLICA_FEEDBACK_SIZE)
+				pg_log_info("Replica's feedback too large: %d", len);
+			else if (!ReadSocket(ws->sock, response, len))
+				pg_log_info("Failed to read relica's response");
 		}
 
 		/* Open file if not opened yet */
