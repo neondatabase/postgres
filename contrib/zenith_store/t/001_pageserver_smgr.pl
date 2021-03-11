@@ -45,7 +45,7 @@ $page_server->start;
 $page_server->safe_psql("postgres", "CREATE EXTENSION zenith_store");
 
 #
-# Create some data
+# Create some data. That would be approx 130Mb table.
 #
 my $payload = 'X' x 100;
 $node_primary->safe_psql("postgres", "CREATE TABLE t(key int primary key, value text)");
@@ -59,5 +59,5 @@ my $count = $node_primary->safe_psql("postgres", "select count(*) from t");
 
 note("rows count = $count");
 
-sleep(3600);
-# is($page1, $page2);
+# sleep(3600);
+is($count, '1000000');

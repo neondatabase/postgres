@@ -46,6 +46,7 @@ typedef struct PerPageWalRecord
 	PerPageWalRecord *prev; /* to lower lsn */
 	XLogRecPtr lsn;
 	XLogRecord *record;
+	uint8 my_block_id;
 } PerPageWalRecord;
 
 typedef struct PerPageWalHashEntry
@@ -73,7 +74,7 @@ typedef struct
 
 void memstore_init(void);
 void memstore_init_shmem(void);
-void memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record);
+void memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, uint8 my_block_id, XLogRecord *record);
 PerPageWalRecord *memstore_get_oldest(PerPageWalHashKey *key);
 
 #endif							/* _MEMSTORE_H */

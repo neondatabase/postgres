@@ -11,6 +11,7 @@
 
 #include "postgres.h"
 
+#include "access/xlogutils.h"
 #include "storage/lwlock.h"
 #include "utils/hsearch.h"
 #include "storage/shmem.h"
@@ -33,6 +34,9 @@
 MemStore *memStore;
 
 static MemoryContext RestoreCxt;
+
+PG_FUNCTION_INFO_V1(zenith_store_get_page);
+PG_FUNCTION_INFO_V1(zenith_store_dispatcher);
 
 void
 memstore_init()
@@ -80,7 +84,7 @@ memstore_init_shmem()
 }
 
 void
-memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record)
+memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, uint8 my_block_id, XLogRecord *record)
 {
 	bool found;
 	PerPageWalHashEntry *hash_entry;
@@ -95,7 +99,16 @@ memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, XLogRecord *record)
 	list_entry->lsn = lsn;
 	list_entry->prev = NULL;
 	list_entry->next = NULL;
+	list_entry->my_block_id = my_block_id;
 	memcpy(list_entry->record, record, record->xl_tot_len);
+
+	zenith_log(RequestTrace, "memstore_insert: \"%d.%d.%d.%d.%u\"",
+		key.rnode.spcNode,
+		key.rnode.dbNode,
+		key.rnode.relNode,
+		key.forknum,
+		key.blkno
+	);
 
 	LWLockAcquire(memStore->lock, LW_EXCLUSIVE);
 
@@ -159,18 +172,41 @@ memstore_get_oldest(PerPageWalHashKey *key)
 	return result;
 }
 
-PG_FUNCTION_INFO_V1(zenith_store_get_page);
+uint8 current_block_id;
+static bool
+pagestore_redo_read_buffer_filter(XLogReaderState *reader_state, uint8 block_id)
+{
+	if (block_id == current_block_id)
+	{
+		return false; /* don't skip */
+	}
+	else
+	{
+		zenith_log(RequestTrace, "Redo: skip redo for block#%d, current is #%d",
+			block_id, current_block_id);
+		return true; /* skip */
+	}
+}
 
 static void
 get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 {
 	PerPageWalRecord *record_entry = memstore_get_oldest(key);
 
+	PerPageWalRecord *first_record_entry = record_entry;
+
 	if (!record_entry)
 	{
 		memset(*raw_page_data, '\0', BLCKSZ);
 		return;
 	}
+
+	/*
+	 * TODO: properly hold buffer lock.
+	 *
+	 * Concurrent getPage requests spoils our pages.
+	 */
+	LWLockAcquire(memStore->lock, LW_EXCLUSIVE);
 
 	/* recovery here */
 	int			chain_len = 0;
@@ -186,13 +222,15 @@ get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 		if (!DecodeXLogRecord(&reader_state, record_entry->record, &errormsg))
 			zenith_log(ERROR, "failed to decode WAL record: %s", errormsg);
 
+		current_block_id = record_entry->my_block_id;
 		InRecovery = true;
 		RmgrTable[record_entry->record->xl_rmid].rm_redo(&reader_state);
 		InRecovery = false;
 
 		chain_len++;
 	}
-	zenith_log(RequestTrace, "Page restored: chain len is %d", chain_len);
+	zenith_log(RequestTrace, "Page restored: chain len is %d, last entry ptr=%p",
+		chain_len, first_record_entry);
 
 	/* Take a verbatim copy of the page */
 	Buffer		buf;
@@ -230,6 +268,20 @@ get_page_by_key(PerPageWalHashKey *key, char **raw_page_data)
 	memcpy(*raw_page_data, BufferGetPage(buf), BLCKSZ);
 	LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 	ReleaseBuffer(buf);
+
+	BufferDesc *bufHdr;
+	uint32		buf_state;
+	bufHdr = GetBufferDescriptor(buf_id);
+	buf_state = LockBufHdr(bufHdr);
+
+	if (RelFileNodeEquals(bufHdr->tag.rnode, key->rnode) &&
+		bufHdr->tag.forkNum == key->forknum &&
+		bufHdr->tag.blockNum == key->blkno)
+		InvalidateBuffer(bufHdr);	/* releases spinlock */
+	else
+		UnlockBufHdr(bufHdr, buf_state);
+
+	LWLockRelease(memStore->lock);
 }
 
 Datum
@@ -268,9 +320,6 @@ zenith_store_get_page(PG_FUNCTION_ARGS)
 	PG_RETURN_BYTEA_P(raw_page);
 }
 
-
-PG_FUNCTION_INFO_V1(zenith_store_dispatcher);
-
 Datum
 zenith_store_dispatcher(PG_FUNCTION_ARGS)
 {
@@ -283,6 +332,8 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 	pq_sendint16(&s, 0);		/* numAttributes */
 	pq_endmessage(&s);
 	pq_flush();
+
+	redo_read_buffer_filter = pagestore_redo_read_buffer_filter;
 
 	zenith_log(RequestTrace, "got connection");
 
@@ -307,7 +358,7 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 
 		ZenithMessage *raw_req = zm_unpack(&msg);
 
-		zenith_log(RequestTrace, "got page request: %s", ZenithMessageStr[raw_req->tag]);
+		zenith_log(RequestTrace, "got page request: %s", zm_to_string(raw_req));
 
 		if (messageTag(raw_req) != T_ZenithExistsRequest
 			&& messageTag(raw_req) != T_ZenithTruncRequest
@@ -441,6 +492,8 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 		zenith_log(RequestTrace, "responded: %s", ZenithMessageStr[raw_req->tag]);
 
 		CHECK_FOR_INTERRUPTS();
+
+		// XXX: clear memory context
 	}
 }
 

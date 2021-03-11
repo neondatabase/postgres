@@ -33,6 +33,14 @@ typedef enum
 								 * need to be replayed) */
 } XLogRedoAction;
 
+/*
+ * XXX-ZENITH
+ *
+ * Filter to trick multi-page redo handler into believing that neighbor
+ * pages are already recovered.
+ */
+extern bool	(*redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id);
+
 extern XLogRedoAction XLogReadBufferForRedo(XLogReaderState *record,
 											uint8 buffer_id, Buffer *buf);
 extern Buffer XLogInitBufferForRedo(XLogReaderState *record, uint8 block_id);

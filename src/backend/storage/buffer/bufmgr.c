@@ -836,10 +836,15 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 		if (!PageIsNew((Page) bufBlock))
-			ereport(ERROR,
-					(errmsg("unexpected data beyond EOF in block %u of relation %s",
-							blockNum, relpath(smgr->smgr_rnode, forkNum)),
-					 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
+		{
+			// XXX-ZENITH
+			MemSet((char *) bufBlock, 0, BLCKSZ);
+
+			// ereport(ERROR,
+			// 		(errmsg("unexpected data beyond EOF in block %u of relation %s",
+			// 				blockNum, relpath(smgr->smgr_rnode, forkNum)),
+			// 		 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
+		}
 
 		/*
 		 * We *must* do smgrextend before succeeding, else the page will not
@@ -1382,7 +1387,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
  * The buffer could get reclaimed by someone else while we are waiting
  * to acquire the necessary locks; if so, don't mess it up.
  */
-static void
+void
 InvalidateBuffer(BufferDesc *buf)
 {
 	BufferTag	oldTag;

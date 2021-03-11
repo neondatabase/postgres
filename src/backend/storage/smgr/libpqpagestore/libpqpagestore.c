@@ -28,6 +28,8 @@ PG_MODULE_MAGIC;
 
 void		_PG_init(void);
 
+#define PqPageStoreTrace DEBUG5
+
 #define ZENITH_TAG "[ZENITH_SMGR] "
 #define zenith_log(tag, fmt, ...) ereport(tag, \
 		(errmsg(ZENITH_TAG fmt, ## __VA_ARGS__), \
@@ -86,6 +88,8 @@ zenith_connect()
 		}
 	}
 
+	zenith_log(LOG, "libpqpagestore: connected to '%s'", page_server_connstring);
+
 	connected = true;
 }
 
@@ -105,7 +109,7 @@ zenith_call(ZenithRequest request)
 					PQerrorMessage(pageserver_conn));
 	}
 
-	zenith_log(LOG, "Sent request: %s", zm_to_string((ZenithMessage *) &request));
+	zenith_log(PqPageStoreTrace, "Sent request: %s", zm_to_string((ZenithMessage *) &request));
 
 	/* read response */
 	StringInfoData resp_buff;
@@ -122,7 +126,7 @@ zenith_call(ZenithRequest request)
 		|| messageTag(resp) == T_ZenithNblocksResponse
 		|| messageTag(resp) == T_ZenithReadResponse);
 
-	zenith_log(LOG, "Got response: %s", zm_to_string((ZenithMessage *) resp));
+	zenith_log(PqPageStoreTrace, "Got response: %s", zm_to_string((ZenithMessage *) resp));
 
 	/*
 	 * XXX: zm_to_string leak strings. Check with what memory contex all this methods
@@ -139,8 +143,8 @@ void
 _PG_init(void)
 {
 	if (page_server != NULL)
-		elog(ERROR, "libpqpagestore already loaded");
+		zenith_log(ERROR, "libpqpagestore already loaded");
 
-	elog(LOG, "libpqpagestore already loaded");
+	zenith_log(PqPageStoreTrace, "libpqpagestore already loaded");
 	page_server = &api;
 }
