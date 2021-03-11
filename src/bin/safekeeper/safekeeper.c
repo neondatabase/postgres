@@ -701,7 +701,7 @@ main(int argc, char **argv)
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
-	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_basebackup"));
+	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("safekeeper"));
 
 	if (argc > 1)
 	{
@@ -713,12 +713,12 @@ main(int argc, char **argv)
 		else if (strcmp(argv[1], "-V") == 0 ||
 				 strcmp(argv[1], "--version") == 0)
 		{
-			puts("pg_receivewal (PostgreSQL) " PG_VERSION);
+			puts("safekeeper (PostgreSQL) " PG_VERSION);
 			exit(0);
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:d:E:h:p:U:s:S:nwWvZ:",
+	while ((c = getopt_long(argc, argv, "D:h:p:nv",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)

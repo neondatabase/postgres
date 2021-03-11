@@ -674,7 +674,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt_long(argc, argv, "D:d:E:h:p:U:s:S:nwWvZ:",
+	while ((c = getopt_long(argc, argv, "d:h:p:U:s:vwW",
 							long_options, &option_index)) != -1)
 	{
 		switch (c)
@@ -692,6 +692,9 @@ main(int argc, char **argv)
 					exit(1);
 				}
 				dbport = pg_strdup(optarg);
+				break;
+			case 'U':
+				dbuser = pg_strdup(optarg);
 				break;
 			case 's':
 			    safekeepersList = pg_strdup(optarg);
