@@ -102,7 +102,7 @@ memstore_insert(PerPageWalHashKey key, XLogRecPtr lsn, uint8 my_block_id, XLogRe
 	list_entry->my_block_id = my_block_id;
 	memcpy(list_entry->record, record, record->xl_tot_len);
 
-	zenith_log(RequestTrace, "memstore_insert: \"%d.%d.%d.%d.%u\"",
+	zenith_log(PageInsertTrace, "memstore_insert: \"%d.%d.%d.%d.%u\"",
 		key.rnode.spcNode,
 		key.rnode.dbNode,
 		key.rnode.relNode,

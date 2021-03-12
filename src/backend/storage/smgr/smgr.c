@@ -66,6 +66,13 @@ typedef struct f_smgr
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 } f_smgr;
 
+typedef enum SmgrImpl
+{
+	SmgrMd,
+	SmgrLazyS3,
+	SmgrPageserver,
+} SmgrImpl;
+
 static const f_smgr smgrsw[] = {
 	/* magnetic disk */
 	{
@@ -213,7 +220,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
+		{
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
+			reln->possibly_lazy[i] = false;
+		}
 
 		/*
 		 * Use pageserver whenever page_server_connstring is not null.
@@ -221,7 +231,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 		 */
 		if (page_server_connstring && page_server_connstring[0])
 		{
-			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? 0 : 1;
+			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? SmgrMd : SmgrPageserver;
 		}
 		/*
 		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the
@@ -229,18 +239,16 @@ smgropen(RelFileNode rnode, BackendId backend)
 		 * ReadBuffer_common()
 		 */
 		/* use main forknum because it must always be present  */
-		else if (reln_is_lazy(reln, MAIN_FORKNUM, true))
+		else if (enable_lazyrestore && reln_is_lazy(reln, MAIN_FORKNUM, true))
 		{
 			for (int i = 0; i <= MAX_FORKNUM; ++i)
 				reln->possibly_lazy[i] = true;
 
-			reln->smgr_which = 1; /* lazy */
+			reln->smgr_which = SmgrLazyS3; /* lazy */
 		}
 		else
 		{
-			for (int i = 0; i <= MAX_FORKNUM; ++i)
-				reln->possibly_lazy[i] = false;
-			reln->smgr_which = 0; /* md */
+			reln->smgr_which = SmgrMd; /* md */
 		}
 
 

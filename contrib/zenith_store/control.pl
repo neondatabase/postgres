@@ -33,6 +33,7 @@ if ($action eq "start")
 		log_statement = all
 		page_server_connstring = '$pager_connstr'
 		shared_buffers = 1MB
+		max_connections = 100
 	});
 	$node_primary->start;
 	$node_primary->safe_psql("postgres", "SELECT pg_create_physical_replication_slot('zenith_store', true)");

@@ -48,6 +48,8 @@ static bool parse_relwal_filename(const char *path, char **basefname, XLogRecPtr
 
 static bool currently_restoring = false;
 
+bool enable_lazyrestore;
+
 
 /*
  *	lazyrestore_init() -- Initialize private state

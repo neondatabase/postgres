@@ -19,6 +19,8 @@
 #include "storage/smgr.h"
 #include "storage/sync.h"
 
+extern bool enable_lazyrestore;
+
 /* lazyrestore storage manager functionality */
 extern void lazyrestore_init(void);
 extern void lazyrestore_open(SMgrRelation reln);

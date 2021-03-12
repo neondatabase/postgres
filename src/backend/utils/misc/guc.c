@@ -79,6 +79,7 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
+#include "storage/lazyrestore.h"
 #include "storage/pagestore_client.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
@@ -2048,6 +2049,16 @@ static struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"enable_lazyrestore", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Restore relations from S3 on demand"),
+		},
+		&enable_lazyrestore,
+		false,
+		NULL, NULL, NULL
+	},
+
 
 	/* End-of-list marker */
 	{
