@@ -21,27 +21,12 @@
 #include <unistd.h>
 #include <pthread.h>
 
-typedef struct WalSender
-{
-	struct WalSender* next; /* L2-List entry */
-	struct WalSender* prev;
-	pthread_t   thread;
-	pgsocket    sock;
-	char const* basedir;
-	int         startupPacketLength;
-	int         walSegSize;
-	uint64      systemId;
-} WalSender;
-
 static WalSender walSenders = {&walSenders, &walSenders}; /* L2-List of active WAL senders */
 static volatile bool streaming = true;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 static XLogRecPtr flushLsn;
 
-/*
- * WAL sender main loop
- */
 static void
 EnqueueWalSender(WalSender* ws)
 {
@@ -70,6 +55,9 @@ NotifyWalSenders(XLogRecPtr lsn)
 	pthread_mutex_unlock(&mutex);
 }
 
+/*
+ * WAL sender main loop
+ */
 static void*
 WalSenderMain(void* arg)
 {
@@ -276,6 +264,16 @@ WalSenderMain(void* arg)
 				pg_log_info("Replica's feedback too large: %d", len);
 			else if (!ReadSocket(ws->sock, response, len))
 				pg_log_info("Failed to read relica's response");
+			else if (response[0] == 'h')
+			{
+				char* hs = response+1;
+				Assert(len == HS_FEEDBACK_SIZE);
+				ws->hsFeedback.ts = fe_recvint64(hs);
+				hs += 8;
+				ws->hsFeedback.xmin = FullTransactionIdFromEpochAndXid(fe_recvint32(hs+4), fe_recvint32(hs));
+				hs += 8;
+				ws->hsFeedback.catalog_xmin = FullTransactionIdFromEpochAndXid(fe_recvint32(hs+4), fe_recvint32(hs));
+			}
 		}
 
 		/* Open file if not opened yet */
@@ -357,6 +355,9 @@ StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int 
 	ws->startupPacketLength = startupPacketLength;
 	ws->walSegSize = walSegSize;
 	ws->systemId = systemId;
+	ws->hsFeedback.ts = 0;
+	ws->hsFeedback.xmin.value = ~0; /* max unsigned value */
+	ws->hsFeedback.catalog_xmin.value = ~0; /* max unsigned value */
 	rc = pthread_create(&ws->thread, NULL, WalSenderMain, ws);
 	if (rc != 0)
 	{
@@ -383,6 +384,38 @@ StopWalSenders(void)
 		pthread_mutex_unlock(&mutex);
 		pthread_join(t, &status);
 		pthread_mutex_lock(&mutex);
+	}
+	pthread_mutex_unlock(&mutex);
+}
+
+/*
+ * Combine hot standby feedbacks from all replicas.
+ */
+void
+CollectHotStanbyFeedbacks(HotStandbyFeedback* hs)
+{
+	WalSender* ws;
+
+	hs->ts = 0;
+	hs->xmin.value = ~0; /* largest unsigned value */
+	hs->catalog_xmin.value = ~0; /* largest unsigned value */
+
+	pthread_mutex_lock(&mutex);
+	while ((ws = walSenders.next) != &walSenders)
+	{
+		if (ws->hsFeedback.ts != 0)
+		{
+			if (FullTransactionIdPrecedes(ws->hsFeedback.xmin, hs->xmin))
+			{
+				hs->xmin = ws->hsFeedback.xmin;
+				hs->ts = ws->hsFeedback.ts;
+			}
+			if (FullTransactionIdPrecedes(ws->hsFeedback.catalog_xmin, hs->catalog_xmin))
+			{
+				hs->catalog_xmin = ws->hsFeedback.catalog_xmin;
+				hs->ts = ws->hsFeedback.ts;
+			}
+		}
 	}
 	pthread_mutex_unlock(&mutex);
 }

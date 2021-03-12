@@ -69,8 +69,8 @@ main(int argc, char **argv)
 	};
 	int			c;
 	int			option_index;
-	char		s3_path_buf[MAXPGPATH];
-	char		local_path_buf[MAXPGPATH];
+	char		s3_path[MAXPGPATH];
+	char		local_path[MAXPGPATH];
 
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("s3offload"));
@@ -133,29 +133,30 @@ main(int argc, char **argv)
 			if (IsXLogFileName(file_name))
 			{
 				struct stat fst;
-				if (stat(local_path_buf, &fst) < 0)
-					pg_fatal("could not stat file \"%s\": %m", local_path_buf);
 
-				if (!bsearch(&file_name, s3_wals->filenames, s3_wals->numfiles, sizeof(char*), compare_file_names))
+				sprintf(local_path, "%s/%s", basedir, file_name);
+				sprintf(s3_path, "walarchive/%s", file_name);
+
+				if (stat(local_path, &fst) < 0)
+					pg_fatal("could not stat file \"%s\": %m", local_path);
+
+				if (!bsearch(&s3_path, s3_wals->filenames, s3_wals->numfiles, sizeof(char*), compare_file_names))
 				{
 					/* File is not present at S3 */
-
-					sprintf(local_path_buf, "%s/%s", basedir, file_name);
-					sprintf(s3_path_buf, "walarchive/%s", file_name);
 
 					if (verbose)
 						pg_log_info("Offload WAL segment %s", file_name);
 
-					put_s3_file(curl, local_path_buf, s3_path_buf, fst.st_size);
+					put_s3_file(curl, local_path, s3_path, fst.st_size);
 				}
 				else
 				{
 					if (expiration_period != 0
-						&& fst.st_mtime - now > (time_t)expiration_period*SECONDS_PER_DAY)
+						&& now - fst.st_mtime > (time_t)expiration_period*SECONDS_PER_DAY)
 					{
 						if (verbose)
 							pg_log_info("Remove WAL segment %s", file_name);
-						unlink(local_path_buf);
+						unlink(local_path);
 					}
 				}
 			}
@@ -166,4 +167,5 @@ main(int argc, char **argv)
 
 		sleep(poll_interval);
 	}
+	curl_easy_cleanup(curl);
 }

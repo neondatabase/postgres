@@ -638,6 +638,7 @@ ReceiveWalStream(void)
 	size_t     recSize;
 	char       buf[MAX_SEND_SIZE];
 	char       hdr[XLOG_HDR_SIZE];
+	SafekeeperResponse resp;
 
 	gateway = CreateSocket(host, port, 1);
 	if (gateway == PGINVALID_SOCKET)
@@ -673,7 +674,9 @@ ReceiveWalStream(void)
 			exit(1);
 
 		/* Report flush poistion */
-		if (!WriteSocket(streamer, &endPos, sizeof(endPos)))
+		resp.flushLsn = endPos;
+		CollectHotStanbyFeedbacks(&resp.hs);
+		if (!WriteSocket(streamer, &resp, sizeof(resp)))
 		{
 			closesocket(streamer);
 			streamer = PGINVALID_SOCKET;

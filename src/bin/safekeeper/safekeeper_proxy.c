@@ -32,13 +32,13 @@ static int  n_safekeepers = 0;
 
 static char*        safekeepersList;
 static Safekeeper   safekeeper[MAX_SAFEKEEPERS];
-static XLogRecPtr   lastAckPos;
 static WalMessage*  msgQueueHead;
 static WalMessage*  msgQueueTail;
 static ServerInfo   serverInfo;
 static fd_set       readSet;
 static fd_set       writeSet;
 static int          maxFds;
+static SafekeeperResponse lastFeedback;
 
 static void
 disconnect_atexit(void)
@@ -77,6 +77,67 @@ SendFeedback(PGconn *conn, XLogRecPtr blockpos, TimestampTz now, bool replyReque
 	}
 
 	return true;
+}
+
+/*
+ * Send a hot standby feedback to the master
+ */
+static bool
+SendHSFeedback(PGconn *conn, HotStandbyFeedback* hs)
+{
+	char		replybuf[1 + 8 + 8 + 8];
+	int			len = 0;
+
+	replybuf[len] = 'h';
+	len += 1;
+	fe_sendint64(hs->ts, &replybuf[len]); /* write */
+	len += 8;
+	fe_sendint32(XidFromFullTransactionId(hs->xmin), &replybuf[len]);
+	len += 4;
+	fe_sendint32(EpochFromFullTransactionId(hs->xmin), &replybuf[len]);
+	len += 4;
+	fe_sendint32(XidFromFullTransactionId(hs->catalog_xmin), &replybuf[len]);
+	len += 4;
+	fe_sendint32(EpochFromFullTransactionId(hs->catalog_xmin), &replybuf[len]);
+	len += 4;
+
+	if (PQputCopyData(conn, replybuf, len) <= 0 || PQflush(conn))
+	{
+		pg_log_error("Could not send hot standby feedback packet: %s",
+					 PQerrorMessage(conn));
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * Combine hot standby feedbacks from all safekeepers.
+ */
+static void
+CombineHotStanbyFeedbacks(HotStandbyFeedback* hs)
+{
+	hs->ts = 0;
+	hs->xmin.value = ~0; /* largest unsigned value */
+	hs->catalog_xmin.value = ~0; /* largest unsigned value */
+
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (safekeeper[i].feedback.hs.ts != 0)
+		{
+			if (FullTransactionIdPrecedes(safekeeper[i].feedback.hs.xmin, hs->xmin))
+			{
+				hs->xmin = safekeeper[i].feedback.hs.xmin;
+				hs->ts = safekeeper[i].feedback.hs.ts;
+			}
+			if (FullTransactionIdPrecedes(safekeeper[i].feedback.hs.catalog_xmin, hs->catalog_xmin))
+			{
+				hs->catalog_xmin = safekeeper[i].feedback.hs.catalog_xmin;
+				hs->ts = safekeeper[i].feedback.hs.ts;
+			}
+		}
+	}
 }
 
 /*
@@ -147,7 +208,7 @@ GetAcknowledgedWALPosition(void)
 	 */
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		responses[i] = safekeeper[i].ackPos;
+		responses[i] = safekeeper[i].feedback.flushLsn;
 	}
 	qsort(responses, n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -161,11 +222,19 @@ GetAcknowledgedWALPosition(void)
 static bool
 HandleSafekeeperResponse(PGconn* conn)
 {
+	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn = GetAcknowledgedWALPosition();
-	if (minQuorumLsn > lastAckPos)
+	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
-		lastAckPos = minQuorumLsn;
-		if (!SendFeedback(conn, lastAckPos, feGetCurrentTimestamp(), false))
+		lastFeedback.flushLsn = minQuorumLsn;
+		if (!SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), false))
+			return false;
+	}
+	CombineHotStanbyFeedbacks(&hsFeedback);
+	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
+	{
+		lastFeedback.hs = hsFeedback;
+		if (!SendHSFeedback(conn, &hsFeedback))
 			return false;
 	}
 
@@ -233,7 +302,7 @@ SendMessageToNode(int i, WalMessage* msg)
 		else if ((size_t)rc == msg->size) /* message was completely sent */
 		{
 			safekeeper[i].asyncOffs = 0;
-			safekeeper[i].state = SS_RECV_ACK;
+			safekeeper[i].state = SS_RECV_FEEDBACK;
 		}
 		else
 		{
@@ -396,7 +465,7 @@ BroadcastWalStream(PGconn* conn)
 			{
 				Assert(copybuf[0] == 'k'); /* keep alive */
 				if (copybuf[KEEPALIVE_RR_OFFS]
-					&& !SendFeedback(conn, lastAckPos, feGetCurrentTimestamp(), true))
+					&& !SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), true))
 				{
 					FD_CLR(server, &readSet);
 					closesocket(server);
@@ -440,7 +509,8 @@ BroadcastWalStream(PGconn* conn)
 							  else
 							  {
 								  safekeeper[i].state = SS_VOTE;
-								  safekeeper[i].ackPos = safekeeper[i].info.server.walEnd;
+								  safekeeper[i].feedback.flushLsn = safekeeper[i].info.server.walEnd;
+								  safekeeper[i].feedback.hs.ts = 0;
 
 								  /* RAFT term comparison */
 								  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &maxNodeId) > 0)
@@ -521,20 +591,20 @@ BroadcastWalStream(PGconn* conn)
 						  }
 						  break;
 					  }
-					  case SS_RECV_ACK:
+					  case SS_RECV_FEEDBACK:
 					  {
 						  /* Read safekeeper response with flushed WAL position */
 						  rc = ReadSocketAsync(safekeeper[i].sock,
-											   (char*)&safekeeper[i].ackPos + safekeeper[i].asyncOffs,
-											   sizeof(safekeeper[i].ackPos) - safekeeper[i].asyncOffs);
+											   (char*)&safekeeper[i].feedback + safekeeper[i].asyncOffs,
+											   sizeof(safekeeper[i].feedback) - safekeeper[i].asyncOffs);
 						  if (rc < 0)
 						  {
 							  ResetConnection(i);
 						  }
-						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].ackPos))
+						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].feedback))
 						  {
 							  WalMessage* next = safekeeper[i].currMsg->next;
-							  Assert(safekeeper[i].ackPos == fe_recvint64(&safekeeper[i].currMsg->data[XLOG_HDR_END_POS]));
+							  Assert(safekeeper[i].feedback.flushLsn == fe_recvint64(&safekeeper[i].currMsg->data[XLOG_HDR_END_POS]));
 							  safekeeper[i].currMsg->ackMask |= 1 << i; /* this safekeeper confirms receiving of this message */
 							  safekeeper[i].state = SS_IDLE;
 							  safekeeper[i].asyncOffs = 0;
@@ -614,7 +684,7 @@ BroadcastWalStream(PGconn* conn)
 						  else if ((safekeeper[i].asyncOffs += rc) == safekeeper[i].currMsg->size)
 						  {
 							  /* WAL block completely sent */
-							  safekeeper[i].state = SS_RECV_ACK;
+							  safekeeper[i].state = SS_RECV_FEEDBACK;
 							  safekeeper[i].asyncOffs = 0;
 							  FD_CLR(safekeeper[i].sock, &writeSet);
 						  }

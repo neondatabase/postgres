@@ -3,6 +3,7 @@
 
 #include "postgres_fe.h"
 #include "access/xlog_internal.h"
+#include "access/transam.h"
 #include "libpq-int.h"
 #include "utils/uuid.h"
 
@@ -18,7 +19,8 @@
 #define XLOG_HDR_END_POS      9        /* offset of end position in header */
 #define KEEPALIVE_RR_OFFS     17       /* offset of reply requested field in keep alive request */
 #define LIBPQ_HDR_SIZE        5        /* 1 byte with message type + 4 bytes length */
-#define REPLICA_FEEDBACK_SIZE 64       /* Size of replica's feedback */
+#define REPLICA_FEEDBACK_SIZE 64       /* size of replica's feedback */
+#define HS_FEEDBACK_SIZE      25       /* hot standby feedback size */
 #define LIBPQ_MSG_SIZE_OFFS   1        /* offset of message size innise libpq header */
 #define LIBPQ_DATA_SIZE(sz)   ((sz)-4) /* size of libpq message includes 4-bytes size field */
 
@@ -35,6 +37,7 @@ typedef struct WalMessage
 	XLogRecPtr walPos;   /* message position in WAL */
 } WalMessage;
 
+/* Safekeeper_proxy states */
 typedef enum
 {
 	SS_OFFLINE,
@@ -44,7 +47,7 @@ typedef enum
 	SS_WAIT_VERDICT,
 	SS_IDLE,
 	SS_SEND_WAL,
-	SS_RECV_ACK
+	SS_RECV_FEEDBACK
 } SafeKeeperState;
 
 /*
@@ -81,18 +84,53 @@ typedef struct SafeKeeperInfo
 } SafeKeeperInfo;
 
 /*
+ * Hot standby feedback received from replica
+ */
+typedef struct HotStandbyFeedback
+{
+	TimestampTz       ts;
+	FullTransactionId xmin;
+	FullTransactionId catalog_xmin;
+} HotStandbyFeedback;
+
+/*
+ * WAL sender context
+ */
+typedef struct WalSender
+{
+	struct WalSender*  next; /* L2-List entry */
+	struct WalSender*  prev;
+	pthread_t          thread;
+	pgsocket           sock;
+	char const*        basedir;
+	int                startupPacketLength;
+	int                walSegSize;
+	uint64             systemId;
+	HotStandbyFeedback hsFeedback;
+} WalSender;
+
+/*
+ * Report safekeeper state to proxy
+ */
+typedef struct SafekeeperResponse
+{
+	XLogRecPtr flushLsn;
+	HotStandbyFeedback hs;
+} SafekeeperResponse;
+
+/*
  * Descriptor of safekeeper
  */
 typedef struct Safekeeper
 {
     char const* host;
     char const* port;
-	XLogRecPtr  ackPos;   /* acknowledged position */
 	pgsocket    sock;     /* socket descriptor */
 	WalMessage* currMsg;  /* message been send to the receiver */
 	int         asyncOffs;/* offset for asynchronus read/write operations */
 	SafeKeeperState state;/* safekeeper state machine state */
     SafeKeeperInfo  info; /* safekeeper info */
+	SafekeeperResponse feedback; /* feedback to master */
 } Safekeeper;
 
 
@@ -115,5 +153,6 @@ int32      fe_recvint32(char *buf);
 void       fe_sendint16(int16 i, char *buf);
 int16      fe_recvint16(char *buf);
 XLogRecPtr FindStreamingStart(TimeLineID *tli);
+void       CollectHotStanbyFeedbacks(HotStandbyFeedback* hs);
 
 #endif
