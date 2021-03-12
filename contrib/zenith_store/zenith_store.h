@@ -16,7 +16,7 @@ char		   *conn_string;
 typedef enum ZenithLogTag
 {
 	ReceiverLog = LOG,
-	ReceiverTrace = DEBUG5,
+	ReceiverTrace = LOG,
 	PageInsertTrace = DEBUG5,
 	RequestTrace = LOG,
 } ZenithLogTag;

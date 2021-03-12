@@ -35,6 +35,7 @@
 #include "receiver_worker.h"
 
 uint64 client_system_id;
+bool first_record_found = false;
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
@@ -43,8 +44,15 @@ uint64 client_system_id;
 
 #define LSN_PARTS(lsn) (uint32) ((lsn) >> 32), (uint32) (lsn)
 
+typedef struct
+{
+	XLogRecPtr first_ever_lsn;
+	XLogRecPtr start_lsn; /* LSN of the first entry in .data */
+	StringInfoData wal;
+} RecvBuffer;
+
 static void receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received);
-static void process_records(XLogReaderState *reader_state, XLogRecPtr start_lsn);
+static void process_records(XLogReaderState *reader_state, RecvBuffer *recv_buffer);
 static void send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool requestReply);
 static void handle_record(XLogReaderState *record);
 
@@ -176,12 +184,6 @@ receiver_main(Datum main_arg)
 	receiver_loop(conn, primary_lsn);
 }
 
-typedef struct
-{
-	XLogRecPtr start_lsn; /* LSN of the first entry in .data */
-	StringInfoData wal;
-} RecvBuffer;
-
 static int
 read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 			   XLogRecPtr targetRecPtr, char *readBuff)
@@ -258,6 +260,7 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 	RecvBuffer recv_buffer;
 	initStringInfo(&recv_buffer.wal);
 	recv_buffer.start_lsn = InvalidXLogRecPtr;
+	recv_buffer.first_ever_lsn = InvalidXLogRecPtr;
 
 	bool first = true;
 
@@ -333,11 +336,12 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 					{
 						Assert(start_lsn % XLOG_BLCKSZ == 0);
 						recv_buffer.start_lsn = start_lsn;
+						recv_buffer.first_ever_lsn = start_lsn;
 
 						// XXX: change that to XLogFindNextRecord()
 						start_lsn += XLogPageHeaderSize((XLogPageHeader) (s.data + s.cursor));
+						// XLogBeginRead(xlogreader, start_lsn);
 
-						XLogBeginRead(xlogreader, start_lsn);
 
 						XLogSegNo	targetSegNo;
 						XLByteToSeg(recv_buffer.start_lsn, targetSegNo, xlogreader->segcxt.ws_segsize);
@@ -347,7 +351,7 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 					}
 
 					appendBinaryStringInfoNT(&recv_buffer.wal, s.data + s.cursor, s.len - s.cursor);
-					process_records(xlogreader, start_lsn);
+					process_records(xlogreader, &recv_buffer);
 				}
 				else if (c == 'k')
 				{
@@ -396,25 +400,40 @@ receiver_loop(WalReceiverConn *conn, XLogRecPtr last_received)
 }
 
 static void
-process_records(XLogReaderState *reader, XLogRecPtr start_lsn)
+process_records(XLogReaderState *reader, RecvBuffer *recv_buffer)
 {
-	for (;;)
+	if (!first_record_found)
 	{
-		XLogRecord *record;
-		char	   *err = NULL;
+		XLogRecPtr first_valid_lsn = XLogFindNextRecord(reader, recv_buffer->first_ever_lsn);
 
-		record = XLogReadRecord(reader, &err);
-		if (err)
-			zenith_log(ERROR, "%s", err);
-		if (!record)
-			break; // XXX: check that it is because of insufficient data
+		if (first_valid_lsn)
+		{
+			first_record_found = true;
+			zenith_log(ReceiverTrace, "XLogFindNextRecord: first_lsn bumbed to %X/%X",
+				(uint32) (first_valid_lsn >> 32), (uint32) first_valid_lsn);
+		}
+	}
+	else
+	{
+		for (;;)
+		{
+			XLogRecord *record;
+			char	   *err = NULL;
 
-		if (DecodeXLogRecord(reader, record, &err))
-			handle_record(reader);
-		else
-			zenith_log(ERROR, "failed to decode WAL record: %s", err);
+			record = XLogReadRecord(reader, &err);
+			if (err)
+				zenith_log(ERROR, "%s", err);
+			if (!record)
+				break; // XXX: check that it is because of insufficient data
+
+			if (DecodeXLogRecord(reader, record, &err))
+				handle_record(reader);
+			else
+				zenith_log(ERROR, "failed to decode WAL record: %s", err);
+		}
 	}
 }
+
 
 static void
 send_feedback(WalReceiverConn *conn, XLogRecPtr recvpos, bool force, bool requestReply)

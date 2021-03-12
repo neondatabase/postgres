@@ -920,7 +920,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	return true;
 }
 
-#ifdef FRONTEND
+// #ifdef FRONTEND
 /*
  * Functions that are currently not needed in the backend, but are better
  * implemented inside xlogreader.c because of the internal facilities available
@@ -1044,7 +1044,7 @@ err:
 	return InvalidXLogRecPtr;
 }
 
-#endif							/* FRONTEND */
+// #endif							/* FRONTEND */
 
 /*
  * Helper function to ease writing of XLogRoutine->page_read callbacks.
