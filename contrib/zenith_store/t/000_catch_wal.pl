@@ -38,7 +38,11 @@ foreach(1..10){
 
 sleep(5); # XXX: wait for replication; change this to some sexplicit await_lsn() call
 
-my $page2 = $page_server->safe_psql("postgres", "select md5(zenith_store.get_page(42, 1663, 13231, 16384, 0, 0))");
+my $tablespace_oid = $node_primary->safe_psql("postgres", "select oid from pg_tablespace where spcname='pg_default'");
+my $db_oid = $node_primary->safe_psql("postgres", "select oid from pg_database where datname='postgres'");
+my $table_oid = $node_primary->safe_psql("postgres", "select 't'::regclass::oid");
+
+my $page2 = $page_server->safe_psql("postgres", "select md5(zenith_store.get_page(42, $tablespace_oid, $db_oid, $table_oid, 0, 0))");
 
 $node_primary->safe_psql("postgres", "CREATE EXTENSION pageinspect");
 my $page1 = $node_primary->safe_psql("postgres", "select md5(get_raw_page('t', 0))");
