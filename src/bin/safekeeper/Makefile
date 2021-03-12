@@ -34,12 +34,13 @@ safekeeper_proxy: safekeeper_proxy.o $(OBJS) | submake-libpq submake-libpgport s
 	$(CC) $(CFLAGS) safekeeper_proxy.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 s3offload: s3offload.o | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) s3offload.o $(LDFLAGS) $(LDFLAGS_EX)  -o $@$(X) -L$(top_builddir)/src/zenith_s3 -lzeniths3 -lcurl $(LIBS)
+	$(CC) $(CFLAGS) s3offload.o $(LDFLAGS) $(LDFLAGS_EX) -o $@$(X) -L$(top_builddir)/src/zenith_s3 -lzeniths3 -lcurl $(LIBS)
 
 streamutil.o: ../pg_basebackup/streamutil.c
 	$(CC) -c $(CFLAGS) $(CPPFLAGS) ../pg_basebackup/streamutil.c -o $@
 
 install: all installdirs
+	$(INSTALL_PROGRAM) s3offload$(X) '$(DESTDIR)$(bindir)/s3offload$(X)'
 	$(INSTALL_PROGRAM) safekeeper$(X) '$(DESTDIR)$(bindir)/safekeeper$(X)'
 	$(INSTALL_PROGRAM) safekeeper_proxy$(X) '$(DESTDIR)$(bindir)/safekeeper_proxy$(X)'
 

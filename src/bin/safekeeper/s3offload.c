@@ -67,10 +67,11 @@ main(int argc, char **argv)
 		{"poll", required_argument, NULL, 'p'},
 		{NULL, 0, NULL, 0}
 	};
-	int			c;
-	int			option_index;
-	char		s3_path[MAXPGPATH];
-	char		local_path[MAXPGPATH];
+	int		c;
+	int		option_index;
+	char	s3_path[MAXPGPATH];
+	char	local_path[MAXPGPATH];
+	char*	s3_key = s3_path;
 
 	pg_logging_init(argv[0]);
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("s3offload"));
@@ -140,7 +141,7 @@ main(int argc, char **argv)
 				if (stat(local_path, &fst) < 0)
 					pg_fatal("could not stat file \"%s\": %m", local_path);
 
-				if (!bsearch(&s3_path, s3_wals->filenames, s3_wals->numfiles, sizeof(char*), compare_file_names))
+				if (!bsearch(&s3_key, s3_wals->filenames, s3_wals->numfiles, sizeof(char*), compare_file_names))
 				{
 					/* File is not present at S3 */
 
