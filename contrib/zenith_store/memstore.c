@@ -441,6 +441,8 @@ zenith_store_dispatcher(PG_FUNCTION_ARGS)
 			resp.tag = T_ZenithNblocksResponse;
 			resp.n_blocks = n_pages;
 			resp.ok = true;
+
+			elog(LOG, "nblocks: %d (found: %d)", n_pages, found);
 		}
 		else if (req->tag == T_ZenithReadRequest)
 		{

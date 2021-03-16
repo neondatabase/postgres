@@ -55,7 +55,7 @@ _PG_init(void)
 	memset(&worker, 0, sizeof(worker));
 	worker.bgw_flags = BGWORKER_SHMEM_ACCESS | BGWORKER_BACKEND_DATABASE_CONNECTION;
 	worker.bgw_start_time = BgWorkerStart_ConsistentState;
-	worker.bgw_restart_time = BGW_DEFAULT_RESTART_INTERVAL;
+	worker.bgw_restart_time = 5; /* restart after 5 seconds */
 	sprintf(worker.bgw_library_name, "zenith_store");
 	sprintf(worker.bgw_function_name, "receiver_main");
 	snprintf(worker.bgw_name, BGW_MAXLEN, "zenith_store_receiver");
