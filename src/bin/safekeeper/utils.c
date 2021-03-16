@@ -18,21 +18,18 @@ int CompareNodeId(NodeId* id1, NodeId* id2)
 static bool
 SetSocketOptions(pgsocket sock)
 {
-	char sebuf[PG_STRERROR_R_BUFLEN];
 	int on = 1;
 	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
 				   (char *) &on, sizeof(on)) < 0)
 	{
-		pg_log_error("setsockopt(%s) failed: %s", "TCP_NODELAY",
-					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		pg_log_error("setsockopt(TCP_NODELAY) failed: %m");
 		closesocket(sock);
 		return false;
 	}
 	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
 				   (char *) &on, sizeof(on)) < 0)
 	{
-		pg_log_error("setsockopt(%s) failed: %s", "SO_REUSEADDR",
-					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		pg_log_error("setsockopt(SO_REUSEADDR) failed: %m");
 		closesocket(sock);
 		return false;
 	}
@@ -47,7 +44,6 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 		hints;
 	int	ret;
 	pgsocket sock = PGINVALID_SOCKET;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 
 	hints.ai_flags = AI_PASSIVE;
 	hints.ai_family = AF_UNSPEC;
@@ -69,8 +65,7 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
-			pg_log_error("could not create socket: %s",
-						SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("could not create socket: %m");
 			continue;
 		}
 		if (!SetSocketOptions(sock))
@@ -88,8 +83,8 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 				*established = false;
 				break;
 			}
-			pg_log_error("Could not establish connection to %s:%s: %s",
-						host, port, SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Could not establish connection to %s:%s: %m",
+						 host, port);
 			closesocket(sock);
 		}
 		else
@@ -108,7 +103,6 @@ CreateSocket(char const* host, char const* port, int n_peers)
 		*addr,
 		hints;
 	int	ret;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 	pgsocket sock = PGINVALID_SOCKET;
 
 	hints.ai_flags = AI_PASSIVE;
@@ -131,8 +125,7 @@ CreateSocket(char const* host, char const* port, int n_peers)
 		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
-			pg_log_error("could not create socket: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("could not create socket: %m");
 			continue;
 		}
 		if (!SetSocketOptions(sock))
@@ -144,15 +137,14 @@ CreateSocket(char const* host, char const* port, int n_peers)
 		 */
 		if (bind(sock, addr->ai_addr, addr->ai_addrlen) < 0)
 		{
-			pg_log_error("Could not bind socket: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Could not bind socket: %m");
 			closesocket(sock);
 			continue;
 		}
 		ret = listen(sock, n_peers);
 		if (ret < 0)
 		{
-			pg_log_error("Could not listen: %s", SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Could not listen: %m");
 			closesocket(sock);
 			continue;
 		}
@@ -165,7 +157,6 @@ bool
 WriteSocket(pgsocket sock, void const* buf, size_t size)
 {
 	char* src = (char*)buf;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 
 	while (size != 0)
 	{
@@ -174,8 +165,7 @@ WriteSocket(pgsocket sock, void const* buf, size_t size)
 		{
 			if (errno == EINTR)
 				continue;
-			pg_log_error("Socket write failed: %s",
-							 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Socket write failed: %m");
 			return false;
 		}
 		else if (rc == 0)
@@ -193,7 +183,6 @@ bool
 ReadSocket(pgsocket sock, void* buf, size_t size)
 {
 	char* dst = (char*)buf;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 
 	while (size != 0)
 	{
@@ -202,8 +191,7 @@ ReadSocket(pgsocket sock, void* buf, size_t size)
 		{
 			if (errno == EINTR)
 				continue;
-			pg_log_error("Socket read failed: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Socket read failed: %m");
 			return false;
 		}
 		else if (rc == 0)
@@ -220,7 +208,6 @@ ReadSocket(pgsocket sock, void* buf, size_t size)
 bool
 ReadSocketNowait(pgsocket sock, void* buf, size_t size)
 {
-	char sebuf[PG_STRERROR_R_BUFLEN];
 	while (true)
 	{
 		ssize_t rc = recv(sock, buf, size, MSG_DONTWAIT);
@@ -230,8 +217,7 @@ ReadSocketNowait(pgsocket sock, void* buf, size_t size)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				return false;
-			pg_log_error("Socket read failed: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Socket read failed: %m");
 		}
 		else if (rc == 0)
 			pg_log_error("Connection was closed by peer");
@@ -248,7 +234,6 @@ ssize_t
 ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 {
 	size_t offs = 0;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 
 	while (size != offs)
 	{
@@ -259,8 +244,7 @@ ReadSocketAsync(pgsocket sock, void* buf, size_t size)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				return offs;
-			pg_log_error("Socket write failed: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Socket write failed: %m");
 			return -1;
 		}
 		else if (rc == 0)
@@ -277,7 +261,6 @@ ssize_t
 WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 {
 	size_t offs = 0;
-	char sebuf[PG_STRERROR_R_BUFLEN];
 
 	while (size != offs)
 	{
@@ -288,8 +271,7 @@ WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 				continue;
 			if (errno == EAGAIN || errno == EWOULDBLOCK)
 				return offs;
-			pg_log_error("Socket write failed: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Socket write failed: %m");
 			return -1;
 		}
 		else if (rc == 0)
@@ -303,51 +285,18 @@ WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
 }
 
 bool
-SaveData(char const* path, void const* data, size_t size)
+SaveData(int file, void const* data, size_t size, bool do_sync)
 {
-	int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | PG_BINARY, pg_file_create_mode);
-	if (fd < 0)
+	if ((size_t)pg_pwrite(file, data, size, 0) != size)
 	{
-		pg_log_error("Failed to create file %s: %s",
-					 path, strerror(errno));
+		pg_log_error("Failed to write file: %m");
 		return false;
 	}
-	if ((size_t)write(fd, data, size) != size)
+	if (do_sync && fsync(file) < 0)
 	{
-		pg_log_error("Failed to write file %s: %s",
-					 path, strerror(errno));
-		close(fd);
+		pg_log_error("Failed to fsync file: %m");
 		return false;
 	}
-	if (fsync(fd) < 0)
-	{
-		pg_log_error("Failed to fsync file %s: %s",
-					 path, strerror(errno));
-		close(fd);
-		return false;
-	}
-	close(fd);
-	return true;
-}
-
-bool
-LoadData(char const* path, void* data, size_t size)
-{
-	int fd = open(path, O_RDONLY | PG_BINARY, 0);
-	if (fd < 0)
-	{
-		pg_log_error("Failed to open file %s: %s",
-					 path, strerror(errno));
-		return false;
-	}
-	if ((size_t)read(fd, data, size) != size)
-	{
-		pg_log_error("Failed to write file %s: %s",
-					 path, strerror(errno));
-		close(fd);
-		return false;
-	}
-	close(fd);
 	return true;
 }
 
@@ -411,4 +360,30 @@ fe_recvint16(char *buf)
 	memcpy(&n16, buf, sizeof(n16));
 
 	return pg_ntoh16(n16);
+}
+
+PGconn *
+ConnectSafekeeper(char const* host, char const* port)
+{
+	const char* const keywords[] = {"dbname", "host", "port", NULL};
+	const char* const values[] = {"replication", host, port, NULL};
+	PGconn* conn = PQconnectdbParams(keywords, values, true);
+
+	/*
+	 * If there is too little memory even to allocate the PGconn object
+	 * and PQconnectdbParams returns NULL, we call exit(1) directly.
+	 */
+	if (!conn)
+	{
+		pg_log_error("could not connect to safekeeper %s:%s", host, port);
+		return NULL;
+	}
+
+	if (PQstatus(conn) != CONNECTION_OK)
+	{
+		pg_log_error("Safekeeper %s:%s: %s", host, port, PQerrorMessage(conn));
+		PQfinish(conn);
+		return NULL;
+	}
+	return conn;
 }

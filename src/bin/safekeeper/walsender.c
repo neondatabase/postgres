@@ -25,7 +25,7 @@ static WalSender walSenders = {&walSenders, &walSenders}; /* L2-List of active W
 static volatile bool streaming = true;
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
-static XLogRecPtr flushLsn;
+static XLogRecPtr commitLsn;
 
 static void
 EnqueueWalSender(WalSender* ws)
@@ -50,7 +50,7 @@ void
 NotifyWalSenders(XLogRecPtr lsn)
 {
 	pthread_mutex_lock(&mutex);
-	flushLsn = lsn;
+	commitLsn = lsn;
 	pthread_cond_broadcast(&cond);
 	pthread_mutex_unlock(&mutex);
 }
@@ -66,8 +66,9 @@ WalSenderMain(void* arg)
 	uint32 len;
 	char*  startupBuf = NULL;
 	char*  query = NULL;
-	uint32 hi, lo;
+	uint32 w[4];
 	XLogRecPtr startpos;
+	XLogRecPtr endpos;
 	TimeLineID timeline;
 	XLogSegNo segno;
 	char   hdr[LIBPQ_HDR_SIZE];
@@ -211,16 +212,18 @@ WalSenderMain(void* arg)
 		}
 		else
 		{
-			if (sscanf(query, "START_REPLICATION %X/%X TIMELINE %u",
-					   &hi, &lo, &timeline) != 3)
+			int rc = sscanf(query, "START_REPLICATION %X/%X TIMELINE %u TILL %X/%X",
+							&w[0], &w[1], &timeline, &w[2], &w[3]);
+			if (rc < 3)
 			{
 				pg_log_error("Unexpected command '%s': START_REPLICATION expected", query);
 				goto Epilogue;
 			}
-			startpos = ((XLogRecPtr)hi << 32) | lo;
+			startpos = ((XLogRecPtr)w[0] << 32) | w[1];
 			if (startpos == 0)
 				startpos = FindStreamingStart(&timeline);
-
+			if (rc == 5)
+				ws->stopLsn = ((XLogRecPtr)w[2] << 32) | w[3];
 			msg = msgBuf;
 			*msg++ = 'W';
 			fe_sendint32(7, msg);
@@ -244,12 +247,25 @@ WalSenderMain(void* arg)
 	while (streaming)
 	{
 		/* Wait until we have some data to stream */
-		pthread_mutex_lock(&mutex);
-		while (startpos >= flushLsn && streaming)
+		if (ws->stopLsn) /* recovery mode: stream up to the specified LSN (VCL) */
 		{
-			pthread_cond_wait(&cond, &mutex);
+			if (startpos >= ws->stopLsn)
+			{
+				/* recovery finished */
+				break;
+			}
+			endpos = ws->stopLsn;
 		}
-		pthread_mutex_unlock(&mutex);
+		else /* normal mode */
+		{
+			pthread_mutex_lock(&mutex);
+			while (startpos >= commitLsn && streaming)
+			{
+				pthread_cond_wait(&cond, &mutex);
+			}
+			endpos = commitLsn;
+			pthread_mutex_unlock(&mutex);
+		}
 		if (!streaming)
 			break;
 
@@ -291,19 +307,19 @@ WalSenderMain(void* arg)
 				walfile = open(walfile_path, O_RDONLY | PG_BINARY, 0);
 				if (walfile < 0)
 				{
-					pg_log_error("Failed to open file %s: %s",
-								 walfile_path, strerror(errno));
+					pg_log_error("Failed to open file %s: %m",
+								 walfile_path);
 					goto Epilogue;
 				}
 			}
 		}
 
 		/* Avoid sending more than MAX_SEND_SIZE bytes */
-		sendSize = Min((uint32)(flushLsn - startpos), MAX_SEND_SIZE);
+		sendSize = Min((uint32)(endpos - startpos), MAX_SEND_SIZE);
 		if (read(walfile, msgBuf + LIBPQ_HDR_SIZE + XLOG_HDR_SIZE, sendSize) != sendSize)
 		{
-			pg_log_error("Failed to read %d bytes from file %s: %s",
-						 sendSize, walfile_path, strerror(errno));
+			pg_log_error("Failed to read %d bytes from file %s: %m",
+						 sendSize, walfile_path);
 			goto Epilogue;
 		}
 		msgSize =  LIBPQ_HDR_SIZE + XLOG_HDR_SIZE + sendSize;
@@ -314,7 +330,7 @@ WalSenderMain(void* arg)
 		*msg++ = 'w';
 		fe_sendint64(startpos, msg);	/* dataStart */
 		msg += 8;
-		fe_sendint64(flushLsn, msg); /* walEnd */
+		fe_sendint64(endpos, msg); /* walEnd */
 		msg += 8;
 		fe_sendint64(feGetCurrentTimestamp(), msg);	/* sendtime  */
 		msg += 8;
@@ -355,13 +371,14 @@ StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int 
 	ws->startupPacketLength = startupPacketLength;
 	ws->walSegSize = walSegSize;
 	ws->systemId = systemId;
+	ws->stopLsn = 0;
 	ws->hsFeedback.ts = 0;
 	ws->hsFeedback.xmin.value = ~0; /* max unsigned value */
 	ws->hsFeedback.catalog_xmin.value = ~0; /* max unsigned value */
 	rc = pthread_create(&ws->thread, NULL, WalSenderMain, ws);
 	if (rc != 0)
 	{
-		pg_log_error("Failed to lauch thread: %s", strerror(errno));
+		pg_log_error("Failed to lauch thread: %m");
 		pg_free(ws);
 	}
 }

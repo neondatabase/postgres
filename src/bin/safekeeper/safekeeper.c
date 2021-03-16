@@ -34,10 +34,11 @@ static char* host;
 static char* port;
 
 /* Node state */
-static SafeKeeperInfo myInfo;
+SafeKeeperInfo myInfo;
 
 /* Control file path */
 static char	controlPath[MAXPGPATH];
+static int  controlFile;
 
 /* Routines to evaluate segment file format */
 #define IsCompressXLogFileName(fname)	 \
@@ -287,9 +288,8 @@ FindStreamingStart(TimeLineID *tli)
 static bool
 ReadStream(void* buf, size_t size)
 {
-	ssize_t rc;
+	size_t  rc;
 	char*   src = (char*)buf;
-	char	sebuf[PG_STRERROR_R_BUFLEN];
 
 	while (size != 0)
 	{
@@ -313,8 +313,7 @@ ReadStream(void* buf, size_t size)
 					}
 					continue;
 				}
-				pg_log_error("Select failed: %s",
-							 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+				pg_log_error("Select failed: %m");
 				if (streamer != PGINVALID_SOCKET)
 				{
 					closesocket(streamer);
@@ -330,16 +329,14 @@ ReadStream(void* buf, size_t size)
 			if (errno == EINTR)
 				continue;
 
-			pg_log_error("Failed to read socket: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Failed to read socket: %m");
 			closesocket(streamer);
 			streamer = PGINVALID_SOCKET;
 			return false;
 		}
 		else if (rc == 0)
 		{
-			pg_log_error("Stream closed by peer: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Stream closed by peer: %m");
 			closesocket(streamer);
 			streamer = PGINVALID_SOCKET;
 			return false;
@@ -362,22 +359,19 @@ AcceptNewConnection(void)
 	ServerInfo serverInfo;
 	NodeId     nodeId;
 	uint32     len;
-	char	   sebuf[PG_STRERROR_R_BUFLEN];
 
 	while ((sock = accept(gateway, NULL, NULL)) == PGINVALID_SOCKET)
 	{
 		if (errno != EINTR)
 		{
-			pg_log_error("Failed to accept connection: %s",
-						 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+			pg_log_error("Failed to accept connection: %m");
 			return false;
 		}
 	}
 	/* Use non-blocking IO to make it possible to accept new connection while waiting for stream data */
 	if (!pg_set_noblock(sock))
 	{
-		pg_log_error("Failed to switch socket to non-blocking mode: %s",
-					 SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
+		pg_log_error("Failed to switch socket to non-blocking mode: %m");
 		closesocket(sock);
 		return false;
 	}
@@ -441,7 +435,7 @@ AcceptNewConnection(void)
 	myInfo.server.nodeId = nodeId; /* ... with the proposed node-id */
 
 	/* Determine WAL end at storage node */
-	myInfo.server.walEnd = FindStreamingStart(&myInfo.server.timeline);
+	myInfo.flushLsn = FindStreamingStart(&myInfo.server.timeline);
 
 	/* Report my identifier to proxy */
 	if (!WriteSocket(sock, &myInfo, sizeof myInfo))
@@ -460,8 +454,8 @@ AcceptNewConnection(void)
 		return false;
 	}
 
-	/* This is RAFT check  which should ensure that only one master can perform commits */
-	if (CompareNodeId(&nodeId, &myInfo.server.nodeId) <= 0)
+	/* This is RAFT check which should ensure that only one master can perform commits */
+	if (CompareNodeId(&nodeId, &myInfo.server.nodeId) < 0)
 	{
 		pg_log_info("Reject connection attempt with term " INT64_FORMAT ", because my term is " INT64_FORMAT "",
 					nodeId.term, myInfo.server.nodeId.term);
@@ -472,7 +466,7 @@ AcceptNewConnection(void)
 	}
 
 	/* Need to persisist our vote first */
-	if (!SaveData(controlPath, &myInfo, sizeof myInfo))
+	if (!SaveData(controlFile, &myInfo, sizeof myInfo, true))
 	{
 		pg_log_error("Failed to save safekeeper control file");
 		exit(1);
@@ -517,6 +511,10 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 	/* Extract WAL location for this block */
 	xlogoff = XLogSegmentOffset(startpoint, WalSegSz);
 
+	/* Ping wal sender that new data is available */
+	myInfo.commitLsn = startpoint;
+	NotifyWalSenders(startpoint);
+
 	while (bytes_left)
 	{
 		int			bytes_to_write;
@@ -551,16 +549,14 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 					walfile = open(walfile_partial_path, O_WRONLY | O_CREAT | PG_BINARY, pg_file_create_mode);
 					if (walfile < 0)
 					{
-						pg_log_error("Failed to open WAL file %s: %s",
-									 curr_file, strerror(errno));
+						pg_log_error("Failed to open WAL file %s: %m", curr_file);
 						return false;
 					}
 					for (int i = WalSegSz/XLOG_BLCKSZ; --i >= 0;)
 					{
 						if (write(walfile, zero_block, XLOG_BLCKSZ) != XLOG_BLCKSZ)
 						{
-							pg_log_error("Failed to initialize WAL file %s: %s",
-										 curr_file, strerror(errno));
+							pg_log_error("Failed to initialize WAL file %s: %m", curr_file);
 							return false;
 						}
 					}
@@ -571,8 +567,8 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 
 		if (pg_pwrite(walfile, rec + bytes_written, bytes_to_write, xlogoff) != bytes_to_write)
 		{
-			pg_log_error("could not write %u bytes to WAL file \"%s\": %s",
-						 bytes_to_write, curr_file, strerror(errno));
+			pg_log_error("could not write %u bytes to WAL file \"%s\": %m",
+						 bytes_to_write, curr_file);
 			return false;
 		}
 
@@ -580,8 +576,7 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 		{
 			if (fsync(walfile) < 0)
 			{
-				pg_log_error("failed to sync file \"%s\": %s",
-							 curr_file, strerror(errno));
+				pg_log_error("failed to sync file \"%s\": %m", curr_file);
 				return false;
 			}
 		}
@@ -592,24 +587,21 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 		startpoint += bytes_to_write;
 		xlogoff += bytes_to_write;
 
-		/* Ping wal sender that new data is available */
-		NotifyWalSenders(startpoint);
-
 		/* Did we reach the end of a WAL segment? */
 		if (XLogSegmentOffset(startpoint, WalSegSz) == 0)
 		{
 			if (close(walfile) != 0)
 			{
-				pg_log_error("failed to close file \"%s\": %s",
-							 curr_file, strerror(errno));
+				pg_log_error("failed to close file \"%s\": %m",
+							 curr_file);
 				return false;
 			}
 			if (partial)
 			{
 				if (durable_rename(walfile_partial_path, walfile_path) != 0)
 				{
-					pg_log_error("failed to rename file \"%s\" to \"%s\": %s",
-								 walfile_partial_path, walfile_path, strerror(errno));
+					pg_log_error("failed to rename file \"%s\" to \"%s\": %m",
+								 walfile_partial_path, walfile_path);
 					return false;
 				}
 			}
@@ -619,8 +611,7 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 	}
 	if (walfile >= 0 && close(walfile) != 0)
 	{
-		pg_log_error("failed to close file \"%s\": %s",
-					 curr_file, strerror(errno));
+		pg_log_error("failed to close file \"%s\": %m", curr_file);
 		return false;
 	}
 	return true;
@@ -635,6 +626,8 @@ ReceiveWalStream(void)
 {
 	XLogRecPtr startPos;
 	XLogRecPtr endPos;
+	XLogRecPtr flushedRestartLsn = 0;
+	bool       doSync;
 	size_t     recSize;
 	char       buf[MAX_SEND_SIZE];
 	char       hdr[XLOG_HDR_SIZE];
@@ -673,6 +666,23 @@ ReceiveWalStream(void)
 		if (!WriteWALFile(startPos, buf, recSize))
 			exit(1);
 
+		/* restartLsn is sent by proxy instead of timestamp */
+		myInfo.restartLsn = fe_recvint64(&hdr[XLOG_HDR_TS_POS]);
+
+		/*
+		 * Update restart LSN in control file.
+		 * To avoid negative impact of performance of extran fsync, do it only
+		 * when restartLsn delat exceeds segment size.
+		 */
+		doSync = flushedRestartLsn + myInfo.server.walSegSize < myInfo.restartLsn;
+		if (!SaveData(controlFile, &myInfo, sizeof(myInfo), doSync))
+		{
+			pg_log_error("Failed to save safekeeper control file");
+			exit(1);
+		}
+		if (doSync)
+			flushedRestartLsn = myInfo.restartLsn;
+
 		/* Report flush poistion */
 		resp.flushLsn = endPos;
 		CollectHotStanbyFeedbacks(&resp.hs);
@@ -701,6 +711,7 @@ main(int argc, char **argv)
 
 	int			c;
 	int			option_index;
+	ssize_t     rc;
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -775,9 +786,16 @@ main(int argc, char **argv)
 	}
 
 	sprintf(controlPath, "%s/safekeeper.control", basedir);
-	if (!LoadData(controlPath, &myInfo, sizeof myInfo))
+	controlFile = open(controlPath, O_RDWR | O_CREAT | PG_BINARY, pg_file_create_mode);
+	if (controlFile < 0)
 	{
-		pg_log_error("Failed to load safekeeper control file");
+		pg_log_error("Failed to create control file %s: %m", controlPath);
+		exit(1);
+	}
+	rc = read(controlFile, &myInfo, sizeof myInfo);
+	if (rc != sizeof(myInfo))
+	{
+		pg_log_error("Failed to load safekeeper control file %s", controlPath);
 		myInfo.magic = SK_MAGIC;
 		myInfo.formatVersion = SK_FORMAT_VERSION;
 		myInfo.server.pgVersion = UNKNOWN_SERVER_VERSION;

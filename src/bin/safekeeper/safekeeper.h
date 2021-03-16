@@ -15,18 +15,19 @@
 #define MAX_SAFEKEEPERS        32
 #define MAX_SEND_SIZE         (XLOG_BLCKSZ * 16)
 #define XLOG_HDR_SIZE         (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
-#define XLOG_HDR_START_POS    1        /* offset of start position in header */
-#define XLOG_HDR_END_POS      9        /* offset of end position in header */
+#define XLOG_HDR_START_POS    1        /* offset of start position in wal sender message header */
+#define XLOG_HDR_END_POS      (1+8)    /* offset of end position in wal sender message header */
+#define XLOG_HDR_TS_POS       (1+8+8)  /* offset of timestamp in wal sender message header */
 #define KEEPALIVE_RR_OFFS     17       /* offset of reply requested field in keep alive request */
 #define LIBPQ_HDR_SIZE        5        /* 1 byte with message type + 4 bytes length */
 #define REPLICA_FEEDBACK_SIZE 64       /* size of replica's feedback */
 #define HS_FEEDBACK_SIZE      25       /* hot standby feedback size */
 #define LIBPQ_MSG_SIZE_OFFS   1        /* offset of message size innise libpq header */
 #define LIBPQ_DATA_SIZE(sz)   ((sz)-4) /* size of libpq message includes 4-bytes size field */
-
+#define WAL_MSG_END(msg)      ((msg)->walPos + (msg)->size - XLOG_HDR_SIZE)
 /*
- * All copy date message ('w') are linked in L1 send list and asynhronoously sent to receivers.
- * When message is sent to all receivers, it is remover from send list.
+ * All copy data message ('w') are linked in L1 send list and asynhronously sent to receivers.
+ * When message is sent to all receivers, it is removed from send list.
  */
 typedef struct WalMessage
 {
@@ -68,8 +69,8 @@ typedef struct ServerInfo
 	uint32     pgVersion;         /* Postgres server version */
 	NodeId     nodeId;
 	uint64     systemId;          /* Postgres system identifier */
-	TimeLineID timeline;
 	XLogRecPtr walEnd;
+    TimeLineID timeline;
 	int        walSegSize;
 } ServerInfo;
 
@@ -81,6 +82,9 @@ typedef struct SafeKeeperInfo
 	uint32     magic;             /* magic for verifying content the control file */
 	uint32     formatVersion;     /* safekeeper format version */
 	ServerInfo server;
+	XLogRecPtr commitLsn;         /* part of WAL acknowledged by quorum */
+	XLogRecPtr flushLsn;          /* locally flushed part of WAL */
+	XLogRecPtr restartLsn;        /* minimal LSN which may be needed for recovery of some safekeeper: min(commitLsn) for all safekeepers */
 } SafeKeeperInfo;
 
 /*
@@ -107,6 +111,7 @@ typedef struct WalSender
 	int                walSegSize;
 	uint64             systemId;
 	HotStandbyFeedback hsFeedback;
+	XLogRecPtr         stopLsn;
 } WalSender;
 
 /*
@@ -142,8 +147,7 @@ bool       ReadSocket(pgsocket sock, void* buf, size_t size);
 bool       ReadSocketNowait(pgsocket sock, void* buf, size_t size);
 ssize_t    ReadSocketAsync(pgsocket sock, void* buf, size_t size);
 ssize_t    WriteSocketAsync(pgsocket sock, void const* buf, size_t size);
-bool       LoadData(char const* path, void* data, size_t size);
-bool       SaveData(char const* path, void const* data, size_t size);
+bool       SaveData(int file, void const* data, size_t size, bool do_sync);
 int        CompareLsn(const void *a, const void *b);
 void       StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int walSegSize, uint64 systemId);
 void       StopWalSenders(void);
@@ -154,5 +158,6 @@ void       fe_sendint16(int16 i, char *buf);
 int16      fe_recvint16(char *buf);
 XLogRecPtr FindStreamingStart(TimeLineID *tli);
 void       CollectHotStanbyFeedbacks(HotStandbyFeedback* hs);
+PGconn*    ConnectSafekeeper(char const* host, char const* port);
 
 #endif
