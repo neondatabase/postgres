@@ -16,17 +16,25 @@
  * The process accepts messages through stdin, and each message has the format:
  *
  * char   msgtype;
- * int32  length; // length of message including 'length' but excluding 'msgtype'
+ * int32  length; // length of message including 'length' but excluding
+ *                // 'msgtype', in network byte order
  * <payload>
  *
  * There are three message types:
  *
+ * BeginRedoForBlock ('B'): Prepare for WAL replay for given block
  * PushPage ('P'): Copy a page image (in the payload) to buffer cache
  * ApplyRecord ('A'): Apply a WAL record (in the payload)
  * GetPage ('G'): Return a page image from buffer cache.
  *
  * Currently, you only get a response to GetPage requests; the response is
  * simply a 8k page, without any headers. Errors are logged to stderr.
+ *
+ * FIXME:
+ * - this currently requires a valid PGDATA, and creates a lock file there
+ *   like a normal postmaster. There's no fundamental reason for that, though.
+ * - should have EndRedoForBlock, and flush page cache, to allow using this
+ *   mechanism for more than one block without restarting the process.
  *
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -60,12 +68,14 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "access/xlogutils.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
 #include "storage/ipc.h"
 #include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
@@ -73,9 +83,13 @@
 #include "utils/ps_status.h"
 
 static int	ReadRedoCommand(StringInfo inBuf);
+static void BeginRedoForBlock(StringInfo input_message);
 static void PushPage(StringInfo input_message);
 static void ApplyRecord(StringInfo input_message);
+static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
+
+static List *redo_prepared_for = NIL;
 
 /* ----------------------------------------------------------------
  * FIXME comment
@@ -243,6 +257,10 @@ WalRedoMain(int argc, char *argv[],
 
 		switch (firstchar)
 		{
+			case 'B':			/* BeginRedoForBlock */
+				BeginRedoForBlock(&input_message);
+				break;
+
 			case 'P':			/* PushPage */
 				PushPage(&input_message);
 				break;
@@ -329,9 +347,51 @@ ReadRedoCommand(StringInfo inBuf)
 	inBuf->len = len;
 	inBuf->data[len] = '\0';
 
-	elog(LOG, "got message of length %d", len);
-
 	return qtype;
+}
+
+
+/*
+ * Prepare for WAL replay on given block
+ */
+static void
+BeginRedoForBlock(StringInfo input_message)
+{
+	RelFileNode rnode;
+	ForkNumber forknum;
+	BlockNumber blknum;
+	BufferTag  *tag;
+	MemoryContext oldcxt;
+	SMgrRelation reln;
+
+	/*
+	 * message format:
+	 *
+	 * spcNode
+	 * dbNode
+	 * relNode
+	 * ForkNumber
+	 * BlockNumber
+	 */
+	rnode.spcNode = pq_getmsgint(input_message, 4);
+	rnode.dbNode = pq_getmsgint(input_message, 4);
+	rnode.relNode = pq_getmsgint(input_message, 4);
+	forknum = pq_getmsgint(input_message, 4);
+	blknum = pq_getmsgint(input_message, 4);
+
+	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
+	tag = palloc(sizeof(BufferTag));
+	INIT_BUFFERTAG(*tag, rnode, forknum, blknum);
+
+	redo_prepared_for = lappend(redo_prepared_for, tag);
+	MemoryContextSwitchTo(oldcxt);
+
+	reln = smgropen(rnode, InvalidBackendId);
+	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
+		reln->smgr_cached_nblocks[forknum] < blknum + 1)
+	{
+		reln->smgr_cached_nblocks[forknum] = blknum + 1;
+	}
 }
 
 /*
@@ -346,7 +406,6 @@ PushPage(StringInfo input_message)
 	const char *content;
 	Buffer		buf;
 	Page		page;
-	SMgrRelation reln;
 
 	/*
 	 * message format:
@@ -370,13 +429,6 @@ PushPage(StringInfo input_message)
 	memcpy(page, content, BLCKSZ);
 	MarkBufferDirty(buf); /* pro forma */
 	UnlockReleaseBuffer(buf);
-
-	reln = smgropen(rnode, InvalidBackendId);
-	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
-		reln->smgr_cached_nblocks[forknum] < blknum + 1)
-	{
-		reln->smgr_cached_nblocks[forknum] = blknum + 1;
-	}
 
 	elog(LOG, "Page pushed!");
 }
@@ -422,9 +474,46 @@ ApplyRecord(StringInfo input_message)
 	if (!DecodeXLogRecord(&reader_state, record, &errormsg))
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
 
+	/* Ignore any other blocks than the ones the caller is interested in */
+	redo_read_buffer_filter = redo_block_filter;
+
 	RmgrTable[record->xl_rmid].rm_redo(&reader_state);
 
-	elog(LOG, "record applied");
+	redo_read_buffer_filter = NULL;
+	
+	elog(LOG, "applied WAL record at %X/%X",
+		 (uint32) (lsn >> 32), (uint32) lsn);
+
+	/* There shouldn't have been references to missing pages */
+	XLogCheckInvalidPages();	
+}
+
+static bool
+redo_block_filter(XLogReaderState *record, uint8 block_id)
+{
+	BufferTag	target_tag;
+	ListCell   *lc;
+
+	if (!XLogRecGetBlockTag(record, block_id,
+							&target_tag.rnode, &target_tag.forkNum, &target_tag.blockNum))
+	{
+		/* Caller specified a bogus block_id */
+		elog(PANIC, "failed to locate backup block with ID %d", block_id);
+	}
+
+	/*
+	 * If this block isn't in the list of blocks we're interested in, return 'true'
+	 * so that this gets ignored
+	 */
+	foreach (lc, redo_prepared_for)
+	{
+		BufferTag *tag = (BufferTag *) lfirst(lc);
+
+		if (BUFFERTAGS_EQUAL(target_tag, *tag))
+			return false;
+	}
+
+	return true;
 }
 
 /*
@@ -455,6 +544,8 @@ GetPage(StringInfo input_message)
 	rnode.relNode = pq_getmsgint(input_message, 4);
 	forknum = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
+
+	/* FIXME: check that we got a BeginRedoForBlock message or this earlier */
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_NORMAL, NULL);
 	page = BufferGetPage(buf);
