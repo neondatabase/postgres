@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * safekeeper.c - receive streaming WAL data broadcasted by pg_tewal and write it
+ * safekeeper.c - receive WAL stream fro safekeeper_proxy and write it
  *				  to a local file.
  *
  * Author: Konstantin Knizhnik (knizhnik@garret.ru)
@@ -40,15 +40,7 @@ SafeKeeperInfo myInfo;
 static char	controlPath[MAXPGPATH];
 static int  controlFile;
 
-/* Routines to evaluate segment file format */
-#define IsCompressXLogFileName(fname)	 \
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz") && \
-	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
-	 strcmp((fname) + XLOG_FNAME_LEN, ".gz") == 0)
-#define IsPartialCompressXLogFileName(fname)	\
-	(strlen(fname) == XLOG_FNAME_LEN + strlen(".gz.partial") && \
-	 strspn(fname, "0123456789ABCDEF") == XLOG_FNAME_LEN &&		\
-	 strcmp((fname) + XLOG_FNAME_LEN, ".gz.partial") == 0)
+static RequestVote gen;
 
 static pgsocket gateway = PGINVALID_SOCKET;
 static pgsocket streamer = PGINVALID_SOCKET;
@@ -70,7 +62,7 @@ usage(void)
 	printf(_("  -?, --help             show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
 	printf(_("  -h, --host=HOSTNAME    safekeeper interface\n"));
-	printf(_("  -p, --port=PORT        saefkeeper port\n"));
+	printf(_("  -p, --port=PORT        safekeeper port\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }
@@ -109,16 +101,103 @@ close_destination_dir(DIR *dest_dir, char *dest_folder)
 	}
 }
 
+typedef struct XLogReaderContext
+{
+	XLogRecPtr start;
+	XLogRecPtr end;
+	TimeLineID tli;
+} XLogReaderContext;
+
+/* XLogReaderRoutine->segment_open callback */
+static void
+WALReaderOpenSegment(XLogReaderState *state, XLogSegNo nextSegNo,
+					 TimeLineID *tli_p)
+{
+	char  walfile_name[MAXPGPATH];
+	char  walfile_path[MAXPGPATH];
+	int   walSegSize = myInfo.server.walSegSize;
+
+	XLogFileName(walfile_name, *tli_p, nextSegNo, walSegSize);
+	sprintf(walfile_path, "%s/%s.partial", basedir, walfile_name);
+
+	state->seg.ws_file = open(walfile_path, O_RDONLY | PG_BINARY, 0);
+	if (state->seg.ws_file < 0)
+	{
+		pg_log_error("could not find file \"%s\": %m", walfile_path);
+		exit(1);
+	}
+}
 
 /*
- * Determine starting location for streaming, based on any existing xlog
- * segments in the directory. We start at the end of the last one that is
- * complete (size matches wal segment size), on the timeline with highest ID.
- *
- * If there are no WAL files in the directory, returns InvalidXLogRecPtr.
+ * XLogReaderRoutine->segment_close callback.
+ */
+static void
+WALReaderCloseSegment(XLogReaderState *state)
+{
+	close(state->seg.ws_file);
+	/* need to check errno? */
+	state->seg.ws_file = -1;
+}
+
+/* XLogReaderRoutine->page_read callback */
+static int
+WALReaderReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
+				   XLogRecPtr targetPtr, char *readBuff)
+{
+	XLogReaderContext* ctx = (XLogReaderContext*)state->private_data;
+	int			count = XLOG_BLCKSZ;
+	WALReadError errinfo;
+
+	if (ctx->end != InvalidXLogRecPtr)
+	{
+		if (targetPagePtr + XLOG_BLCKSZ <= ctx->end)
+			count = XLOG_BLCKSZ;
+		else if (targetPagePtr + reqLen <= ctx->end)
+			count = ctx->end - targetPagePtr;
+		else
+		{
+			ctx->end = targetPagePtr;
+			return -1;
+		}
+	}
+
+	return WALRead(state, readBuff, targetPagePtr, count, ctx->tli,  &errinfo)
+		? count : -1;
+}
+
+static int
+FindEndOfWALSegment(XLogSegNo segno, TimeLineID tli)
+{
+	XLogReaderContext ctx;
+	XLogReaderState *xlogreader;
+	int walSegSize = myInfo.server.walSegSize;
+	char *errormsg;
+	int offs = 0;
+
+	XLogSegNoOffsetToRecPtr(segno, 0, walSegSize, ctx.start);
+	ctx.end = ctx.start + walSegSize;
+	ctx.tli = tli;
+	xlogreader = XLogReaderAllocate(walSegSize, basedir,
+									XL_ROUTINE(.page_read = WALReaderReadPage,
+											   .segment_open = WALReaderOpenSegment,
+											   .segment_close = WALReaderCloseSegment),
+									&ctx);
+
+	if (XLogFindNextRecord(xlogreader, ctx.start) != InvalidXLogRecPtr)
+	{
+		while (XLogReadRecord(xlogreader, &errormsg));
+		offs = xlogreader->ReadRecPtr - ctx.start;
+		Assert(offs <= walSegSize);
+	}
+	XLogReaderFree(xlogreader);
+	return offs;
+}
+
+/*
+ * Find end of WAL. If precise=true then scan last segment to locate last record.
  */
 XLogRecPtr
-FindStreamingStart(TimeLineID *tli)
+FindEndOfWAL(TimeLineID *tli, bool precise)
 {
 	DIR		   *dir;
 	struct dirent *dirent;
@@ -133,7 +212,6 @@ FindStreamingStart(TimeLineID *tli)
 		TimeLineID	tli;
 		XLogSegNo	segno;
 		bool		ispartial;
-		bool		iscompress;
 
 		/*
 		 * Check if the filename looks like an xlog file, or a .partial file.
@@ -141,22 +219,10 @@ FindStreamingStart(TimeLineID *tli)
 		if (IsXLogFileName(dirent->d_name))
 		{
 			ispartial = false;
-			iscompress = false;
 		}
 		else if (IsPartialXLogFileName(dirent->d_name))
 		{
 			ispartial = true;
-			iscompress = false;
-		}
-		else if (IsCompressXLogFileName(dirent->d_name))
-		{
-			ispartial = false;
-			iscompress = true;
-		}
-		else if (IsPartialCompressXLogFileName(dirent->d_name))
-		{
-			ispartial = true;
-			iscompress = true;
 		}
 		else
 			continue;
@@ -168,15 +234,9 @@ FindStreamingStart(TimeLineID *tli)
 
 		/*
 		 * Check that the segment has the right size, if it's supposed to be
-		 * completed.  For non-compressed segments just check the on-disk size
-		 * and see if it matches a completed segment. For compressed segments,
-		 * look at the last 4 bytes of the compressed file, which is where the
-		 * uncompressed size is located for gz files with a size lower than
-		 * 4GB, and then compare it to the size of a completed segment. The 4
-		 * last bytes correspond to the ISIZE member according to
-		 * http://www.zlib.org/rfc-gzip.html.
+		 * completed.
 		 */
-		if (!ispartial && !iscompress)
+		if (!ispartial)
 		{
 			struct stat statbuf;
 			char		fullpath[MAXPGPATH * 2];
@@ -195,53 +255,6 @@ FindStreamingStart(TimeLineID *tli)
 				continue;
 			}
 		}
-		else if (!ispartial && iscompress)
-		{
-			int			fd;
-			char		buf[4];
-			int			bytes_out;
-			char		fullpath[MAXPGPATH * 2];
-			int			r;
-
-			snprintf(fullpath, sizeof(fullpath), "%s/%s", basedir, dirent->d_name);
-
-			fd = open(fullpath, O_RDONLY | PG_BINARY, 0);
-			if (fd < 0)
-			{
-				pg_log_error("could not open compressed file \"%s\": %m",
-							 fullpath);
-				exit(1);
-			}
-			if (lseek(fd, (off_t) (-4), SEEK_END) < 0)
-			{
-				pg_log_error("could not seek in compressed file \"%s\": %m",
-							 fullpath);
-				exit(1);
-			}
-			r = read(fd, (char *) buf, sizeof(buf));
-			if (r != sizeof(buf))
-			{
-				if (r < 0)
-					pg_log_error("could not read compressed file \"%s\": %m",
-								 fullpath);
-				else
-					pg_log_error("could not read compressed file \"%s\": read %d of %zu",
-								 fullpath, r, sizeof(buf));
-				exit(1);
-			}
-
-			close(fd);
-			bytes_out = (buf[3] << 24) | (buf[2] << 16) |
-				(buf[1] << 8) | buf[0];
-
-			if (bytes_out != WalSegSz)
-			{
-				pg_log_warning("compressed segment file \"%s\" has incorrect uncompressed size %d, skipping",
-							   dirent->d_name, bytes_out);
-				continue;
-			}
-		}
-
 		/* Looks like a valid segment. Remember that we saw it. */
 		if ((segno > high_segno) ||
 			(segno == high_segno && tli > high_tli) ||
@@ -264,16 +277,20 @@ FindStreamingStart(TimeLineID *tli)
 	if (high_segno > 0)
 	{
 		XLogRecPtr	high_ptr;
-
+		uint32      high_offs = 0;
 		/*
 		 * Move the starting pointer to the start of the next segment, if the
-		 * highest one we saw was completed. Otherwise start streaming from
-		 * the beginning of the .partial segment.
+		 * highest one we saw was completed.
 		 */
 		if (!high_ispartial)
+		{
 			high_segno++;
-
-		XLogSegNoOffsetToRecPtr(high_segno, 0, WalSegSz, high_ptr);
+		}
+		else if (precise) /* otherwise locate last record in last partial segment */
+		{
+			high_offs = FindEndOfWALSegment(high_segno, high_tli);
+		}
+		XLogSegNoOffsetToRecPtr(high_segno, high_offs, WalSegSz, high_ptr);
 
 		*tli = high_tli;
 		return high_ptr;
@@ -348,7 +365,7 @@ ReadStream(void* buf, size_t size)
 }
 
 /*
- * Accept new connection and if it is safekeeper_proxy than use Paxos-like algorithm to ansure that only one safekeeper_proxy is active.
+ * Accept new connection and if it is safekeeper_proxy than use Paxos-like algorithm to ensure that only one safekeeper_proxy is active.
  * Returns true if we safekeeper is switched to new streamer.
  */
 static bool
@@ -379,7 +396,7 @@ AcceptNewConnection(void)
 	oldStreamer = streamer;
 	streamer = sock;
 	/*
-	 * If it is statandard libpq connection (for example opened by Pager),
+	 * If it is standard libpq connection (for example opened by Pager),
      * then there should be length of startup packet.
      * In case of safekeeper_proxy we pass 0 a length,
      * to distinguish it from standard replication connection.
@@ -406,7 +423,7 @@ AcceptNewConnection(void)
 		}
 		return false;
 	}
-	/* Otherwise it is connection from safekeeper_proxy and we shoudl read information abotu server */
+	/* Otherwise it is connection from safekeeper_proxy and we should read information about server */
 	if (!ReadStream(&serverInfo, sizeof serverInfo))
 	{
 		pg_log_error("Failed to receive server info");
@@ -430,12 +447,13 @@ AcceptNewConnection(void)
 		pg_log_info("Server version doesn't match %d vs. %d", serverInfo.pgVersion, myInfo.server.pgVersion);
 		myInfo.server.pgVersion = serverInfo.pgVersion;
 	}
-	/* Remember server info... */
+	/* Preserve locally stored nodeId */
+	nodeId = myInfo.server.nodeId;
 	myInfo.server = serverInfo;
-	myInfo.server.nodeId = nodeId; /* ... with the proposed node-id */
+	myInfo.server.nodeId = nodeId;
 
-	/* Determine WAL end at storage node */
-	myInfo.flushLsn = FindStreamingStart(&myInfo.server.timeline);
+	/* Calculate WAL end based on local data */
+	myInfo.flushLsn = FindEndOfWAL(&myInfo.server.timeline, true);
 
 	/* Report my identifier to proxy */
 	if (!WriteSocket(sock, &myInfo, sizeof myInfo))
@@ -445,8 +463,8 @@ AcceptNewConnection(void)
 		streamer = oldStreamer;
 		return false;
 	}
-	/* Wait for suggested term */
-	if (!ReadStream(&nodeId, sizeof nodeId))
+	/* Wait for vote request */
+	if (!ReadStream(&gen, sizeof gen))
 	{
 		pg_log_error("Failed to receive handshake response");
 		closesocket(sock);
@@ -455,17 +473,17 @@ AcceptNewConnection(void)
 	}
 
 	/* This is RAFT check which should ensure that only one master can perform commits */
-	if (CompareNodeId(&nodeId, &myInfo.server.nodeId) < 0)
+	if (CompareNodeId(&gen.nodeId, &myInfo.server.nodeId) < 0)
 	{
 		pg_log_info("Reject connection attempt with term " INT64_FORMAT ", because my term is " INT64_FORMAT "",
-					nodeId.term, myInfo.server.nodeId.term);
+					gen.nodeId.term, myInfo.server.nodeId.term);
 		/* Send my node-id to inform proxy that it's candidate was rejected */
 		WriteSocket(sock, &myInfo.server.nodeId, sizeof myInfo.server.nodeId);
 		closesocket(sock);
 		return false;
 	}
-
-	/* Need to persisist our vote first */
+	myInfo.server.nodeId = nodeId;
+	/* Need to persist our vote first */
 	if (!SaveData(controlFile, &myInfo, sizeof myInfo, true))
 	{
 		pg_log_error("Failed to save safekeeper control file");
@@ -474,7 +492,7 @@ AcceptNewConnection(void)
 	/* Good by old streamer */
 	closesocket(oldStreamer);
 
-	/* Acknowledge the proposed candidate by returnung it to the proxy */
+	/* Acknowledge the proposed candidate by returning it to the proxy */
 	if (WriteSocket(sock, &nodeId, sizeof nodeId))
 	{
 		pg_log_info("Switch to new streamer with term " INT64_FORMAT,
@@ -510,10 +528,6 @@ WriteWALFile(XLogRecPtr startpoint, char* rec, size_t recSize)
 
 	/* Extract WAL location for this block */
 	xlogoff = XLogSegmentOffset(startpoint, WalSegSz);
-
-	/* Ping wal sender that new data is available */
-	myInfo.commitLsn = startpoint;
-	NotifyWalSenders(startpoint);
 
 	while (bytes_left)
 	{
@@ -627,10 +641,9 @@ ReceiveWalStream(void)
 	XLogRecPtr startPos;
 	XLogRecPtr endPos;
 	XLogRecPtr flushedRestartLsn = 0;
-	bool       doSync;
 	size_t     recSize;
 	char       buf[MAX_SEND_SIZE];
-	char       hdr[XLOG_HDR_SIZE];
+	SafekeeperRequest req;
 	SafekeeperResponse resp;
 
 	gateway = CreateSocket(host, port, 1);
@@ -642,19 +655,24 @@ ReceiveWalStream(void)
 
 	while (true)
 	{
+		bool syncControlFile = false;
+
 		/* Receive message header */
-		if (!ReadStream(hdr, sizeof hdr))
+		if (!ReadStream(&req, sizeof req))
 			continue;
 
-		if (hdr[0] == 'q')
+		if (CompareNodeId(&req.senderId, &myInfo.server.nodeId) != 0)
+		{
+			pg_log_info("Sender NodeId is changed");
+			break;
+		}
+		if (req.beginLsn == END_OF_STREAM)
 		{
 			pg_log_info("Server stops streaming");
 			break;
 		}
-		Assert(hdr[0] == 'w');
-
-		startPos = fe_recvint64(&hdr[XLOG_HDR_START_POS]);
-		endPos = fe_recvint64(&hdr[XLOG_HDR_END_POS]);
+		startPos = req.beginLsn;
+		endPos = req.endLsn;
 		recSize = (size_t)(endPos - startPos);
 		Assert(recSize <= MAX_SEND_SIZE);
 
@@ -666,24 +684,33 @@ ReceiveWalStream(void)
 		if (!WriteWALFile(startPos, buf, recSize))
 			exit(1);
 
-		/* restartLsn is sent by proxy instead of timestamp */
-		myInfo.restartLsn = fe_recvint64(&hdr[XLOG_HDR_TS_POS]);
+		myInfo.restartLsn = req.restartLsn;
+		myInfo.commitLsn = req.commitLsn;
+		if (endPos > Max(myInfo.flushLsn,gen.VCL))
+		{
+			Assert(myInfo.epoch < gen.epoch);
+			myInfo.epoch = gen.epoch; /* bump epoch */
+			gen.VCL = (XLogRecPtr)-1; /* infinite VCL to prevent further epoch bumps */
+			syncControlFile = true;
+		}
+		if (endPos > myInfo.flushLsn)
+			myInfo.flushLsn = endPos;
 
 		/*
 		 * Update restart LSN in control file.
-		 * To avoid negative impact of performance of extran fsync, do it only
-		 * when restartLsn delat exceeds segment size.
+		 * To avoid negative impact of performance of extra fsync, do it only
+		 * when restartLsn delta exceeds segment size.
 		 */
-		doSync = flushedRestartLsn + myInfo.server.walSegSize < myInfo.restartLsn;
-		if (!SaveData(controlFile, &myInfo, sizeof(myInfo), doSync))
+		syncControlFile |= flushedRestartLsn + myInfo.server.walSegSize < myInfo.restartLsn;
+		if (!SaveData(controlFile, &myInfo, sizeof(myInfo), syncControlFile))
 		{
 			pg_log_error("Failed to save safekeeper control file");
 			exit(1);
 		}
-		if (doSync)
+		if (syncControlFile)
 			flushedRestartLsn = myInfo.restartLsn;
 
-		/* Report flush poistion */
+		/* Report flush position */
 		resp.flushLsn = endPos;
 		CollectHotStanbyFeedbacks(&resp.hs);
 		if (!WriteSocket(streamer, &resp, sizeof(resp)))
@@ -691,6 +718,12 @@ ReceiveWalStream(void)
 			closesocket(streamer);
 			streamer = PGINVALID_SOCKET;
 		}
+
+		/*
+		 * Ping wal sender that new data is available.
+         * FlushLSN (endPos) can be smaller than commitLSN in case we are at catching-up safekeeper.
+		 */
+		NotifyWalSenders(Min(req.commitLsn, endPos));
 	}
 	StopWalSenders();
 }

@@ -33,6 +33,12 @@ SetSocketOptions(pgsocket sock)
 		closesocket(sock);
 		return false;
 	}
+	if (!pg_set_noblock(sock))
+	{
+		pg_log_error("faied to switch socket to non-blocking mode: %m");
+		closesocket(sock);
+		return false;
+	}
 	return true;
 }
 
@@ -62,7 +68,7 @@ ConnectSocketAsync(char const* host, char const* port, bool* established)
 	}
 	for (addr = addrs; addr; addr = addr->ai_next)
 	{
-		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
+		sock = socket(addr->ai_family, SOCK_STREAM, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
 			pg_log_error("could not create socket: %m");
@@ -122,7 +128,7 @@ CreateSocket(char const* host, char const* port, int n_peers)
 	}
 	for (addr = addrs; addr; addr = addr->ai_next)
 	{
-		sock = socket(addr->ai_family, SOCK_STREAM|SOCK_NONBLOCK, 0);
+		sock = socket(addr->ai_family, SOCK_STREAM, 0);
 		if (sock == PGINVALID_SOCKET)
 		{
 			pg_log_error("could not create socket: %m");

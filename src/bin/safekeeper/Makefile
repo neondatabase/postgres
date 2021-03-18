@@ -27,8 +27,8 @@ OBJS = $(WIN32RES) \
 
 all: safekeeper safekeeper_proxy s3offload
 
-safekeeper: safekeeper.o walsender.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) safekeeper.o walsender.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+safekeeper: safekeeper.o walsender.o xlogreader.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+	$(CC) $(CFLAGS) safekeeper.o walsender.o xlogreader.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 safekeeper_proxy: safekeeper_proxy.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) safekeeper_proxy.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
@@ -37,7 +37,10 @@ s3offload: s3offload.o | submake-libpq submake-libpgport submake-libpgfeutils
 	$(CC) $(CFLAGS) s3offload.o $(LDFLAGS) $(LDFLAGS_EX) -o $@$(X) -L$(top_builddir)/src/zenith_s3 -lzeniths3 -lcurl $(LIBS)
 
 streamutil.o: ../pg_basebackup/streamutil.c
-	$(CC) -c $(CFLAGS) $(CPPFLAGS) ../pg_basebackup/streamutil.c -o $@
+	$(CC) -c $(CFLAGS) $(CPPFLAGS) $< -o $@
+
+xlogreader.o: $(top_srcdir)/src/backend/access/transam/xlogreader.c
+	$(CC) -c $(CFLAGS) -DFRONTEND $(CPPFLAGS) $< -o $@
 
 install: all installdirs
 	$(INSTALL_PROGRAM) s3offload$(X) '$(DESTDIR)$(bindir)/s3offload$(X)'
@@ -54,7 +57,7 @@ uninstall:
 
 clean distclean maintainer-clean:
 	rm -f s3offload$(X) safekeeper$(X) safekeeper_proxy$(X) \
-		safekeeper.o safekeeper_proxy.o streamutil.o s3offload.o \
+		safekeeper.o safekeeper_proxy.o streamutil.o xlogreader.o s3offload.o \
 		$(OBJS)
 	rm -rf tmp_check
 

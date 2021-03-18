@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * walsender.c - stream WAL from safekeeper to pager
+ * walsender.c - stream WAL from safekeeper to pager/replicas
  *
  * Author: Konstantin Knizhnik (knizhnik@garret.ru)
  *
@@ -49,10 +49,11 @@ DequeueWalSender(WalSender* ws)
 void
 NotifyWalSenders(XLogRecPtr lsn)
 {
-	pthread_mutex_lock(&mutex);
-	commitLsn = lsn;
-	pthread_cond_broadcast(&cond);
-	pthread_mutex_unlock(&mutex);
+	if (lsn > commitLsn)
+	{
+		commitLsn = lsn;
+		pthread_cond_broadcast(&cond);
+	}
 }
 
 /*
@@ -104,7 +105,7 @@ WalSenderMain(void* arg)
 		pg_log_error("Failed to switch socket to blocking mode");
 		goto Epilogue;
 	}
-	/* Read and just ignire startup packet */
+	/* Read and just ignore startup packet */
 	startupBuf = pg_malloc(LIBPQ_DATA_SIZE(ws->startupPacketLength));
 	if (!ReadSocket(ws->sock, startupBuf, LIBPQ_DATA_SIZE(ws->startupPacketLength)))
 	{
@@ -157,7 +158,7 @@ WalSenderMain(void* arg)
 			int timeline_len;
 			int sysid_len;
 
-			startpos = FindStreamingStart(&timeline);
+			startpos = FindEndOfWAL(&timeline, false);
 			lsn_len = sprintf(lsn_buf, "%X/%X", (uint32)(startpos>>32), (uint32)startpos);
 			timeline_len = sprintf(timeline_buf, "%d", timeline);
 			sysid_len = sprintf(sysid_buf, INT64_FORMAT, ws->systemId);
@@ -221,7 +222,7 @@ WalSenderMain(void* arg)
 			}
 			startpos = ((XLogRecPtr)w[0] << 32) | w[1];
 			if (startpos == 0)
-				startpos = FindStreamingStart(&timeline);
+				startpos = FindEndOfWAL(&timeline, false);
 			if (rc == 5)
 				ws->stopLsn = ((XLogRecPtr)w[2] << 32) | w[3];
 			msg = msgBuf;
@@ -298,7 +299,7 @@ WalSenderMain(void* arg)
 			XLByteToSeg(startpos, segno, ws->walSegSize);
 			XLogFileName(walfile_name, timeline, segno, ws->walSegSize);
 
-			/* First try to open partial file, because it can be concurrenty renamed */
+			/* First try to open partial file, because it can be concurrently renamed */
 			sprintf(walfile_path, "%s/%s.partial", ws->basedir, walfile_name);
 			walfile = open(walfile_path, O_RDONLY | PG_BINARY, 0);
 			if (walfile < 0)
@@ -334,7 +335,7 @@ WalSenderMain(void* arg)
 		msg += 8;
 		fe_sendint64(feGetCurrentTimestamp(), msg);	/* sendtime  */
 		msg += 8;
-		Assert(msg - msgBuf ==  LIBPQ_HDR_SIZE + XLOG_HDR_SIZE);
+		Assert(msg - msgBuf == LIBPQ_HDR_SIZE + XLOG_HDR_SIZE);
 		if (!WriteSocket(ws->sock, msgBuf, msgSize))
 			goto Epilogue;
 
@@ -378,7 +379,7 @@ StartWalSender(pgsocket sock, char const* basedir, int startupPacketLength, int 
 	rc = pthread_create(&ws->thread, NULL, WalSenderMain, ws);
 	if (rc != 0)
 	{
-		pg_log_error("Failed to lauch thread: %m");
+		pg_log_error("Failed to launch thread: %m");
 		pg_free(ws);
 	}
 }

@@ -17,26 +17,16 @@
 #define XLOG_HDR_SIZE         (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
 #define XLOG_HDR_START_POS    1        /* offset of start position in wal sender message header */
 #define XLOG_HDR_END_POS      (1+8)    /* offset of end position in wal sender message header */
-#define XLOG_HDR_TS_POS       (1+8+8)  /* offset of timestamp in wal sender message header */
 #define KEEPALIVE_RR_OFFS     17       /* offset of reply requested field in keep alive request */
 #define LIBPQ_HDR_SIZE        5        /* 1 byte with message type + 4 bytes length */
 #define REPLICA_FEEDBACK_SIZE 64       /* size of replica's feedback */
 #define HS_FEEDBACK_SIZE      25       /* hot standby feedback size */
-#define LIBPQ_MSG_SIZE_OFFS   1        /* offset of message size innise libpq header */
+#define LIBPQ_MSG_SIZE_OFFS   1        /* offset of message size inside libpq header */
 #define LIBPQ_DATA_SIZE(sz)   ((sz)-4) /* size of libpq message includes 4-bytes size field */
-#define WAL_MSG_END(msg)      ((msg)->walPos + (msg)->size - XLOG_HDR_SIZE)
-/*
- * All copy data message ('w') are linked in L1 send list and asynhronously sent to receivers.
- * When message is sent to all receivers, it is removed from send list.
- */
-typedef struct WalMessage
-{
-	struct WalMessage* next;
-	char*  data;         /* message data */
-	uint32 size;         /* message size */
-	uint32 ackMask;      /* mask of receivers acknowledged receiving of this message */
-	XLogRecPtr walPos;   /* message position in WAL */
-} WalMessage;
+#define END_OF_STREAM         InvalidXLogRecPtr
+
+struct WalMessage;
+typedef struct WalMessage WalMessage;
 
 /* Safekeeper_proxy states */
 typedef enum
@@ -44,7 +34,7 @@ typedef enum
 	SS_OFFLINE,
 	SS_CONNECTING,
 	SS_HANDSHAKE,
-	SS_VOTE,
+	SS_VOTING,
 	SS_WAIT_VERDICT,
 	SS_IDLE,
 	SS_SEND_WAL,
@@ -65,7 +55,7 @@ typedef struct NodeId
  */
 typedef struct ServerInfo
 {
-	uint32     protocolVersion;   /* proxy-safekeeer protocol version */
+	uint32     protocolVersion;   /* proxy-safekeeper protocol version */
 	uint32     pgVersion;         /* Postgres server version */
 	NodeId     nodeId;
 	uint64     systemId;          /* Postgres system identifier */
@@ -75,12 +65,23 @@ typedef struct ServerInfo
 } ServerInfo;
 
 /*
+ * Vote request sent from proxy to safekeepers
+ */
+typedef struct RequestVote
+{
+	NodeId     nodeId;
+	XLogRecPtr VCL;   /* volume commit LSN */
+	uint64     epoch; /* new epoch when safekeeper reaches VCL */
+} RequestVote;
+
+/*
  * Information of about storage node
  */
 typedef struct SafeKeeperInfo
 {
 	uint32     magic;             /* magic for verifying content the control file */
 	uint32     formatVersion;     /* safekeeper format version */
+	uint64     epoch;             /* safekeeper's epoch */
 	ServerInfo server;
 	XLogRecPtr commitLsn;         /* part of WAL acknowledged by quorum */
 	XLogRecPtr flushLsn;          /* locally flushed part of WAL */
@@ -114,6 +115,31 @@ typedef struct WalSender
 	XLogRecPtr         stopLsn;
 } WalSender;
 
+
+/*
+ * Request with WAL message sent from proxy to safekeeper.
+ */
+typedef struct SafekeeperRequest
+{
+	NodeId     senderId;    /* Sender's node identifier (looks like we do not need it for TCP streaming connection) */
+	XLogRecPtr beginLsn;    /* start position of message in WAL */
+	XLogRecPtr endLsn;      /* end position of message in WAL */
+	XLogRecPtr restartLsn;  /* restart LSN position  (minimal LSN which may be needed by proxy to perform recovery) */
+	XLogRecPtr commitLsn;   /* LSN committed by quorum of safekeepers */
+} SafekeeperRequest;
+
+/*
+ * All copy data message ('w') are linked in L1 send list and asynchronously sent to receivers.
+ * When message is sent to all receivers, it is removed from send list.
+ */
+struct WalMessage
+{
+	WalMessage* next;      /* L1 list of messages */
+	uint32 size;           /* message size */
+	uint32 ackMask;        /* mask of receivers acknowledged receiving of this message */
+	SafekeeperRequest req; /* request to safekeeper (message header) */
+};
+
 /*
  * Report safekeeper state to proxy
  */
@@ -122,6 +148,7 @@ typedef struct SafekeeperResponse
 	XLogRecPtr flushLsn;
 	HotStandbyFeedback hs;
 } SafekeeperResponse;
+
 
 /*
  * Descriptor of safekeeper
@@ -156,7 +183,7 @@ void       fe_sendint32(int32 i, char *buf);
 int32      fe_recvint32(char *buf);
 void       fe_sendint16(int16 i, char *buf);
 int16      fe_recvint16(char *buf);
-XLogRecPtr FindStreamingStart(TimeLineID *tli);
+XLogRecPtr FindEndOfWAL(TimeLineID *tli, bool precise);
 void       CollectHotStanbyFeedbacks(HotStandbyFeedback* hs);
 PGconn*    ConnectSafekeeper(char const* host, char const* port);
 

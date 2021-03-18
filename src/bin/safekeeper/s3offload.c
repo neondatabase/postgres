@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * s3offload.c - offloat completed WAL segments to S3 and remove too old segments from local storage
+ * s3offload.c - offload completed WAL segments to S3 and remove too old segments from local storage
  *
  * Author: Konstantin Knizhnik (knizhnik@garret.ru)
  *
@@ -39,7 +39,7 @@ static CURL *curl;
 static void
 usage(void)
 {
-	printf(_("s3ofload push WAL files from safekeeper local directry to S3.\n\n"));
+	printf(_("s3offload push WAL files from safekeeper local directory to S3.\n\n"));
 	printf(_("Usage:\n"));
 	printf(_("  s3offload [OPTION]...\n"));
 	printf(_("\nOptions:\n"));
@@ -86,7 +86,7 @@ main(int argc, char **argv)
 		else if (strcmp(argv[1], "-V") == 0 ||
 				 strcmp(argv[1], "--version") == 0)
 		{
-			puts("safekeeper (PostgreSQL) " PG_VERSION);
+			puts("s3offload (PostgreSQL) " PG_VERSION);
 			exit(0);
 		}
 	}

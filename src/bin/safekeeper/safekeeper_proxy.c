@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * safekeeper_proxy.c - receive streaming WAL data and braodcast it to multiple safekeepers
+ * safekeeper_proxy.c - receive WAL stream from master and broadcast it to multiple safekeepers
  *
  * Author: Konstantin Knizhnik <knizhnik@garret.ru>
  *
@@ -39,8 +39,9 @@ static fd_set       readSet;
 static fd_set       writeSet;
 static int          maxFds;
 static SafekeeperResponse lastFeedback;
-static XLogRecPtr   minRestartLsn; /* Last position received by all safekeepers. */
-
+static XLogRecPtr   restartLsn; /* Last position received by all safekeepers. */
+static RequestVote  gen;       /* Vote request for safekeeper */
+static int          leader;    /* Most advanced safekeeper */
 static void
 disconnect_atexit(void)
 {
@@ -156,7 +157,7 @@ ResetConnection(int i)
 		pg_log_info("Connection with node %s:%s failed: %m",
 					safekeeper[i].host, safekeeper[i].port);
 
-		/* Close old connecton */
+		/* Close old connection */
 		closesocket(safekeeper[i].sock);
 		FD_CLR(safekeeper[i].sock, &writeSet);
 		FD_CLR(safekeeper[i].sock, &readSet);
@@ -217,7 +218,9 @@ GetAcknowledgedByQuorumWALPosition(void)
 	return responses[n_safekeepers - quorum];
 }
 
-
+/*
+ * Recompute commitLSN and send feedbacks to master if needed
+ */
 static bool
 HandleSafekeeperResponse(PGconn* conn)
 {
@@ -242,10 +245,9 @@ HandleSafekeeperResponse(PGconn* conn)
 	{
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
-		Assert(minRestartLsn <= msg->walPos);
-		minRestartLsn = WAL_MSG_END(msg);
-		pfree(msg->data);
-		pfree(msg);
+		Assert(restartLsn <= msg->req.beginLsn);
+		restartLsn = msg->req.endLsn;
+		pg_free(msg);
 	}
 	if (!msgQueueHead) /* queue is empty */
 		msgQueueTail = NULL;
@@ -263,7 +265,7 @@ usage(void)
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
 	printf(_("  -q, --quorum           quorum for sending response to server\n"));
-	printf(_("  -r, --safekeepers      comma separated list of safe keeprs in format 'host1:port1,host2:port2'\n"));
+	printf(_("  -r, --safekeepers      comma separated list of safekeeprs in format 'host1:port1,host2:port2'\n"));
 	printf(_("  -v, --verbose          output verbose messages\n"));
 	printf(_("  -V, --version          output version information, then exit\n"));
 	printf(_("  -?, --help             show this help, then exit\n"));
@@ -295,10 +297,9 @@ SendMessageToNode(int i, WalMessage* msg)
 
 	if (msg != NULL)
 	{
-		/* Send minRestartLsn instead of timestamp (which is not needed for safekeepers) */
-		fe_sendint64(minRestartLsn, &msg->data[XLOG_HDR_TS_POS]);
-
-		rc = WriteSocketAsync(safekeeper[i].sock, msg->data, msg->size);
+		msg->req.restartLsn = restartLsn;
+		msg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
+		rc = WriteSocketAsync(safekeeper[i].sock, &msg->req, msg->size);
 		if (rc < 0)
 		{
 			ResetConnection(i);
@@ -310,7 +311,7 @@ SendMessageToNode(int i, WalMessage* msg)
 		}
 		else
 		{
-			/* wait until socket is avaialble for write */
+			/* wait until socket is available for write */
 			safekeeper[i].state = SS_SEND_WAL;
 			safekeeper[i].asyncOffs = rc;
 			FD_SET(safekeeper[i].sock, &writeSet);
@@ -319,7 +320,7 @@ SendMessageToNode(int i, WalMessage* msg)
 }
 
 /*
- * Broadcast new message tp all caught-up safekeepers
+ * Broadcast new message to all caught-up safekeepers
  */
 static void
 BroadcastMessage(WalMessage* msg)
@@ -340,7 +341,10 @@ BroadcastMessage(WalMessage* msg)
 static void
 StopSafekeepers(void)
 {
-	char const msg[XLOG_HDR_SIZE] = {'q'}; /* quit */
+	SafekeeperRequest req;
+	req.senderId = serverInfo.nodeId;
+	req.beginLsn = END_OF_STREAM;
+	req.endLsn = END_OF_STREAM;
 
 	Assert(!msgQueueHead); /* there should be no pending messages */
 
@@ -348,7 +352,7 @@ StopSafekeepers(void)
 	{
 		if (safekeeper[i].sock != PGINVALID_SOCKET)
 		{
-			WriteSocket(safekeeper[i].sock, msg, sizeof(msg));
+			WriteSocket(safekeeper[i].sock, &req, sizeof(req));
 			closesocket(safekeeper[i].sock);
 			safekeeper[i].sock = PGINVALID_SOCKET;
 		}
@@ -356,26 +360,31 @@ StopSafekeepers(void)
 }
 
 /*
- * Create WAL message frpm received COPy data and link it into queue
+ * Create WAL message from received COPY data and link it into queue
  */
 static WalMessage*
 CreateMessage(char* data, int len)
 {
 	/* Create new message and append it to message queue */
-	WalMessage*	msg = (WalMessage*)pg_malloc(sizeof(WalMessage));
+	WalMessage*	msg;
+
+	len -= XLOG_HDR_SIZE; /* skip message header */
+
+	msg = (WalMessage*)pg_malloc(sizeof(WalMessage) + len);
 	if (msgQueueTail != NULL)
 		msgQueueTail->next = msg;
 	else
 		msgQueueHead = msg;
 	msgQueueTail = msg;
 
-	msg->data = data;
-	msg->size = len;
+	msg->size = sizeof(SafekeeperRequest) + len;
 	msg->next = NULL;
 	msg->ackMask = 0;
-	msg->walPos = fe_recvint64(&data[XLOG_HDR_START_POS]);
-	/* Set walEnd to the end of the record - we will use it at safekeepr to calculate wal record size */
-	fe_sendint64(WAL_MSG_END(msg), &data[XLOG_HDR_END_POS]);
+	msg->req.beginLsn = fe_recvint64(&data[XLOG_HDR_START_POS]);
+	msg->req.endLsn = msg->req.beginLsn + len;
+	msg->req.senderId = serverInfo.nodeId;
+	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
+	pg_free(data);
 	return msg;
 }
 
@@ -383,52 +392,32 @@ CreateMessage(char* data, int len)
  * Synchronize state of safekeepers.
  * We will find most advanced safekeeper within quorum and download
  * from it WAL from max(restartLsn) till max(flushLsn).
- * Then we adjust message queue to popuate rest safekeepers with missed WAL.
+ * Then we adjust message queue to populate rest safekeepers with missed WAL.
  * It enforces the rule that there are no "alternative" versions of WAL in safekeepers.
- * Before any record from new epoch can reach safekeeper, we enforce that all WAL records fro prior epoches
+ * Before any record from new epoch can reach safekeeper, we enforce that all WAL records fro prior epochs
  * are pushed here.
  */
 static bool
 StartRecovery(void)
 {
-	int i;
-	XLogRecPtr restartLsn = serverInfo.walSegSize;
-	XLogRecPtr flushLsn = 0;
-	int mostAdvancedSafekeeper = 0;
-	PGresult  *res;
+	if (verbose)
+		pg_log_info("Restart LSN=" INT64_FORMAT ", VCL=" INT64_FORMAT,
+					restartLsn, gen.VCL);
 
-	/* Determine max(restartLsn) and max(flushLsn) within quorum */
-	for (i = 0; i < n_safekeepers; i++)
+	if (restartLsn != gen.VCL) /* if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
 	{
-		if (safekeeper[i].state == SS_IDLE)
-		{
-			/* We took maximum of restartLsn stored at safekeepers because it is most up-to-data value */
-			restartLsn = Max(safekeeper[i].info.restartLsn, restartLsn);
-			if (safekeeper[i].info.flushLsn > flushLsn)
-			{
-				flushLsn = safekeeper[i].info.flushLsn;
-				mostAdvancedSafekeeper = i;
-			}
-		}
-	}
-	pg_log_info("Restart LSN=" INT64_FORMAT ", flush LSN=" INT64_FORMAT,
-				restartLsn, flushLsn);
-
-	minRestartLsn = restartLsn;
-
-	if (restartLsn != flushLsn) /* if not all safekeepers are up-to-date, we need to download WAL needed to sycnhronize them */
-	{
+		PGresult  *res;
 		WalMessage* msg;
 		char query[256];
-		PGconn* conn = ConnectSafekeeper(safekeeper[mostAdvancedSafekeeper].host,
-										 safekeeper[mostAdvancedSafekeeper].port);
+		PGconn* conn = ConnectSafekeeper(safekeeper[leader].host,
+										 safekeeper[leader].port);
 		if (!conn)
 			return false;
 
-		snprintf(query, sizeof(query), "START_REPLICATION %X/%X TIMELINE %u TILL %X/%X", /* TILL is safekeeper exension of START_REPLICATION command */
+		snprintf(query, sizeof(query), "START_REPLICATION %X/%X TIMELINE %u TILL %X/%X", /* TILL is safekeeper extension of START_REPLICATION command */
 				 (uint32) (restartLsn >> 32), (uint32)restartLsn,
 				 serverInfo.timeline,
-				 (uint32) (flushLsn >> 32), (uint32)flushLsn);
+				 (uint32) (gen.VCL >> 32), (uint32)gen.VCL);
 		res = PQexec(conn, query);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
@@ -439,8 +428,8 @@ StartRecovery(void)
 			return false;
 		}
 		/*
-		 * Receive WAL from most advaned safekeeper. As far as connection quorum may be different from last commit quorum,
-		 * we can not conclude wether last wal record was committed or not. So we assume that it is committed and replicate it
+		 * Receive WAL from most advanced safekeeper. As far as connection quorum may be different from last commit quorum,
+		 * we can not conclude weather last wal record was committed or not. So we assume that it is committed and replicate it
 		 * to all all safekeepers.
 		 */
 		do
@@ -458,18 +447,18 @@ StartRecovery(void)
 			}
 			Assert (copybuf[0] == 'w');
 			msg = CreateMessage(copybuf, rawlen);
-		} while (WAL_MSG_END(msg) < flushLsn); /* loop until we reach last flush position */
+		} while (msg->req.endLsn < gen.VCL); /* loop until we reach last flush position */
 
 		/* Setup restart point for all safekeepers */
-		for (i = 0; i < n_safekeepers; i++)
+		for (int i = 0; i < n_safekeepers; i++)
 		{
 			if (safekeeper[i].state == SS_IDLE)
 			{
 				for (msg = msgQueueHead; msg != NULL; msg = msg->next)
 				{
-					if (WAL_MSG_END(msg) <= safekeeper[i].info.flushLsn)
+					if (msg->req.endLsn <= safekeeper[i].info.flushLsn)
 					{
-						msg->ackMask |= 1 << i; /* message is aready received by this safekeeper */
+						msg->ackMask |= 1 << i; /* message is already received by this safekeeper */
 					}
 					else
 					{
@@ -483,6 +472,33 @@ StartRecovery(void)
 	return true;
 }
 
+
+/*
+ * Prepare vote request for election
+ */
+static void
+StartElection(void)
+{
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (safekeeper[i].state == SS_VOTING)
+		{
+			gen.nodeId.term = Max(safekeeper[i].info.server.nodeId.term, gen.nodeId.term);
+			restartLsn = Max(safekeeper[i].info.restartLsn, restartLsn);
+			if (safekeeper[i].info.epoch > gen.epoch
+				|| (safekeeper[i].info.epoch == gen.epoch && safekeeper[i].info.flushLsn > gen.VCL))
+
+			{
+				gen.epoch = safekeeper[i].info.epoch;
+				gen.VCL = safekeeper[i].info.flushLsn;
+				leader = i;
+			}
+		}
+	}
+	gen.nodeId.term += 1;
+	gen.epoch += 1;
+}
+
 /*
  * Start WAL sender at master
  */
@@ -491,7 +507,7 @@ StartReplication(PGconn* conn)
 {
 	char	   query[128];
 	PGresult  *res;
-	XLogRecPtr startpos = serverInfo.walEnd;
+	XLogRecPtr startpos = gen.VCL;
 
 	/*
 	 * Always start streaming at the beginning of a segment
@@ -528,7 +544,6 @@ BroadcastWalStream(PGconn* conn)
 	ssize_t  rc;
 	int      n_votes = 0;
 	int      n_connected = 0;
-	NodeId   maxNodeId;
 
 	FD_ZERO(&readSet);
 	FD_ZERO(&writeSet);
@@ -607,7 +622,7 @@ BroadcastWalStream(PGconn* conn)
 						  }
 						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].info))
 						  {
-							  /* Safekeeper resonse completely received */
+							  /* Safekeeper response completely received */
 
 							  /* Check protocol version */
 							  if (safekeeper[i].info.server.protocolVersion != SK_PROTOCOL_VERSION)
@@ -618,26 +633,22 @@ BroadcastWalStream(PGconn* conn)
 							  }
 							  else
 							  {
-								  safekeeper[i].state = SS_VOTE;
-								  safekeeper[i].feedback.flushLsn = safekeeper[i].info.server.walEnd;
+								  safekeeper[i].state = SS_VOTING;
+								  safekeeper[i].feedback.flushLsn = safekeeper[i].info.flushLsn;
 								  safekeeper[i].feedback.hs.ts = 0;
-
-								  /* RAFT term comparison */
-								  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &maxNodeId) > 0)
-									  maxNodeId = safekeeper[i].info.server.nodeId;
 
 								  /* Check if we have quorum */
 								  if (++n_connected >= quorum)
 								  {
 									  if (n_connected == quorum)
-										  maxNodeId.term += 1; /* increment term to generate new unique identifier */
+										  StartElection();
 
 									  /* Now send max-node-id to everyone participating in voting and wait their responses */
 									  for (int j = 0; j < n_safekeepers; j++)
 									  {
-										  if (safekeeper[j].state == SS_VOTE)
+										  if (safekeeper[j].state == SS_VOTING)
 										  {
-											  if (!WriteSocket(safekeeper[j].sock, &maxNodeId, sizeof(maxNodeId)))
+											  if (!WriteSocket(safekeeper[j].sock, &gen, sizeof(gen)))
 											  {
 												  ResetConnection(j);
 											  }
@@ -668,11 +679,11 @@ BroadcastWalStream(PGconn* conn)
 							  /* Response completely received */
 
 							  /* If server accept our candidate, then it returns it in response */
-							  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &maxNodeId) != 0)
+							  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &serverInfo.nodeId) != 0)
 							  {
 								  pg_log_error("SafeKeeper %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 											   safekeeper[i].host, safekeeper[i].port,
-											   safekeeper[i].info.server.nodeId.term, maxNodeId.term);
+											   safekeeper[i].info.server.nodeId.term, serverInfo.nodeId.term);
 								  exit(1);
 							  }
 							  else
@@ -681,8 +692,9 @@ BroadcastWalStream(PGconn* conn)
 								  safekeeper[i].state = SS_IDLE;
 								  if (++n_votes == quorum)
 								  {
-									  pg_log_info("Successfully established connection with %d nodes and start streaming",
-												  quorum);
+									  if (verbose)
+										  pg_log_info("Successfully established connection with %d nodes", quorum);
+
 									  /* Perform recovery */
 									  if (!StartRecovery())
 										  exit(1);
@@ -719,7 +731,7 @@ BroadcastWalStream(PGconn* conn)
 						  else if ((safekeeper[i].asyncOffs += rc) == sizeof(safekeeper[i].feedback))
 						  {
 							  WalMessage* next = safekeeper[i].currMsg->next;
-							  Assert(safekeeper[i].feedback.flushLsn == fe_recvint64(&safekeeper[i].currMsg->data[XLOG_HDR_END_POS]));
+							  Assert(safekeeper[i].feedback.flushLsn == safekeeper[i].currMsg->req.endLsn);
 							  safekeeper[i].currMsg->ackMask |= 1 << i; /* this safekeeper confirms receiving of this message */
 							  safekeeper[i].state = SS_IDLE;
 							  safekeeper[i].asyncOffs = 0;
@@ -737,7 +749,7 @@ BroadcastWalStream(PGconn* conn)
 					  }
 					  case SS_IDLE:
 					  {
-						  pg_log_info("Safekeer %s:%s drops connection", safekeeper[i].host, safekeeper[i].port);
+						  pg_log_info("Safekeeper %s:%s drops connection", safekeeper[i].host, safekeeper[i].port);
 						  ResetConnection(i);
 						  break;
 					  }
@@ -772,7 +784,7 @@ BroadcastWalStream(PGconn* conn)
 							  FD_SET(safekeeper[i].sock, &readSet);
 							  /*
 							   * Start handshake: send information about server.
-							   * Frist of all send 0 as package size: it allows safe keeper to distinguish
+							   * First of all send 0 as package size: it allows safekeeper to distinguish
 							   * connection from safekeeper_proxy from standard replication connection from pagers.
 							   */
 							  if (WriteSocket(safekeeper[i].sock, &len, sizeof len)
@@ -790,7 +802,7 @@ BroadcastWalStream(PGconn* conn)
 					  }
 					  case SS_SEND_WAL:
 					  {
-						  rc = WriteSocketAsync(safekeeper[i].sock, safekeeper[i].currMsg->data + safekeeper[i].asyncOffs, safekeeper[i].currMsg->size - safekeeper[i].asyncOffs);
+						  rc = WriteSocketAsync(safekeeper[i].sock, (char*)&safekeeper[i].currMsg->req + safekeeper[i].asyncOffs, safekeeper[i].currMsg->size - safekeeper[i].asyncOffs);
 						  if (rc < 0)
 						  {
 							  ResetConnection(i);
@@ -853,7 +865,7 @@ main(int argc, char **argv)
 		else if (strcmp(argv[1], "-V") == 0 ||
 				 strcmp(argv[1], "--version") == 0)
 		{
-			puts("sefekeeper (PostgreSQL) " PG_VERSION);
+			puts("safekeeper (PostgreSQL) " PG_VERSION);
 			exit(0);
 		}
 	}
@@ -940,7 +952,7 @@ main(int argc, char **argv)
 	}
 	if (n_safekeepers < 1)
 	{
-		pg_log_error("Safekeepers addresses aer not specified");
+		pg_log_error("Safekeepers addresses are not specified");
 		exit(1);
 	}
 	if (quorum == 0)
