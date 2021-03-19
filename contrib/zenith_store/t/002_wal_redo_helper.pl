@@ -32,6 +32,15 @@ my $h = IPC::Run::start(['postgres', '--wal-redo'],
 						\$err,
 						IPC::Run::timeout( 10 ));
 
+# Send page prepare request
+$in .= send_msg('B', pack ("L> L> L> L> L>",
+						   12,   # spcNode
+						   34,   # dbNode
+						   45,   # relNode
+						   0,    # forkNum
+						   67)); # blknum,
+$h->pump() while length $in;
+
 # Send PushPage request
 
 # Construct a page header

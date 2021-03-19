@@ -91,6 +91,8 @@ static void GetPage(StringInfo input_message);
 
 static List *redo_prepared_for = NIL;
 
+#define TRACE DEBUG5
+
 /* ----------------------------------------------------------------
  * FIXME comment
  * PostgresMain
@@ -303,8 +305,44 @@ WalRedoMain(int argc, char *argv[],
 	}							/* end of input-reading loop */
 }
 
+/*
+ * Some debug function that may be handy for now.
+ */
 
+static char *
+pprint_buffer(char *data, int len)
+{
+	StringInfoData s;
+	initStringInfo(&s);
+	appendStringInfo(&s, "\n");
+	for (int i = 0; i < len; i++) {
 
+		appendStringInfo(&s, "%02x ", (*(((char *) data) + i) & 0xff) );
+		if (i % 32 == 31) {
+			appendStringInfo(&s, "\n");
+		}
+	}
+	appendStringInfo(&s, "\n");
+
+	return s.data;
+}
+
+static char *
+pprint_tag(BufferTag *tag)
+{
+	StringInfoData s;
+	initStringInfo(&s);
+
+	appendStringInfo(&s, "%d.%d.%d.%d.%u",
+		tag->rnode.spcNode,
+		tag->rnode.dbNode,
+		tag->rnode.relNode,
+		tag->forkNum,
+		tag->blockNum
+	);
+
+	return s.data;
+}
 /* ----------------------------------------------------------------
  *		routines to obtain user input
  * ----------------------------------------------------------------
@@ -391,6 +429,9 @@ BeginRedoForBlock(StringInfo input_message)
 	INIT_BUFFERTAG(*tag, rnode, forknum, blknum);
 
 	redo_prepared_for = lappend(redo_prepared_for, tag);
+
+	elog(TRACE, "redo_prepared_for: add %s", pprint_tag(tag));
+
 	MemoryContextSwitchTo(oldcxt);
 
 	reln = smgropen(rnode, InvalidBackendId);
@@ -468,7 +509,7 @@ ApplyRecord(StringInfo input_message)
 
 	nleft = input_message->len - input_message->cursor;
 	if (record->xl_tot_len != sizeof(XLogRecord) + nleft)
-		elog(ERROR, "mismatch between record (%d) and message size (%d",
+		elog(ERROR, "mismatch between record (%d) and message size (%d)",
 			 record->xl_tot_len, (int) sizeof(XLogRecord) + nleft);
 
 	/* FIXME: use XLogReaderAllocate() */
@@ -487,7 +528,7 @@ ApplyRecord(StringInfo input_message)
 	RmgrTable[record->xl_rmid].rm_redo(&reader_state);
 
 	redo_read_buffer_filter = NULL;
-	
+
 	elog(LOG, "applied WAL record at %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
@@ -500,6 +541,7 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 {
 	BufferTag	target_tag;
 	ListCell   *lc;
+	bool ret = true;
 
 	if (!XLogRecGetBlockTag(record, block_id,
 							&target_tag.rnode, &target_tag.forkNum, &target_tag.blockNum))
@@ -517,10 +559,16 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 		BufferTag *tag = (BufferTag *) lfirst(lc);
 
 		if (BUFFERTAGS_EQUAL(target_tag, *tag))
-			return false;
+		{
+			ret = false;
+			elog(TRACE, "redo_block_filter: %s vs %s", pprint_tag(&target_tag), pprint_tag(tag));
+			break;
+		}
 	}
 
-	return true;
+	elog(TRACE, "redo_block_filter: %d", ret);
+
+	return ret;
 }
 
 /*
@@ -563,4 +611,6 @@ GetPage(StringInfo input_message)
 	fflush(stdout);
 
 	ReleaseBuffer(buf);
+
+	elog(TRACE, "Page sent back!");
 }
