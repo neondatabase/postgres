@@ -233,7 +233,14 @@ WalRedoMain(int argc, char *argv[],
 	/* we need a ResourceOwner to hold buffer pins */
 	Assert(CurrentResourceOwner == NULL);
 	CurrentResourceOwner = ResourceOwnerCreate(NULL, "wal redo");
-	
+
+	/* Initialize resource managers */
+	for (int rmid = 0; rmid <= RM_MAX_ID; rmid++)
+	{
+		if (RmgrTable[rmid].rm_startup != NULL)
+			RmgrTable[rmid].rm_startup();
+	}
+
 	/*
 	 * Main processing loop
 	 */
