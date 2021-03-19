@@ -18,9 +18,7 @@ if ($action eq "start")
 	my $primary_connstr = $node_primary->connstr('postgres');
 	$primary_connstr =~ s/\'//g;
 
-	my $page_server = get_new_node('pageserver');
-	my $pager_connstr = $page_server->connstr('postgres');
-	$pager_connstr =~ s/\'//g;
+	my $pager_connstr = "host=127.0.0.1 port=5430 dbname=postgres";
 
 	#
 	# Initialize primary node
@@ -42,16 +40,9 @@ if ($action eq "start")
 	#
 	# Initialize page store
 	#
-	$page_server->init;
-	$page_server->append_conf('postgresql.conf', qq{
-		log_line_prefix = '%m [%p] [xid%x] %i '
-		log_statement = all
-		shared_preload_libraries = 'zenith_store'
-		zenith_store.connstr = '$primary_connstr'
-	});
-	$page_server->start;
-	$page_server->safe_psql("postgres", "CREATE EXTENSION zenith_store");
+	# TestLib::system_log('../../pageserver/target/debug/pageserver');
 
+	# defuse PostgresNode.pm automatical shutdown at exit
 	@PostgresNode::all_nodes = ();
 }
 elsif ($action eq "stop")

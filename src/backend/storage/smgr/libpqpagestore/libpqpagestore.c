@@ -59,7 +59,7 @@ zenith_connect()
 					errdetail_internal("%s", msg)));
 	}
 
-	char	   *query = psprintf("select zenith_store.dispatcher_loop()");
+	char	   *query = psprintf("pagestream");
 	int ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 		zenith_log(ERROR,
