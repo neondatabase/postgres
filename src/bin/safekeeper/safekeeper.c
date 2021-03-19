@@ -305,7 +305,7 @@ FindEndOfWAL(TimeLineID *tli, bool precise)
 static bool
 ReadStream(void* buf, size_t size)
 {
-	size_t  rc;
+	ssize_t rc;
 	char*   src = (char*)buf;
 
 	while (size != 0)
@@ -688,7 +688,7 @@ ReceiveWalStream(void)
 		myInfo.commitLsn = req.commitLsn;
 		if (endPos > Max(myInfo.flushLsn,gen.VCL))
 		{
-			Assert(myInfo.epoch < gen.epoch);
+			Assert(myInfo.epoch <= gen.epoch);
 			myInfo.epoch = gen.epoch; /* bump epoch */
 			gen.VCL = (XLogRecPtr)-1; /* infinite VCL to prevent further epoch bumps */
 			syncControlFile = true;

@@ -29,6 +29,7 @@
 static int	verbose = 0;
 static int  quorum = 0;
 static int  n_safekeepers = 0;
+static int  reconnect_timeout = 10; /* seconds */
 
 static char*        safekeepersList;
 static Safekeeper   safekeeper[MAX_SAFEKEEPERS];
@@ -42,6 +43,8 @@ static SafekeeperResponse lastFeedback;
 static XLogRecPtr   restartLsn; /* Last position received by all safekeepers. */
 static RequestVote  gen;       /* Vote request for safekeeper */
 static int          leader;    /* Most advanced safekeeper */
+
+
 static void
 disconnect_atexit(void)
 {
@@ -245,8 +248,8 @@ HandleSafekeeperResponse(PGconn* conn)
 	{
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
-		Assert(restartLsn <= msg->req.beginLsn);
-		restartLsn = msg->req.endLsn;
+		if (restartLsn < msg->req.beginLsn)
+			restartLsn = msg->req.endLsn;
 		pg_free(msg);
 	}
 	if (!msgQueueHead) /* queue is empty */
@@ -264,18 +267,19 @@ usage(void)
 	printf(_("Usage:\n"));
 	printf(_("  %s [OPTION]...\n"), progname);
 	printf(_("\nOptions:\n"));
-	printf(_("  -q, --quorum           quorum for sending response to server\n"));
-	printf(_("  -r, --safekeepers      comma separated list of safekeeprs in format 'host1:port1,host2:port2'\n"));
-	printf(_("  -v, --verbose          output verbose messages\n"));
-	printf(_("  -V, --version          output version information, then exit\n"));
-	printf(_("  -?, --help             show this help, then exit\n"));
+	printf(_("  -q, --quorum            quorum for sending response to server\n"));
+	printf(_("  -s, --safekeepers       comma separated list of safekeeprs in format 'host1:port1,host2:port2'\n"));
+	printf(_("  -r, --reconnect-timeout timeout for reconnection attempt to offline safekeepers\n"));
+	printf(_("  -v, --verbose           output verbose messages\n"));
+	printf(_("  -V, --version           output version information, then exit\n"));
+	printf(_("  -?, --help              show this help, then exit\n"));
 	printf(_("\nConnection options:\n"));
-	printf(_("  -d, --dbname=CONNSTR   connection string\n"));
-	printf(_("  -h, --host=HOSTNAME    database server host or socket directory\n"));
-	printf(_("  -p, --port=PORT        database server port number\n"));
-	printf(_("  -U, --username=NAME    connect as specified database user\n"));
-	printf(_("  -w, --no-password      never prompt for password\n"));
-	printf(_("  -W, --password         force password prompt (should happen automatically)\n"));
+	printf(_("  -d, --dbname=CONNSTR    connection string\n"));
+	printf(_("  -h, --host=HOSTNAME     database server host or socket directory\n"));
+	printf(_("  -p, --port=PORT         database server port number\n"));
+	printf(_("  -U, --username=NAME     connect as specified database user\n"));
+	printf(_("  -w, --no-password       never prompt for password\n"));
+	printf(_("  -W, --password          force password prompt (should happen automatically)\n"));
 	printf(_("\nReport bugs to <%s>.\n"), PACKAGE_BUGREPORT);
 	printf(_("%s home page: <%s>\n"), PACKAGE_NAME, PACKAGE_URL);
 }
@@ -401,8 +405,9 @@ static bool
 StartRecovery(void)
 {
 	if (verbose)
-		pg_log_info("Restart LSN=" INT64_FORMAT ", VCL=" INT64_FORMAT,
-					restartLsn, gen.VCL);
+		pg_log_info("Restart LSN=%X/%X, VCL=%X/%X",
+					(uint32) (restartLsn >> 32), (uint32)restartLsn,
+					(uint32) (gen.VCL >> 32), (uint32)gen.VCL);
 
 	if (restartLsn != gen.VCL) /* if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
 	{
@@ -413,6 +418,12 @@ StartRecovery(void)
 										 safekeeper[leader].port);
 		if (!conn)
 			return false;
+
+		if (verbose)
+			pg_log_info("Start retrieve of missing WALs from %s:%s from %X/%X till %X/%X",
+						safekeeper[leader].host, safekeeper[leader].port,
+						(uint32) (restartLsn >> 32), (uint32)restartLsn,
+						(uint32) (gen.VCL >> 32), (uint32)gen.VCL);
 
 		snprintf(query, sizeof(query), "START_REPLICATION %X/%X TIMELINE %u TILL %X/%X", /* TILL is safekeeper extension of START_REPLICATION command */
 				 (uint32) (restartLsn >> 32), (uint32)restartLsn,
@@ -439,9 +450,14 @@ StartRecovery(void)
 			if (rawlen <= 0)
 			{
 				if (rawlen == -2)
-					pg_log_error("Could not read COPY data: %s", PQerrorMessage(conn));
+					pg_log_error("Could not read COPY data from %s:%s: %s",
+								 safekeeper[leader].host,
+								 safekeeper[leader].port,
+								 PQerrorMessage(conn));
 				else
-					pg_log_info("End of WAL stream reached");
+					pg_log_info("End of WAL stream from %s:%s reached",
+								safekeeper[leader].host,
+								safekeeper[leader].port);
 				PQfinish(conn);
 				return false;
 			}
@@ -462,12 +478,14 @@ StartRecovery(void)
 					}
 					else
 					{
-						safekeeper[i].currMsg = msg; /* start replication for this safekeeper from this message */
+						SendMessageToNode(i, msg);
 						break;
 					}
 				}
 			}
 		}
+		if (verbose)
+			pg_log_info("Recovery completed");
 	}
 	return true;
 }
@@ -479,6 +497,8 @@ StartRecovery(void)
 static void
 StartElection(void)
 {
+	XLogRecPtr initWALPos = serverInfo.walSegSize;
+	gen.VCL = restartLsn = initWALPos;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
 		if (safekeeper[i].state == SS_VOTING)
@@ -544,6 +564,7 @@ BroadcastWalStream(PGconn* conn)
 	ssize_t  rc;
 	int      n_votes = 0;
 	int      n_connected = 0;
+	time_t   last_reconnect_attempt = time(NULL);
 
 	FD_ZERO(&readSet);
 	FD_ZERO(&writeSet);
@@ -559,11 +580,26 @@ BroadcastWalStream(PGconn* conn)
 	{
 		fd_set rs = readSet;
 		fd_set ws = writeSet;
-		rc = select(maxFds+1, &rs, &ws, NULL, NULL);
+		struct timeval tv;
+		time_t now;
+		tv.tv_sec = reconnect_timeout;
+		tv.tv_usec = 0;
+		rc = select(maxFds+1, &rs, &ws, NULL, reconnect_timeout > 0 ? &tv : NULL);
 		if (rc < 0)
 		{
 			pg_log_error("Select failed: %m");
 			break;
+		}
+		/* Initiate reconnect if timeout is expired */
+		now = time(NULL);
+		if (reconnect_timeout > 0 && now - last_reconnect_attempt > reconnect_timeout)
+		{
+			last_reconnect_attempt = now;
+			for (i = 0; i < n_safekeepers; i++)
+			{
+				if (safekeeper[i].state == SS_OFFLINE)
+					ResetConnection(i);
+			}
 		}
 		if (server != PGINVALID_SOCKET && FD_ISSET(server, &rs)) /* New message from server */
 		{
@@ -766,12 +802,13 @@ BroadcastWalStream(PGconn* conn)
 					{
 					  case SS_CONNECTING:
 					  {
-						  int			optval;
+						  int			optval = 0;
 						  ACCEPT_TYPE_ARG3 optlen = sizeof(optval);
 						  if (getsockopt(safekeeper[i].sock, SOL_SOCKET, SO_ERROR, (char *) &optval, &optlen) < 0 || optval != 0)
 						  {
-							  pg_log_error("Failed to connect to node '%s:%s': %m",
-										   safekeeper[i].host, safekeeper[i].port);
+							  pg_log_error("Failed to connect to node '%s:%s': %s",
+										   safekeeper[i].host, safekeeper[i].port,
+										   strerror(optval));
 							  closesocket(safekeeper[i].sock);
 							  FD_CLR(safekeeper[i].sock, &writeSet);
 							  safekeeper[i].sock =  PGINVALID_SOCKET;
@@ -833,6 +870,7 @@ main(int argc, char **argv)
 	static struct option long_options[] = {
 		{"help", no_argument, NULL, '?'},
 		{"version", no_argument, NULL, 'V'},
+		{"reconnect-timeout", required_argument, NULL, 'r'},
 		{"dbname", required_argument, NULL, 'd'},
 		{"safekeepers", required_argument, NULL, 's'},
 		{"username", required_argument, NULL, 'U'},
@@ -893,7 +931,10 @@ main(int argc, char **argv)
 				dbuser = pg_strdup(optarg);
 				break;
 			case 's':
-			    safekeepersList = pg_strdup(optarg);
+				safekeepersList = pg_strdup(optarg);
+				break;
+			case 'r':
+				reconnect_timeout = atoi(optarg);
 				break;
 			case 'w':
 				dbgetpassword = -1;
