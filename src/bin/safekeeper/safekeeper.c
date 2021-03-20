@@ -686,11 +686,18 @@ ReceiveWalStream(void)
 
 		myInfo.restartLsn = req.restartLsn;
 		myInfo.commitLsn = req.commitLsn;
-		if (endPos > Max(myInfo.flushLsn,gen.VCL))
+
+		/*
+		 * Epoch switch happen when written WAL record cross the boundary.
+         * The boundary is maximum of last WAL position at this node (FlushLSN) and global
+		 * maximum (VCL) determined by safekeeper_proxy during handshake.
+		 * Switching epoch means that node completes recovery and start writing in the WAL new data.
+		 */
+		if (myInfo.epoch < gen.epoch && endPos > Max(myInfo.flushLsn,gen.VCL))
 		{
-			Assert(myInfo.epoch <= gen.epoch);
+			if (verbose)
+				pg_log_info("Switch to new epoch " INT64_FORMAT, gen.epoch);
 			myInfo.epoch = gen.epoch; /* bump epoch */
-			gen.VCL = (XLogRecPtr)-1; /* infinite VCL to prevent further epoch bumps */
 			syncControlFile = true;
 		}
 		if (endPos > myInfo.flushLsn)
@@ -698,8 +705,8 @@ ReceiveWalStream(void)
 
 		/*
 		 * Update restart LSN in control file.
-		 * To avoid negative impact of performance of extra fsync, do it only
-		 * when restartLsn delta exceeds segment size.
+		 * To avoid negative impact on performance of extra fsync, do it only
+		 * when restartLsn delta exceeds WAL segment size.
 		 */
 		syncControlFile |= flushedRestartLsn + myInfo.server.walSegSize < myInfo.restartLsn;
 		if (!SaveData(controlFile, &myInfo, sizeof(myInfo), syncControlFile))
@@ -711,6 +718,7 @@ ReceiveWalStream(void)
 			flushedRestartLsn = myInfo.restartLsn;
 
 		/* Report flush position */
+		resp.epoch = myInfo.epoch;
 		resp.flushLsn = endPos;
 		CollectHotStanbyFeedbacks(&resp.hs);
 		if (!WriteSocket(streamer, &resp, sizeof(resp)))
@@ -718,7 +726,6 @@ ReceiveWalStream(void)
 			closesocket(streamer);
 			streamer = PGINVALID_SOCKET;
 		}
-
 		/*
 		 * Ping wal sender that new data is available.
          * FlushLSN (endPos) can be smaller than commitLSN in case we are at catching-up safekeeper.

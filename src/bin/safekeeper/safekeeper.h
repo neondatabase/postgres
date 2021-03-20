@@ -145,6 +145,7 @@ struct WalMessage
  */
 typedef struct SafekeeperResponse
 {
+	uint64     epoch;
 	XLogRecPtr flushLsn;
 	HotStandbyFeedback hs;
 } SafekeeperResponse;

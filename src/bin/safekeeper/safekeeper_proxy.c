@@ -211,7 +211,8 @@ GetAcknowledgedByQuorumWALPosition(void)
 	 */
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		responses[i] = safekeeper[i].feedback.flushLsn;
+		responses[i] = safekeeper[i].feedback.epoch == gen.epoch
+			? safekeeper[i].feedback.flushLsn : gen.VCL;
 	}
 	qsort(responses, n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -515,6 +516,25 @@ StartElection(void)
 			}
 		}
 	}
+	/* Only safekeepers from most recent epoch can report it's FlushLsn to master */
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (safekeeper[i].state == SS_VOTING)
+		{
+			if (safekeeper[i].info.epoch == gen.epoch)
+			{
+				safekeeper[i].feedback.flushLsn = safekeeper[i].info.flushLsn;
+			}
+			else if (verbose)
+			{
+				pg_log_info("Safekeeper %s:%s belongs to old epoch %d while current epoch is %d",
+							safekeeper[i].host,
+							safekeeper[i].port,
+							safekeeper[i].info.epoch,
+							gen.epoch);
+			}
+		}
+	}
 	gen.nodeId.term += 1;
 	gen.epoch += 1;
 }
@@ -670,7 +690,7 @@ BroadcastWalStream(PGconn* conn)
 							  else
 							  {
 								  safekeeper[i].state = SS_VOTING;
-								  safekeeper[i].feedback.flushLsn = safekeeper[i].info.flushLsn;
+								  safekeeper[i].feedback.flushLsn = restartLsn;
 								  safekeeper[i].feedback.hs.ts = 0;
 
 								  /* Check if we have quorum */
