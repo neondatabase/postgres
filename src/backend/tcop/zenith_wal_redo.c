@@ -221,7 +221,7 @@ WalRedoMain(int argc, char *argv[],
 
 	/* Redo routines won't work if we're not "in recovery" */
 	InRecovery = true;
-	
+
 	/*
 	 * Create the memory context we will use in the main loop.
 	 *

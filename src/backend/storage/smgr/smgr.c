@@ -228,7 +228,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 
 		/*
 		 * Use pageserver whenever page_server_connstring is not null.
-		 * We may integrate this with lazyrestore, but not it is one of two options.
+		 * We may integrate this with lazyrestore, but now it is one of two options.
 		 */
 		if (page_server_connstring && page_server_connstring[0])
 		{
