@@ -365,6 +365,10 @@ ReadRedoCommand(StringInfo inBuf)
 	int32		len;
 
 	qtype = getc(stdin);
+	if (qtype == EOF)
+	{
+		return EOF;
+	}
 
 	/*
 	 * Like in the FE/BE protocol, all messages have a length word next
@@ -372,7 +376,11 @@ ReadRedoCommand(StringInfo inBuf)
 	 * the type.
 	 */
 	if (fread(&len, 1, 4, stdin) != 4)
-		return EOF;
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("could not read message length")));
+	}
 
 	len = pg_ntoh32(len);
 
