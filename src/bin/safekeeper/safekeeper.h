@@ -42,7 +42,7 @@ typedef enum
 } SafeKeeperState;
 
 /*
- * Unique node identifier used by RAFT
+ * Unique node identifier used by Paxos
  */
 typedef struct NodeId
 {

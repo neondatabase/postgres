@@ -372,7 +372,13 @@ CreateMessage(char* data, int len)
 {
 	/* Create new message and append it to message queue */
 	WalMessage*	msg;
+	XLogRecPtr startpos = fe_recvint64(&data[XLOG_HDR_START_POS]);
 
+	if (msgQueueTail && msgQueueTail->req.beginLsn >= startpos)
+	{
+		/* Message already queued */
+		return NULL;
+	}
 	len -= XLOG_HDR_SIZE; /* skip message header */
 
 	msg = (WalMessage*)pg_malloc(sizeof(WalMessage) + len);
@@ -385,8 +391,8 @@ CreateMessage(char* data, int len)
 	msg->size = sizeof(SafekeeperRequest) + len;
 	msg->next = NULL;
 	msg->ackMask = 0;
-	msg->req.beginLsn = fe_recvint64(&data[XLOG_HDR_START_POS]);
-	msg->req.endLsn = msg->req.beginLsn + len;
+	msg->req.beginLsn = startpos;
+	msg->req.endLsn = startpos + len;
 	msg->req.senderId = serverInfo.nodeId;
 	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
 	pg_free(data);
@@ -464,7 +470,7 @@ StartRecovery(void)
 			}
 			Assert (copybuf[0] == 'w');
 			msg = CreateMessage(copybuf, rawlen);
-		} while (msg->req.endLsn < gen.VCL); /* loop until we reach last flush position */
+		} while (msg && msg->req.endLsn < gen.VCL); /* loop until we reach last flush position */
 
 		/* Setup restart point for all safekeepers */
 		for (int i = 0; i < n_safekeepers; i++)
@@ -527,7 +533,7 @@ StartElection(void)
 			}
 			else if (verbose)
 			{
-				pg_log_info("Safekeeper %s:%s belongs to old epoch %d while current epoch is %d",
+				pg_log_info("Safekeeper %s:%s belongs to old epoch " INT64_FORMAT " while current epoch is " INT64_FORMAT,
 							safekeeper[i].host,
 							safekeeper[i].port,
 							safekeeper[i].info.epoch,
@@ -640,7 +646,8 @@ BroadcastWalStream(PGconn* conn)
 			if (copybuf[0] == 'w')
 			{
 				WalMessage* msg = CreateMessage(copybuf, rawlen);
-				BroadcastMessage(msg);
+				if (msg != NULL)
+					BroadcastMessage(msg);
 			}
 			else
 			{
