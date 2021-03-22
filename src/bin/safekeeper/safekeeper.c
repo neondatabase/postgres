@@ -40,7 +40,7 @@ SafeKeeperInfo myInfo;
 static char	controlPath[MAXPGPATH];
 static int  controlFile;
 
-static RequestVote gen;
+static RequestVote prop;
 
 static pgsocket gateway = PGINVALID_SOCKET;
 static pgsocket streamer = PGINVALID_SOCKET;
@@ -464,7 +464,7 @@ AcceptNewConnection(void)
 		return false;
 	}
 	/* Wait for vote request */
-	if (!ReadStream(&gen, sizeof gen))
+	if (!ReadStream(&prop, sizeof prop))
 	{
 		pg_log_error("Failed to receive handshake response");
 		closesocket(sock);
@@ -473,16 +473,16 @@ AcceptNewConnection(void)
 	}
 
 	/* This is RAFT check which should ensure that only one master can perform commits */
-	if (CompareNodeId(&gen.nodeId, &myInfo.server.nodeId) < 0)
+	if (CompareNodeId(&prop.nodeId, &myInfo.server.nodeId) < 0)
 	{
 		pg_log_info("Reject connection attempt with term " INT64_FORMAT ", because my term is " INT64_FORMAT "",
-					gen.nodeId.term, myInfo.server.nodeId.term);
+					prop.nodeId.term, myInfo.server.nodeId.term);
 		/* Send my node-id to inform proxy that it's candidate was rejected */
 		WriteSocket(sock, &myInfo.server.nodeId, sizeof myInfo.server.nodeId);
 		closesocket(sock);
 		return false;
 	}
-	myInfo.server.nodeId = nodeId;
+	myInfo.server.nodeId = prop.nodeId;
 	/* Need to persist our vote first */
 	if (!SaveData(controlFile, &myInfo, sizeof myInfo, true))
 	{
@@ -493,10 +493,10 @@ AcceptNewConnection(void)
 	closesocket(oldStreamer);
 
 	/* Acknowledge the proposed candidate by returning it to the proxy */
-	if (WriteSocket(sock, &nodeId, sizeof nodeId))
+	if (WriteSocket(sock, &prop.nodeId, sizeof prop.nodeId))
 	{
 		pg_log_info("Switch to new streamer with term " INT64_FORMAT,
-					nodeId.term);
+					prop.nodeId.term);
 	}
 	else
 	{
@@ -693,11 +693,11 @@ ReceiveWalStream(void)
 		 * maximum (VCL) determined by safekeeper_proxy during handshake.
 		 * Switching epoch means that node completes recovery and start writing in the WAL new data.
 		 */
-		if (myInfo.epoch < gen.epoch && endPos > Max(myInfo.flushLsn,gen.VCL))
+		if (myInfo.epoch < prop.epoch && endPos > Max(myInfo.flushLsn,prop.VCL))
 		{
 			if (verbose)
-				pg_log_info("Switch to new epoch " INT64_FORMAT, gen.epoch);
-			myInfo.epoch = gen.epoch; /* bump epoch */
+				pg_log_info("Switch to new epoch " INT64_FORMAT, prop.epoch);
+			myInfo.epoch = prop.epoch; /* bump epoch */
 			syncControlFile = true;
 		}
 		if (endPos > myInfo.flushLsn)

@@ -41,8 +41,8 @@ static fd_set       writeSet;
 static int          maxFds;
 static SafekeeperResponse lastFeedback;
 static XLogRecPtr   restartLsn; /* Last position received by all safekeepers. */
-static RequestVote  gen;       /* Vote request for safekeeper */
-static int          leader;    /* Most advanced safekeeper */
+static RequestVote  prop;       /* Vote request for safekeeper */
+static int          leader;     /* Most advanced safekeeper */
 
 
 static void
@@ -211,8 +211,8 @@ GetAcknowledgedByQuorumWALPosition(void)
 	 */
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		responses[i] = safekeeper[i].feedback.epoch == gen.epoch
-			? safekeeper[i].feedback.flushLsn : gen.VCL;
+		responses[i] = safekeeper[i].feedback.epoch == prop.epoch
+			? safekeeper[i].feedback.flushLsn : prop.VCL;
 	}
 	qsort(responses, n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -347,7 +347,7 @@ static void
 StopSafekeepers(void)
 {
 	SafekeeperRequest req;
-	req.senderId = serverInfo.nodeId;
+	req.senderId = prop.nodeId;
 	req.beginLsn = END_OF_STREAM;
 	req.endLsn = END_OF_STREAM;
 
@@ -393,7 +393,7 @@ CreateMessage(char* data, int len)
 	msg->ackMask = 0;
 	msg->req.beginLsn = startpos;
 	msg->req.endLsn = startpos + len;
-	msg->req.senderId = serverInfo.nodeId;
+	msg->req.senderId = prop.nodeId;
 	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
 	pg_free(data);
 	return msg;
@@ -414,9 +414,9 @@ StartRecovery(void)
 	if (verbose)
 		pg_log_info("Restart LSN=%X/%X, VCL=%X/%X",
 					(uint32) (restartLsn >> 32), (uint32)restartLsn,
-					(uint32) (gen.VCL >> 32), (uint32)gen.VCL);
+					(uint32) (prop.VCL >> 32), (uint32)prop.VCL);
 
-	if (restartLsn != gen.VCL) /* if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
+	if (restartLsn != prop.VCL) /* if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
 	{
 		PGresult  *res;
 		WalMessage* msg;
@@ -430,12 +430,12 @@ StartRecovery(void)
 			pg_log_info("Start retrieve of missing WALs from %s:%s from %X/%X till %X/%X",
 						safekeeper[leader].host, safekeeper[leader].port,
 						(uint32) (restartLsn >> 32), (uint32)restartLsn,
-						(uint32) (gen.VCL >> 32), (uint32)gen.VCL);
+						(uint32) (prop.VCL >> 32), (uint32)prop.VCL);
 
 		snprintf(query, sizeof(query), "START_REPLICATION %X/%X TIMELINE %u TILL %X/%X", /* TILL is safekeeper extension of START_REPLICATION command */
 				 (uint32) (restartLsn >> 32), (uint32)restartLsn,
 				 serverInfo.timeline,
-				 (uint32) (gen.VCL >> 32), (uint32)gen.VCL);
+				 (uint32) (prop.VCL >> 32), (uint32)prop.VCL);
 		res = PQexec(conn, query);
 		if (PQresultStatus(res) != PGRES_COPY_BOTH)
 		{
@@ -470,7 +470,7 @@ StartRecovery(void)
 			}
 			Assert (copybuf[0] == 'w');
 			msg = CreateMessage(copybuf, rawlen);
-		} while (msg && msg->req.endLsn < gen.VCL); /* loop until we reach last flush position */
+		} while (msg && msg->req.endLsn < prop.VCL); /* loop until we reach last flush position */
 
 		/* Setup restart point for all safekeepers */
 		for (int i = 0; i < n_safekeepers; i++)
@@ -505,19 +505,20 @@ static void
 StartElection(void)
 {
 	XLogRecPtr initWALPos = serverInfo.walSegSize;
-	gen.VCL = restartLsn = initWALPos;
+	prop.VCL = restartLsn = initWALPos;
+	prop.nodeId = serverInfo.nodeId;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
 		if (safekeeper[i].state == SS_VOTING)
 		{
-			gen.nodeId.term = Max(safekeeper[i].info.server.nodeId.term, gen.nodeId.term);
+			prop.nodeId.term = Max(safekeeper[i].info.server.nodeId.term, prop.nodeId.term);
 			restartLsn = Max(safekeeper[i].info.restartLsn, restartLsn);
-			if (safekeeper[i].info.epoch > gen.epoch
-				|| (safekeeper[i].info.epoch == gen.epoch && safekeeper[i].info.flushLsn > gen.VCL))
+			if (safekeeper[i].info.epoch > prop.epoch
+				|| (safekeeper[i].info.epoch == prop.epoch && safekeeper[i].info.flushLsn > prop.VCL))
 
 			{
-				gen.epoch = safekeeper[i].info.epoch;
-				gen.VCL = safekeeper[i].info.flushLsn;
+				prop.epoch = safekeeper[i].info.epoch;
+				prop.VCL = safekeeper[i].info.flushLsn;
 				leader = i;
 			}
 		}
@@ -527,7 +528,7 @@ StartElection(void)
 	{
 		if (safekeeper[i].state == SS_VOTING)
 		{
-			if (safekeeper[i].info.epoch == gen.epoch)
+			if (safekeeper[i].info.epoch == prop.epoch)
 			{
 				safekeeper[i].feedback.flushLsn = safekeeper[i].info.flushLsn;
 			}
@@ -537,12 +538,12 @@ StartElection(void)
 							safekeeper[i].host,
 							safekeeper[i].port,
 							safekeeper[i].info.epoch,
-							gen.epoch);
+							prop.epoch);
 			}
 		}
 	}
-	gen.nodeId.term += 1;
-	gen.epoch += 1;
+	prop.nodeId.term += 1;
+	prop.epoch += 1;
 }
 
 /*
@@ -553,7 +554,7 @@ StartReplication(PGconn* conn)
 {
 	char	   query[128];
 	PGresult  *res;
-	XLogRecPtr startpos = gen.VCL;
+	XLogRecPtr startpos = prop.VCL;
 
 	/*
 	 * Always start streaming at the beginning of a segment
@@ -711,7 +712,7 @@ BroadcastWalStream(PGconn* conn)
 									  {
 										  if (safekeeper[j].state == SS_VOTING)
 										  {
-											  if (!WriteSocket(safekeeper[j].sock, &gen, sizeof(gen)))
+											  if (!WriteSocket(safekeeper[j].sock, &prop, sizeof(prop)))
 											  {
 												  ResetConnection(j);
 											  }
@@ -742,11 +743,11 @@ BroadcastWalStream(PGconn* conn)
 							  /* Response completely received */
 
 							  /* If server accept our candidate, then it returns it in response */
-							  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &serverInfo.nodeId) != 0)
+							  if (CompareNodeId(&safekeeper[i].info.server.nodeId, &prop.nodeId) != 0)
 							  {
 								  pg_log_error("SafeKeeper %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 											   safekeeper[i].host, safekeeper[i].port,
-											   safekeeper[i].info.server.nodeId.term, serverInfo.nodeId.term);
+											   safekeeper[i].info.server.nodeId.term, prop.nodeId.term);
 								  exit(1);
 							  }
 							  else
