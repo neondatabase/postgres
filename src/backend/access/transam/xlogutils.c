@@ -352,7 +352,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 		{
 			*buf = ReadBufferWithoutRelcache(rnode, forknum,
-											   P_NEW, mode, NULL);
+											 blkno, mode, NULL);
 			return BLK_DONE;
 		}
 		else
