@@ -160,123 +160,123 @@ It is assumed that in case of loosing local data by some safekeepers, it should 
 
 ## Algorithm
 
-```
+```python
 process SafekeeperProxy(safekeepers,server,curr_epoch,restart_lsn=0,message_queue={},feedbacks={})
-	function do_recovery(epoch,restart_lsn,VCL)
-		leader = i:safekeepers[i].state.epoch=epoch and safekeepers[i].state.flushLsn=VCL
-		wal_stream = safekeepers[leader].start_replication(restart_lsn,VCL)
-		do
-			message = wal_stream.read()
-			message_queue.append(message)
-		while message.startPos < VCL
+    function do_recovery(epoch,restart_lsn,VCL)
+        leader = i:safekeepers[i].state.epoch=epoch and safekeepers[i].state.flushLsn=VCL
+        wal_stream = safekeepers[leader].start_replication(restart_lsn,VCL)
+        do
+            message = wal_stream.read()
+            message_queue.append(message)
+        while message.startPos < VCL
 
-		for i in 1..safekeepers.size()
-			for message in message_queue
-				if message.endLsn < safekeepers[i].state.flushLsn
-					message.delivered += i
-				else
-					send_message(i, message)
-					break
-	end function
+        for i in 1..safekeepers.size()
+            for message in message_queue
+                if message.endLsn < safekeepers[i].state.flushLsn
+                    message.delivered += i
+                else
+                    send_message(i, message)
+                    break
+    end function
 
-	function send_message(i,msg)
-		msg.restartLsn = restart_lsn
-		msg.commitLsn = get_commit_lsn()
-		safekeepers[i].send(msg, response_handler)
-	end function
+    function send_message(i,msg)
+        msg.restartLsn = restart_lsn
+        msg.commitLsn = get_commit_lsn()
+        safekeepers[i].send(msg, response_handler)
+    end function
 
-	function do_broadcast(message)
-		for i in 1..safekeepers.size()
-			if not safekeepers[i].sending()
-				send_message(i, message)
-	end function
+    function do_broadcast(message)
+        for i in 1..safekeepers.size()
+            if not safekeepers[i].sending()
+                send_message(i, message)
+    end function
 
-	function get_commit_lsn()
-		sorted_feedbacks = feedbacks.sort()
-		return sorted_feedbacks[safekeepers.size() - quorum]
-	end function
+    function get_commit_lsn()
+        sorted_feedbacks = feedbacks.sort()
+        return sorted_feedbacks[safekeepers.size() - quorum]
+    end function
 
-	function response_handler(i,message,response)
-		feedbacks[i] = if response.epoch=curr_epoch then response.flushLsn else VCL
-		server.write(get_commit_lsn())
+    function response_handler(i,message,response)
+        feedbacks[i] = if response.epoch=curr_epoch then response.flushLsn else VCL
+        server.write(get_commit_lsn())
 
-		message.delivered += i
-		next_message = message_queue.next(message)
-		if next_message
-			send_message(i, next_message)
+        message.delivered += i
+        next_message = message_queue.next(message)
+        if next_message
+            send_message(i, next_message)
 
-		while message_queue.head.delivered.size() = safekeepers.size()
-			if restart_lsn < message_queue.head.beginLsn
-				restart_lsn = message_queue.head.endLsn
-			message_queue.pop_head()
-	end function
+        while message_queue.head.delivered.size() = safekeepers.size()
+            if restart_lsn < message_queue.head.beginLsn
+                restart_lsn = message_queue.head.endLsn
+            message_queue.pop_head()
+    end function
 
-	server_info = server.read()
+    server_info = server.read()
 
-	safekeepers.write(server_info)
-	safekeepers.state = safekeepers.read()
-	next_term = max(safekeepers.state.nodeId.term)+1
-	restart_lsn = max(safekeepers.state.restartLsn)
-	epoch,VCL = max(safekeepers.state.epoch,safekeepers.state.flushLsn)
-	curr_epoch = epoch + 1
+    safekeepers.write(server_info)
+    safekeepers.state = safekeepers.read()
+    next_term = max(safekeepers.state.nodeId.term)+1
+    restart_lsn = max(safekeepers.state.restartLsn)
+    epoch,VCL = max(safekeepers.state.epoch,safekeepers.state.flushLsn)
+    curr_epoch = epoch + 1
 
-	proposal = Proposal(NodeId(next_term,server.id),curr_epoch,VCL)
-	safekeepers.send(proposal)
-	responses = safekeepers.read()
-	if any responses.is_rejected()
-		exit()
+    proposal = Proposal(NodeId(next_term,server.id),curr_epoch,VCL)
+    safekeepers.send(proposal)
+    responses = safekeepers.read()
+    if any responses.is_rejected()
+        exit()
 
-	for i in 1..safekeepers.size()
-		feedbacks[i].flushLsn = if epoch=safekeepers[i].state.epoch then safekeepers[i].state.flushLsn else restart_lsn
+    for i in 1..safekeepers.size()
+        feedbacks[i].flushLsn = if epoch=safekeepers[i].state.epoch then safekeepers[i].state.flushLsn else restart_lsn
 
-	if restart_lsn != VCL
-		do_recovery(epoch,restart_lsn,VCL)
+    if restart_lsn != VCL
+        do_recovery(epoch,restart_lsn,VCL)
 
-	wal_stream = server.start_replication(VCL)
-	for ever
-		message = wal_stream.read()
-		message_queue.append(message)
-		do_broadcast(message)
+    wal_stream = server.start_replication(VCL)
+    for ever
+        message = wal_stream.read()
+        message_queue.append(message)
+        do_broadcast(message)
 end process
 
 process safekeeper(gateway,state)
-	function handshake()
-		proxy = gateway.accept()
-		server_info = proxy.read()
-		proxy.write(state)
-		proposal = proxy.read()
-		if proposal.nodeId < state.nodeId
-			proxy.write(rejected)
-			return null
-		else
-			state.nodeId = proposal.nodeId
-			state.proposed_epoch = proposal.epoch
-			state.VCL = proposal.VCL
-			write_control_file(state)
-			proxy.write(accepted)
-			return proxy
-	end function
+    function handshake()
+        proxy = gateway.accept()
+        server_info = proxy.read()
+        proxy.write(state)
+        proposal = proxy.read()
+        if proposal.nodeId < state.nodeId
+            proxy.write(rejected)
+            return null
+        else
+            state.nodeId = proposal.nodeId
+            state.proposed_epoch = proposal.epoch
+            state.VCL = proposal.VCL
+            write_control_file(state)
+            proxy.write(accepted)
+            return proxy
+    end function
 
-	state = read_control_file()
-	state.flushLsn = locate_end_of_wal()
+    state = read_control_file()
+    state.flushLsn = locate_end_of_wal()
 
-	for ever
-		proxy = handshake()
-		if not proxy
-			continue
-		for ever
-			req = proxy.read()
-			if req.nodeId != state.nodeId
-				break
-			save_wal_file(req.data)
-			state.restartLsn = req.restartLsn
-			if state.epoch < state.proposed_epoch and req.endPos > max(state.flushLsn,state.VCL)
-				state.epoch = state.proposed_epoch
-			if req.endPos > state.flushLsn
-				state.flushLsn = req.endPos
-			save_control_file(state)
-			resp = Response(state.epoch,req.endPos)
-			proxy.write(resp)
-			notify_wal_sender(Min(req.commitLsn,req.endPos))
+    for ever
+        proxy = handshake()
+        if not proxy
+            continue
+        for ever
+            req = proxy.read()
+            if req.nodeId != state.nodeId
+                break
+            save_wal_file(req.data)
+            state.restartLsn = req.restartLsn
+            if state.epoch < state.proposed_epoch and req.endPos > max(state.flushLsn,state.VCL)
+                state.epoch = state.proposed_epoch
+            if req.endPos > state.flushLsn
+                state.flushLsn = req.endPos
+            save_control_file(state)
+            resp = Response(state.epoch,req.endPos)
+            proxy.write(resp)
+            notify_wal_sender(Min(req.commitLsn,req.endPos))
 end process
 ```
