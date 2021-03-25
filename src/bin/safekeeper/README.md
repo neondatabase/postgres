@@ -196,7 +196,7 @@ process SafekeeperProxy(safekeepers,server,curr_epoch,restart_lsn=0,message_queu
 		return sorted_feedbacks[safekeepers.size() - quorum]
 	end function
 
-    function response_handler(i,message,response)
+	function response_handler(i,message,response)
 		feedbacks[i] = if response.epoch=curr_epoch then response.flushLsn else VCL
 		server.write(get_commit_lsn())
 
@@ -211,7 +211,7 @@ process SafekeeperProxy(safekeepers,server,curr_epoch,restart_lsn=0,message_queu
 			message_queue.pop_head()
 	end function
 
-    server_info = server.read()
+	server_info = server.read()
 
 	safekeepers.write(server_info)
 	safekeepers.state = safekeepers.read()
@@ -257,7 +257,7 @@ process safekeeper(gateway,state)
 			return proxy
 	end function
 
-    state = read_control_file()
+	state = read_control_file()
 	state.flushLsn = locate_end_of_wal()
 
 	for ever
