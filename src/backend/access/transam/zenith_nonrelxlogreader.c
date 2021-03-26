@@ -97,10 +97,6 @@ nonrelwal_read_record(XLogReaderState *xlogreader, int emode,
 	int			nfiles;
 	nonrelwal_file_info *e;
 
-	elog(LOG, "nonrelwal_read_record: %X/%X",
-		 (uint32) (recptr >> 32),
-		 (uint32) recptr);
-
 	/*
 	 * Scan the pg_wal directory for non-rel WAL files on first call.
 	 */

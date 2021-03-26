@@ -331,9 +331,10 @@ static char *
 pprint_tag(BufferTag *tag)
 {
 	StringInfoData s;
+
 	initStringInfo(&s);
 
-	appendStringInfo(&s, "%d.%d.%d.%d.%u",
+	appendStringInfo(&s, "%u/%u/%u.%d blk %u",
 		tag->rnode.spcNode,
 		tag->rnode.dbNode,
 		tag->rnode.relNode,
