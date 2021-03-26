@@ -250,12 +250,13 @@ zenith_init(void)
 bool
 zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 {
+	bool		ok;
+	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
 
-	bool ok;
-
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExistsRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -275,11 +276,13 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 void
 zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 {
+	ZenithResponse *resp;
+
 	/* noop */
 	if (!loaded)
 		zenith_load();
 
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithCreateRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -310,10 +313,12 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 void
 zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 {
+	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
 
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithUnlinkRequest,
 		.page_key = {
 			.rnode = rnode.node,
@@ -336,10 +341,12 @@ void
 zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				char *buffer, bool skipFsync)
 {
+	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
 
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExtendRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -402,10 +409,12 @@ void
 zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 char *buffer)
 {
+	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
 
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -442,12 +451,13 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 BlockNumber
 zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
+	ZenithResponse *resp;
+	int			n_blocks;
+
 	if (!loaded)
 		zenith_load();
 
-	int n_blocks;
-
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithNblocksRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -465,10 +475,12 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
+	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
 
-	ZenithResponse *resp = page_server->request((ZenithRequest) {
+	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithTruncRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
