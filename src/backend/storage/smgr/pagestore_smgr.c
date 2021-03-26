@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * pageserver.c
+ * pagestore_smgr.c
  *
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -8,12 +8,14 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/storage/smgr/pageserver.c
+ *	  src/backend/storage/smgr/pagestore_smgr.c
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
+#include "access/xlog.h"
+#include "access/xloginsert.h"
 #include "storage/pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -440,9 +442,43 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	/* noop */
 	XLogRecPtr lsn2 = PageGetLSN(buffer);
-	elog(SmgrTrace, "[ZENITH_SMGR] write noop lsn2=%X/%X",
-		(uint32) ((lsn2) >> 32), (uint32) (lsn2)
-	);
+
+	/*
+	 * If the page does not have a valid LSN, it was not WAL-logged. If we
+	 * just throw it away, we will lose the data. So WAL-log it now.
+	 *
+	 * Normally, changes need to be WAL-logged before releasing the exclusive
+	 * lock in it. But creating a new relation is an exception; no other
+	 * backend can look at the table until the transaction commits anyway, and
+	 * we take advantage of that in GiST/SP-GiST index build. The index is
+	 * created without WAL-logging anything, and at the end of the index
+	 * build, the just-built relation is scanned and WAL-logged. In principle,
+	 * any operation that holds an AccessExclusiveLock on the table could do
+	 * similar tricks, but index creation is the only case at the moment.
+	 *
+	 * FIXME: This assumes that if a page has a valid LSN, it has been
+	 * properly WAL-logged.  That currently covers the GiST/SP-GiST index
+	 * creation, but there are no guarantees that that assumption will hold in
+	 * the future.
+	 *
+	 * FIXME: GiST/SP-GiST index build will scan and WAL-log again the whole index .
+	 * That's duplicative with the WAL-logging that we do here.
+	 *
+	 * FIXME: Redoing this record will set the LSN on the page. That could
+	 * mess up the LSN-NSN interlock in GiST index build.
+	 */
+	if (lsn2 == InvalidXLogRecPtr && !PageIsNew(buffer) && !RecoveryInProgress())
+	{
+		(void) log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+
+		elog(SmgrTrace, "[ZENITH_SMGR] write was WAL-logged lsn2=%X/%X",
+			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
+	}
+	else
+	{
+		elog(SmgrTrace, "[ZENITH_SMGR] write noop lsn2=%X/%X",
+			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
+	}
 }
 
 /*
