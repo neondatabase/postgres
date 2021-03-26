@@ -405,7 +405,7 @@ ReadRedoCommand(StringInfo inBuf)
 	 */
 	if (read(STDIN_FILENO, &len, 4) != 4)
 	{
-		ereport(COMMERROR,
+		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg("could not read message length")));
 	}
@@ -414,7 +414,7 @@ ReadRedoCommand(StringInfo inBuf)
 
 	if (len < 4)
 	{
-		ereport(COMMERROR,
+		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg("invalid message length")));
 		return EOF;
@@ -427,11 +427,11 @@ ReadRedoCommand(StringInfo inBuf)
 	while (nread < len) {
 		int n = read(STDIN_FILENO, inBuf->data + nread, len);
 		if (n == -1)
-			ereport(COMMERROR,
+			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("read error: %m")));
 		if (n == 0)
-			ereport(COMMERROR,
+			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("unexpected EOF")));
 		nread += n;
