@@ -15,6 +15,7 @@
 
 #include "postgres.h"
 
+#include "access/xlogdefs.h"
 #include "storage/relfilenode.h"
 #include "storage/block.h"
 #include "storage/smgr.h"
@@ -64,6 +65,7 @@ typedef struct
 	ZenithMessageTag tag;
 	uint64		system_id;
 	PageKey		page_key;
+	XLogRecPtr	lsn;		/* request page version @ this LSN */
 } ZenithRequest;
 
 typedef struct

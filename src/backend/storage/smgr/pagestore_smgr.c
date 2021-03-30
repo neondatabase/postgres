@@ -72,6 +72,7 @@ zm_pack(ZenithMessage *msg)
 			pq_sendint32(&s, msg_req->page_key.rnode.relNode);
 			pq_sendbyte(&s, msg_req->page_key.forknum);
 			pq_sendint32(&s, msg_req->page_key.blkno);
+			pq_sendint64(&s, msg_req->lsn);
 
 			break;
 		}
@@ -123,6 +124,7 @@ zm_unpack(StringInfo s)
 			msg_req->page_key.rnode.relNode = pq_getmsgint(s, 4);
 			msg_req->page_key.forknum = pq_getmsgbyte(s);
 			msg_req->page_key.blkno = pq_getmsgint(s, 4);
+			msg_req->lsn = pq_getmsgint64(s);
 			pq_getmsgend(s);
 
 			msg = (ZenithMessage *) msg_req;
@@ -186,13 +188,13 @@ zm_to_string(ZenithMessage *msg)
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
-			appendStringInfo(&s, ", \"page_key\": \"%d.%d.%d.%d.%u\"}",
-				msg_req->page_key.rnode.spcNode,
-				msg_req->page_key.rnode.dbNode,
-				msg_req->page_key.rnode.relNode,
-				msg_req->page_key.forknum,
-				msg_req->page_key.blkno
-			);
+			appendStringInfo(&s, ", \"page_key\": \"%d.%d.%d.%d.%u\", \"lsn\": \"%X/%X\"}",
+							 msg_req->page_key.rnode.spcNode,
+							 msg_req->page_key.rnode.dbNode,
+							 msg_req->page_key.rnode.relNode,
+							 msg_req->page_key.forknum,
+							 msg_req->page_key.blkno,
+							 (uint32) (msg_req->lsn >> 32), (uint32) (msg_req->lsn));
 
 			break;
 		}
@@ -412,9 +414,15 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 char *buffer)
 {
 	ZenithResponse *resp;
+	XLogRecPtr lsn;
 
 	if (!loaded)
 		zenith_load();
+
+	if (RecoveryInProgress())
+		lsn = GetXLogReplayRecPtr(NULL);
+	else
+		lsn = GetXLogWriteRecPtr();
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
@@ -422,7 +430,8 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum,
 			.blkno = blkno
-		}
+		},
+		.lsn = lsn
 	});
 
 	memcpy(buffer, resp->page, BLCKSZ);
@@ -469,7 +478,23 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 */
 	if (lsn2 == InvalidXLogRecPtr && !PageIsNew(buffer) && !RecoveryInProgress())
 	{
-		(void) log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		XLogRecPtr recptr;
+
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+
+		/*
+		 * Need to flush it too, so that it gets sent to the Page Server before we
+		 * might need to read it back. It should get flushed eventually anyway, at
+		 * least if there is some other WAL activity, so this isn't strictly
+		 * necessary for correctness. But if there is no other WAL activity, the
+		 * page read might get stuck waiting for the record to be streamed out
+		 * for an indefinite time.
+		 *
+		 * FIXME: Flushing the WAL is expensive. We should track the last "evicted"
+		 * LSN instead, and update it here. Or just kick the bgwriter to do the
+		 * flush, there is no need for us to block here waiting for it to finish.
+		 */
+		XLogFlush(recptr);
 
 		elog(SmgrTrace, "[ZENITH_SMGR] write was WAL-logged lsn2=%X/%X",
 			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
