@@ -422,7 +422,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	if (RecoveryInProgress())
 		lsn = GetXLogReplayRecPtr(NULL);
 	else
-		lsn = GetXLogWriteRecPtr();
+		lsn = GetFlushRecPtr();
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
