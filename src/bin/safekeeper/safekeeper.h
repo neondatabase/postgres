@@ -46,8 +46,8 @@ typedef enum
  */
 typedef struct NodeId
 {
-	pg_uuid_t uuid;
 	uint64    term;
+	pg_uuid_t uuid;
 } NodeId;
 
 /*
