@@ -426,7 +426,7 @@ ReadRedoCommand(StringInfo inBuf)
 	enlargeStringInfo(inBuf, len);
 	nread = 0;
 	while (nread < len) {
-		int n = read(STDIN_FILENO, inBuf->data + nread, len);
+		int n = read(STDIN_FILENO, inBuf->data + nread, len - nread);
 		if (n == -1)
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
