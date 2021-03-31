@@ -547,7 +547,7 @@ ApplyRecord(StringInfo input_message)
 	/*
 	 * message format:
 	 *
-	 * LSN
+	 * LSN (the *end* of the record)
 	 * record
 	 */
 	lsn = pq_getmsgint64(input_message);
@@ -577,7 +577,7 @@ ApplyRecord(StringInfo input_message)
 
 	redo_read_buffer_filter = NULL;
 
-	elog(TRACE, "applied WAL record at %X/%X",
+	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
 	/* There shouldn't have been references to missing pages */
