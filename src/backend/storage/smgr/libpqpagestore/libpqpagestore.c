@@ -16,6 +16,7 @@
 
 #include "storage/pagestore_client.h"
 #include "fmgr.h"
+#include "access/xlog.h"
 
 #include "libpq-fe.h"
 #include "libpq/pqformat.h"
@@ -59,7 +60,7 @@ zenith_connect()
 					errdetail_internal("%s", msg)));
 	}
 
-	char	   *query = psprintf("pagestream");
+	char	   *query = psprintf("pagestream %lu", GetSystemIdentifier());
 	int ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 		zenith_log(ERROR,
