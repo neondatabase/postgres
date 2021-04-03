@@ -18,7 +18,7 @@ subdir = src/bin/safekeeper
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
-override CPPFLAGS := -I$(libpq_srcdir) -I../pg_basebackup $(CPPFLAGS)
+override CPPFLAGS := -I$(libpq_srcdir) -I$(top_srcdir)/src/bin/pg_basebackup $(CPPFLAGS)
 LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
 OBJS = $(WIN32RES) \

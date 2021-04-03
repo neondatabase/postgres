@@ -630,39 +630,41 @@ BroadcastWalStream(PGconn* conn)
 		}
 		if (server != PGINVALID_SOCKET && FD_ISSET(server, &rs)) /* New message from server */
 		{
-			char* copybuf;
-			int rawlen = PQgetCopyData(conn, &copybuf, 0);
-			if (rawlen <= 0)
-			{
-				if (rawlen == -2)
-					pg_log_error("Could not read COPY data: %s", PQerrorMessage(conn));
-				else
-					pg_log_info("End of WAL stream reached");
-				FD_CLR(server, &readSet);
-				closesocket(server);
-				server = PGINVALID_SOCKET;
-				streaming = false;
-				continue;
-			}
-			if (copybuf[0] == 'w')
-			{
-				WalMessage* msg = CreateMessage(copybuf, rawlen);
-				if (msg != NULL)
-					BroadcastMessage(msg);
-			}
-			else
-			{
-				Assert(copybuf[0] == 'k'); /* keep alive */
-				if (copybuf[KEEPALIVE_RR_OFFS] /* response requested */
-					&& !SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), true))
+			do {
+				char* copybuf;
+				int rawlen = PQgetCopyData(conn, &copybuf, 0);
+				if (rawlen <= 0)
 				{
+					if (rawlen == -2)
+						pg_log_error("Could not read COPY data: %s", PQerrorMessage(conn));
+					else
+						pg_log_info("End of WAL stream reached");
 					FD_CLR(server, &readSet);
 					closesocket(server);
 					server = PGINVALID_SOCKET;
 					streaming = false;
+					continue;
 				}
-				pfree(copybuf);
-			}
+				if (copybuf[0] == 'w')
+				{
+					WalMessage* msg = CreateMessage(copybuf, rawlen);
+					if (msg != NULL)
+						BroadcastMessage(msg);
+				}
+				else
+				{
+					Assert(copybuf[0] == 'k'); /* keep alive */
+					if (copybuf[KEEPALIVE_RR_OFFS] /* response requested */
+						&& !SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), true))
+					{
+						FD_CLR(server, &readSet);
+						closesocket(server);
+						server = PGINVALID_SOCKET;
+						streaming = false;
+					}
+					pfree(copybuf);
+				}
+			} while (conn->inStart < conn->inEnd);
 		}
 		else /* communication with safekeepers */
 		{
