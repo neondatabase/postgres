@@ -27,7 +27,7 @@
 #include "streamutil.h"
 
 /* Global options */
-static int	 verbose = 0;
+static int   verbose = 0;
 static bool  do_sync = true;
 static char* basedir;
 static char* host;
