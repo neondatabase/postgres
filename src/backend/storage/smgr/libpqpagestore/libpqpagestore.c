@@ -47,6 +47,9 @@ page_server_api api = {
 static void
 zenith_connect()
 {
+	char	   *query;
+	int			ret;
+
 	pageserver_conn = PQconnectdb(page_server_connstring);
 
 	if (PQstatus(pageserver_conn) == CONNECTION_BAD)
@@ -60,8 +63,8 @@ zenith_connect()
 					errdetail_internal("%s", msg)));
 	}
 
-	char	   *query = psprintf("pagestream %lu", GetSystemIdentifier());
-	int ret = PQsendQuery(pageserver_conn, query);
+	query = psprintf("pagestream %lu", GetSystemIdentifier());
+	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 		zenith_log(ERROR,
 			"[ZENITH_SMGR] failed to start dispatcher_loop on pageserver");
@@ -98,10 +101,14 @@ zenith_connect()
 static ZenithResponse*
 zenith_call(ZenithRequest request)
 {
+	StringInfoData req_buff;
+	StringInfoData resp_buff;
+	ZenithMessage *resp;
+
 	if (!connected)
 		zenith_connect();
 
-	StringInfoData req_buff = zm_pack((ZenithMessage *) &request);
+	req_buff = zm_pack((ZenithMessage *) &request);
 
 	/* send request */
 	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
@@ -113,7 +120,6 @@ zenith_call(ZenithRequest request)
 	zenith_log(PqPageStoreTrace, "Sent request: %s", zm_to_string((ZenithMessage *) &request));
 
 	/* read response */
-	StringInfoData resp_buff;
 	initStringInfo(&resp_buff);
 	resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
 
@@ -122,7 +128,7 @@ zenith_call(ZenithRequest request)
 	else if (resp_buff.len == -2)
 		zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
 
-	ZenithMessage *resp = zm_unpack(&resp_buff);
+	resp = zm_unpack(&resp_buff);
 	Assert(messageTag(resp) == T_ZenithStatusResponse
 		|| messageTag(resp) == T_ZenithNblocksResponse
 		|| messageTag(resp) == T_ZenithReadResponse);
