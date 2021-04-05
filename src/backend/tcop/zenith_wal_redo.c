@@ -308,7 +308,7 @@ WalRedoMain(int argc, char *argv[],
 /*
  * Some debug function that may be handy for now.
  */
-
+pg_attribute_unused()
 static char *
 pprint_buffer(char *data, int len)
 {
