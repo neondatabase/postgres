@@ -251,6 +251,7 @@ HandleSafekeeperResponse(PGconn* conn)
 		msgQueueHead = msg->next;
 		if (restartLsn < msg->req.beginLsn)
 			restartLsn = msg->req.endLsn;
+		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(SafekeeperRequest));
 		pg_free(msg);
 	}
 	if (!msgQueueHead) /* queue is empty */
@@ -380,7 +381,7 @@ CreateMessage(char* data, int len)
 		return NULL;
 	}
 	len -= XLOG_HDR_SIZE; /* skip message header */
-
+	Assert(len >= 0);
 	msg = (WalMessage*)pg_malloc(sizeof(WalMessage) + len);
 	if (msgQueueTail != NULL)
 		msgQueueTail->next = msg;
@@ -395,7 +396,7 @@ CreateMessage(char* data, int len)
 	msg->req.endLsn = startpos + len;
 	msg->req.senderId = prop.nodeId;
 	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
-	pg_free(data);
+	PQfreemem(data);
 	return msg;
 }
 
