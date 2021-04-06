@@ -635,7 +635,21 @@ BroadcastWalStream(PGconn* conn)
 			while (true)
 			{
 				char* copybuf;
-				int rawlen = PQgetCopyData(conn, &copybuf, async);
+				int rawlen;
+
+				if (async)
+				{
+					if (PQconsumeInput(conn) != 1)
+					{
+						pg_log_error("Could not read COPY data: %s", PQerrorMessage(conn));
+						FD_CLR(server, &readSet);
+						closesocket(server);
+						server = PGINVALID_SOCKET;
+						streaming = false;
+						break;
+					}
+				}
+				rawlen = PQgetCopyData(conn, &copybuf, async);
 				if (rawlen == 0)
 				{
 					/* no more data available */
@@ -675,7 +689,7 @@ BroadcastWalStream(PGconn* conn)
 				async = true;
 			}
 		}
-		else /* communication with safekeepers */
+		/* communication with safekeepers */
 		{
 			for (int i = 0; i < n_safekeepers; i++)
 			{
