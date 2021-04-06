@@ -631,10 +631,11 @@ BroadcastWalStream(PGconn* conn)
 		}
 		if (server != PGINVALID_SOCKET && FD_ISSET(server, &rs)) /* New message from server */
 		{
+			bool async = false;
 			while (true)
 			{
 				char* copybuf;
-				int rawlen = PQgetCopyData(conn, &copybuf, true);
+				int rawlen = PQgetCopyData(conn, &copybuf, async);
 				if (rawlen == 0)
 				{
 					/* no more data available */
@@ -669,8 +670,9 @@ BroadcastWalStream(PGconn* conn)
 						server = PGINVALID_SOCKET;
 						streaming = false;
 					}
-					pfree(copybuf);
+					PQfreemem(copybuf);
 				}
+				async = true;
 			}
 		}
 		else /* communication with safekeepers */
