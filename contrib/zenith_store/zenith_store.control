@@ -1,5 +1,0 @@
-# zenith_store extension
-comment = 'PostgreSQL remote page store'
-default_version = '1.0'
-module_pathname = '$libdir/zenith_store'
-schema = zenith_store
