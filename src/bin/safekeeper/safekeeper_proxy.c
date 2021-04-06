@@ -297,7 +297,13 @@ SendMessageToNode(int i, WalMessage* msg)
 
 	/* If there is no pending message then send new one */
 	if (safekeeper[i].currMsg == NULL)
+	{
+		// Skip already acknoledged messages */
+		while (msg != NULL && (msg->ackMask & (1 << i)) != 0)
+			msg = msg->next;
+
 		safekeeper[i].currMsg = msg;
+	}
 	else
 		msg = safekeeper[i].currMsg;
 
