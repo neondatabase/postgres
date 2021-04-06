@@ -29,7 +29,7 @@
 static int	verbose = 0;
 static int  quorum = 0;
 static int  n_safekeepers = 0;
-static int  reconnect_timeout = 10; /* seconds */
+static int  reconnect_timeout = 1; /* seconds */
 
 static char*        safekeepersList;
 static Safekeeper   safekeeper[MAX_SAFEKEEPERS];
