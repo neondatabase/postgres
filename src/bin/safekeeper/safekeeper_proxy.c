@@ -825,14 +825,14 @@ BroadcastWalStream(PGconn* conn)
 							  safekeeper[i].state = SS_IDLE;
 							  safekeeper[i].asyncOffs = 0;
 							  safekeeper[i].currMsg = NULL;
-							  SendMessageToNode(i, next);
 							  if (!HandleSafekeeperResponse(conn))
 							  {
 								  FD_CLR(server, &readSet);
 								  closesocket(server);
 								  server = PGINVALID_SOCKET;
 								  streaming = false;
-							  }
+							  } else
+								  SendMessageToNode(i, next);
 						  }
 						  break;
 					  }
