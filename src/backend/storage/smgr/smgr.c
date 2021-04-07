@@ -238,6 +238,13 @@ smgropen(RelFileNode rnode, BackendId backend)
 		}
 		else if (page_server_connstring && page_server_connstring[0])
 		{
+			/*
+			 * FIXME: Comparison with FirstNormalObjectId is not a proper way
+			 * to detect catalog tables. Initially, catalog tables will have
+			 * relNode < FirstNormalObjectId, but not after the first VACUUM
+			 * FULL or CLUSTER. The page server needs to be able to handle
+			 * catalog tables just as well.
+			 */
 			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? SmgrMd : SmgrPageserver;
 		}
 		/*
