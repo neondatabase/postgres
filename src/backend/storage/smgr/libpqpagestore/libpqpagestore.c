@@ -105,6 +105,14 @@ zenith_call(ZenithRequest request)
 	StringInfoData resp_buff;
 	ZenithMessage *resp;
 
+	/* If the connection was lost for some reason, reconnect */
+	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
+	{
+		PQfinish(pageserver_conn);
+		pageserver_conn = NULL;
+		connected = false;
+	}
+
 	if (!connected)
 		zenith_connect();
 
