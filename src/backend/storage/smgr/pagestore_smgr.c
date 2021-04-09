@@ -448,6 +448,9 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	pfree(resp);
 }
 
+#define PD_UNLOGGED 0x8
+
+
 /*
  *	zenith_write() -- Write the supplied block at the appropriate location.
  *
@@ -486,11 +489,13 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 * FIXME: Redoing this record will set the LSN on the page. That could
 	 * mess up the LSN-NSN interlock in GiST index build.
 	 */
-	if (lsn2 == InvalidXLogRecPtr && !PageIsNew(buffer) && !RecoveryInProgress())
+	if (((lsn2 == InvalidXLogRecPtr && !PageIsNew(buffer)) || (((PageHeader)buffer)->pd_flags & PD_UNLOGGED))
+		&& !RecoveryInProgress())
 	{
 		XLogRecPtr recptr;
-
+		((PageHeader)buffer)->pd_flags |= PD_UNLOGGED;
 		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		((PageHeader)buffer)->pd_flags &= ~PD_UNLOGGED;
 
 		/*
 		 * Need to flush it too, so that it gets sent to the Page Server before we

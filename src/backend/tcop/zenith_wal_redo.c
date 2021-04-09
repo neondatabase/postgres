@@ -526,7 +526,7 @@ PushPage(StringInfo input_message)
 	MarkBufferDirty(buf); /* pro forma */
 	UnlockReleaseBuffer(buf);
 
-	elog(LOG, "Page pushed!");
+	//elog(LOG, "Page pushed!");
 }
 
 /*
