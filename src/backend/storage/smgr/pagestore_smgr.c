@@ -148,12 +148,12 @@ zm_unpack(StringInfo s)
 
 		case T_ZenithReadResponse:
 		{
-			ZenithResponse *msg_resp = palloc0(sizeof(ZenithResponse));
+			ZenithResponse *msg_resp = palloc0(sizeof(ZenithResponse) + BLCKSZ);
 
 			msg_resp->tag = tag;
 			msg_resp->ok = pq_getmsgbyte(s);
 			msg_resp->n_blocks = pq_getmsgint(s, 4);
-			msg_resp->page = pq_getmsgbytes(s, BLCKSZ); // XXX: should be varlena
+			memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ); // XXX: should be varlena
 			pq_getmsgend(s);
 
 			msg = (ZenithMessage *) msg_resp;

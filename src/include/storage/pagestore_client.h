@@ -72,8 +72,8 @@ typedef struct
 {
 	ZenithMessageTag tag;
 	bool	ok;
-	const char   *page;
 	uint32	n_blocks;
+	char    page[1];
 } ZenithResponse;
 
 StringInfoData zm_pack(ZenithMessage *msg);

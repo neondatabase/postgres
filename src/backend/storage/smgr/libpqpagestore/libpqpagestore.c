@@ -124,12 +124,17 @@ zenith_call(ZenithRequest request)
 		zenith_log(ERROR, "failed to send page request: %s",
 					PQerrorMessage(pageserver_conn));
 	}
+	pfree(req_buff.data);
 
-	zenith_log(PqPageStoreTrace, "Sent request: %s", zm_to_string((ZenithMessage *) &request));
+	{
+		char* msg = zm_to_string((ZenithMessage *) &request);
+		zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
+		pfree(msg);
+	}
 
 	/* read response */
-	initStringInfo(&resp_buff);
 	resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
+	resp_buff.cursor = 0;
 
 	if (resp_buff.len == -1)
 		zenith_log(ERROR, "end of COPY");
@@ -137,11 +142,18 @@ zenith_call(ZenithRequest request)
 		zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
 
 	resp = zm_unpack(&resp_buff);
+	PQfreemem(resp_buff.data);
+
 	Assert(messageTag(resp) == T_ZenithStatusResponse
 		|| messageTag(resp) == T_ZenithNblocksResponse
 		|| messageTag(resp) == T_ZenithReadResponse);
 
-	zenith_log(PqPageStoreTrace, "Got response: %s", zm_to_string((ZenithMessage *) resp));
+	{
+		char* msg = zm_to_string((ZenithMessage *) &request);
+		zenith_log(PqPageStoreTrace, "Got response: %s", msg);
+		pfree(msg);
+	}
+
 
 	/*
 	 * XXX: zm_to_string leak strings. Check with what memory contex all this methods

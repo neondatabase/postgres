@@ -581,7 +581,7 @@ ApplyRecord(StringInfo input_message)
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
 	/* There shouldn't have been references to missing pages */
-	XLogCheckInvalidPages();
+	//XLogCheckInvalidPages();
 }
 
 static bool
@@ -659,6 +659,7 @@ GetPage(StringInfo input_message)
 	fflush(stdout);
 
 	ReleaseBuffer(buf);
+	DropDatabaseBuffers(rnode.dbNode);
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }
