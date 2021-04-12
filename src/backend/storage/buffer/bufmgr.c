@@ -1834,6 +1834,34 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 				UnlockBufHdr(buf, buf_state);
 		}
 		ForgetPrivateRefCountEntry(ref);
+
+		while (!InRecovery)
+		{
+			buf_state = LockBufHdr(buf);
+			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+			{
+				if (buf_state & BM_DIRTY)
+				{
+					PinBuffer_Locked(buf);
+					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
+												 LW_SHARED))
+					{
+						FlushOneBuffer(b);
+						LWLockRelease(BufferDescriptorGetContentLock(buf));
+					}
+					UnpinBuffer(buf, true);
+					continue;
+				}
+				else
+				{
+					InvalidateBuffer(buf);
+				}
+			}
+			else
+				UnlockBufHdr(buf, buf_state);
+			break;
+		}
+
 	}
 }
 

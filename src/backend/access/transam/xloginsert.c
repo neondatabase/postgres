@@ -1179,7 +1179,10 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 			MarkBufferDirty(bufpack[i]);
 		}
 
-		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
+		if (nbufs > 0)
+			recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
+		else
+			XLogResetInsertion();
 
 		for (i = 0; i < nbufs; i++)
 		{
