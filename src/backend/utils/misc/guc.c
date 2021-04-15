@@ -2059,6 +2059,15 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"zenith_test_evict", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Evict unpinned pages (for better test coverage)"),
+		},
+		&zenith_test_evict,
+		false,
+		NULL, NULL, NULL
+	},
+
 
 	/* End-of-list marker */
 	{

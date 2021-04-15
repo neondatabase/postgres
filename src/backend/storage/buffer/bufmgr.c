@@ -71,8 +71,6 @@
 
 #define RELS_BSEARCH_THRESHOLD		20
 
-#define ZENITH_EVICT_UNPINNED_PAGES 1 /* Just for debugging */
-
 /*
  * This is the size (in the number of blocks) above which we scan the
  * entire buffer pool to remove the buffers for all the pages of relation
@@ -159,6 +157,9 @@ int			maintenance_io_concurrency = 0;
 int			checkpoint_flush_after = 0;
 int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
+
+/* Evict unpinned pages (for better test coverage) */
+bool		zenith_test_evict = false;
 
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
