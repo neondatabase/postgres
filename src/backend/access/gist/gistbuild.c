@@ -167,7 +167,6 @@ static void gistMemorizeParent(GISTBuildState *buildstate, BlockNumber child,
 static void gistMemorizeAllDownlinks(GISTBuildState *buildstate, Buffer parent);
 static BlockNumber gistGetParent(GISTBuildState *buildstate, BlockNumber child);
 
-
 /*
  * Main entry point to GiST index build.
  */

@@ -445,10 +445,9 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 						forkNum)));
 
 	memcpy(buffer, resp->page, BLCKSZ);
+	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED but stored in WAL record */
 	pfree(resp);
 }
-
-#define PD_UNLOGGED 0x8
 
 
 /*
@@ -466,8 +465,8 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	XLogRecPtr lsn2 = PageGetLSN(buffer);
 
 	/*
-	 * If the page does not have a valid LSN, it was not WAL-logged. If we
-	 * just throw it away, we will lose the data. So WAL-log it now.
+	 * If the page was not WAL-logged before eviction then we can loose this modification.
+	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
 	 *
 	 * Normally, changes need to be WAL-logged before releasing the exclusive
 	 * lock in it. But creating a new relation is an exception; no other
@@ -483,19 +482,20 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	 * creation, but there are no guarantees that that assumption will hold in
 	 * the future.
 	 *
-	 * FIXME: GiST/SP-GiST index build will scan and WAL-log again the whole index .
+	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the whole index .
 	 * That's duplicative with the WAL-logging that we do here.
 	 *
 	 * FIXME: Redoing this record will set the LSN on the page. That could
 	 * mess up the LSN-NSN interlock in GiST index build.
 	 */
-	if (((lsn2 == InvalidXLogRecPtr && !PageIsNew(buffer)) || (((PageHeader)buffer)->pd_flags & PD_UNLOGGED))
+	if (!PageIsNew(buffer)
+		&& !(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
 		&& !RecoveryInProgress())
 	{
 		XLogRecPtr recptr;
-		((PageHeader)buffer)->pd_flags |= PD_UNLOGGED;
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
-		((PageHeader)buffer)->pd_flags &= ~PD_UNLOGGED;
+
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
+		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* SHould be set by log_newpage */
 
 		/*
 		 * Need to flush it too, so that it gets sent to the Page Server before we

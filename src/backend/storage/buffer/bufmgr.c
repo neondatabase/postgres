@@ -71,6 +71,8 @@
 
 #define RELS_BSEARCH_THRESHOLD		20
 
+#define ZENITH_EVICT_UNPINNED_PAGES 1 /* Just for debugging */
+
 /*
  * This is the size (in the number of blocks) above which we scan the
  * entire buffer pool to remove the buffers for all the pages of relation
@@ -941,7 +943,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
 				{
-					ereport(WARNING,
+					ereport(DEBUG1,
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s; zeroing out page",
 									blockNum,
@@ -1835,13 +1837,15 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 		}
 		ForgetPrivateRefCountEntry(ref);
 
-		while (!InRecovery)
+#if ZENITH_EVICT_UNPINNED_PAGES
+		if (!InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
 			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
 			{
 				if (buf_state & BM_DIRTY)
 				{
+					ReservePrivateRefCountEntry();
 					PinBuffer_Locked(buf);
 					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
 												 LW_SHARED))
@@ -1850,7 +1854,6 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 						LWLockRelease(BufferDescriptorGetContentLock(buf));
 					}
 					UnpinBuffer(buf, true);
-					continue;
 				}
 				else
 				{
@@ -1859,9 +1862,8 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 			}
 			else
 				UnlockBufHdr(buf, buf_state);
-			break;
 		}
-
+#endif
 	}
 }
 

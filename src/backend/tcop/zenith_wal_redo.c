@@ -89,7 +89,7 @@ static void ApplyRecord(StringInfo input_message);
 static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
 
-static List *redo_prepared_for = NIL;
+static BufferTag target_redo_tag;
 
 #define TRACE DEBUG5
 
@@ -453,7 +453,6 @@ BeginRedoForBlock(StringInfo input_message)
 	RelFileNode rnode;
 	ForkNumber forknum;
 	BlockNumber blknum;
-	BufferTag  *tag;
 	MemoryContext oldcxt;
 	SMgrRelation reln;
 
@@ -473,12 +472,13 @@ BeginRedoForBlock(StringInfo input_message)
 	blknum = pq_getmsgint(input_message, 4);
 
 	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
-	tag = palloc(sizeof(BufferTag));
-	INIT_BUFFERTAG(*tag, rnode, forknum, blknum);
+	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
 
-	redo_prepared_for = lappend(redo_prepared_for, tag);
-
-	elog(TRACE, "redo_prepared_for: add %s", pprint_tag(tag));
+	{
+		char* buf = pprint_tag(&target_redo_tag);
+		elog(TRACE, "BeginRedoForBlock %s", buf);
+		pfree(buf);
+	}
 
 	MemoryContextSwitchTo(oldcxt);
 
@@ -525,8 +525,6 @@ PushPage(StringInfo input_message)
 	memcpy(page, content, BLCKSZ);
 	MarkBufferDirty(buf); /* pro forma */
 	UnlockReleaseBuffer(buf);
-
-	//elog(LOG, "Page pushed!");
 }
 
 /*
@@ -579,17 +577,12 @@ ApplyRecord(StringInfo input_message)
 
 	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
-
-	/* There shouldn't have been references to missing pages */
-	//XLogCheckInvalidPages();
 }
 
 static bool
 redo_block_filter(XLogReaderState *record, uint8 block_id)
 {
 	BufferTag	target_tag;
-	ListCell   *lc;
-	bool ret = true;
 
 	if (!XLogRecGetBlockTag(record, block_id,
 							&target_tag.rnode, &target_tag.forkNum, &target_tag.blockNum))
@@ -599,24 +592,10 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 	}
 
 	/*
-	 * If this block isn't in the list of blocks we're interested in, return 'true'
+	 * If this block isn't one we are currently restoring, then return 'true'
 	 * so that this gets ignored
 	 */
-	foreach (lc, redo_prepared_for)
-	{
-		BufferTag *tag = (BufferTag *) lfirst(lc);
-
-		if (BUFFERTAGS_EQUAL(target_tag, *tag))
-		{
-			ret = false;
-			elog(TRACE, "redo_block_filter: %s vs %s", pprint_tag(&target_tag), pprint_tag(tag));
-			break;
-		}
-	}
-
-	elog(TRACE, "redo_block_filter: %d", ret);
-
-	return ret;
+	return !BUFFERTAGS_EQUAL(target_tag, target_redo_tag);
 }
 
 /*

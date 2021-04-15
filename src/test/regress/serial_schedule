@@ -1,5 +1,6 @@
 # src/test/regress/serial_schedule
 # This should probably be in an order similar to parallel_schedule.
+test: zenith-cid
 test: tablespace
 test: boolean
 test: char
@@ -76,7 +77,7 @@ test: triggers
 test: select
 test: inherit
 test: typed_table
-test: vacuum
+#test: vacuum
 test: drop_if_exists
 test: updatable_views
 test: roleattributes

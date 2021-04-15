@@ -239,6 +239,7 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
+	((PageHeader)regbuf->page)->pd_flags |= PD_WAL_LOGGED;
 
 	/*
 	 * Check that this page hasn't already been registered with some other
@@ -294,6 +295,7 @@ XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
+	((PageHeader)page)->pd_flags |= PD_WAL_LOGGED;
 
 	/*
 	 * Check that this page hasn't already been registered with some other

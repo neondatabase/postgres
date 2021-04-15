@@ -181,8 +181,16 @@ typedef PageHeaderData *PageHeader;
 #define PD_PAGE_FULL		0x0002	/* not enough free space for new tuple? */
 #define PD_ALL_VISIBLE		0x0004	/* all tuples on page are visible to
 									 * everyone */
+#define PD_WAL_LOGGED       0x0008  /* Page is wal-logged */
+#define PD_VALID_FLAG_BITS	0x000F	/* OR of all valid pd_flags bits */
 
-#define PD_VALID_FLAG_BITS	0x0007	/* OR of all valid pd_flags bits */
+/* Zenith XXX: build of gist, spgist and gin indexes first construct all index pages and only
+ * then wal log them. So if page is evicted before, we will loose the update.
+ * This is why PG_UNLOGGED bit was introduced. It is set when gist/spgist or gin page is initialized,
+ * and is cleared when page is wal logged.
+ * If page is written to the disk before been wal-logged, then pagestore_smgr
+ * creates FPI for it.
+ */
 
 /*
  * Page layout version number 0 is for pre-7.3 Postgres releases.

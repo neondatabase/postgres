@@ -1592,7 +1592,6 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 			   ptr + bkpb->hole_offset,
 			   BLCKSZ - (bkpb->hole_offset + bkpb->hole_length));
 	}
-
 	return true;
 }
 
