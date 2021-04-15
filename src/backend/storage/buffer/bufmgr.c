@@ -1838,8 +1838,7 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 		}
 		ForgetPrivateRefCountEntry(ref);
 
-#if ZENITH_EVICT_UNPINNED_PAGES
-		if (!InRecovery)
+		if (zenith_test_evict && !InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
 			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
@@ -1864,7 +1863,6 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 			else
 				UnlockBufHdr(buf, buf_state);
 		}
-#endif
 	}
 }
 
