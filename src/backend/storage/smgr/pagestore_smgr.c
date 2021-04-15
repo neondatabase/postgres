@@ -346,9 +346,13 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				char *buffer, bool skipFsync)
 {
 	ZenithResponse *resp;
+	XLogRecPtr lsn;
 
 	if (!loaded)
 		zenith_load();
+
+	lsn = PageGetLSN(buffer);
+	SetLastWrittenPageLSN(lsn);
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExtendRequest,
@@ -422,7 +426,11 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	if (RecoveryInProgress())
 		lsn = GetXLogReplayRecPtr(NULL);
 	else
-		lsn = GetFlushRecPtr();
+	{
+		lsn = GetLastWrittenPageLSN();
+		if (lsn > GetFlushRecPtr())
+			XLogFlush(lsn);
+	}
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
@@ -463,6 +471,7 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	/* noop */
 	XLogRecPtr lsn2 = PageGetLSN(buffer);
+	SetLastWrittenPageLSN(lsn2);
 
 	/*
 	 * If the page was not WAL-logged before eviction then we can loose this modification.
