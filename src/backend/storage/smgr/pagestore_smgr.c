@@ -471,7 +471,6 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	/* noop */
 	XLogRecPtr lsn2 = PageGetLSN(buffer);
-	SetLastWrittenPageLSN(lsn2);
 
 	/*
 	 * If the page was not WAL-logged before eviction then we can loose this modification.
@@ -528,6 +527,7 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		elog(SmgrTrace, "[ZENITH_SMGR] write noop lsn2=%X/%X",
 			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
 	}
+	SetLastWrittenPageLSN(PageGetLSN(buffer));
 }
 
 /*
