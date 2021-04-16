@@ -430,6 +430,11 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		lsn = GetLastWrittenPageLSN();
 		if (lsn > GetFlushRecPtr())
 			XLogFlush(lsn);
+		if (lsn == InvalidXLogRecPtr)
+		{
+			/* we haven't evicted anything yet since the server was started */
+			lsn = GetFlushRecPtr();
+		}
 	}
 
 	resp = page_server->request((ZenithRequest) {
