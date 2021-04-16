@@ -1532,6 +1532,7 @@ MarkBufferDirty(Buffer buffer)
 	if (!(old_buf_state & BM_DIRTY))
 	{
 		VacuumPageDirty++;
+		((PageHeader)BufferGetPage(buffer))->pd_flags &= ~PD_WAL_LOGGED;
 		pgBufferUsage.shared_blks_dirtied++;
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;

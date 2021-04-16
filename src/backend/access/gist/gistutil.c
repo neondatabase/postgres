@@ -869,6 +869,8 @@ gistNewBuffer(Relation r)
 				if (XLogStandbyInfoActive() && RelationNeedsWAL(r))
 					gistXLogPageReuse(r, blkno, GistPageGetDeleteXid(page));
 
+				((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
+
 				return buffer;
 			}
 
@@ -890,7 +892,6 @@ gistNewBuffer(Relation r)
 
 	if (needLock)
 		UnlockRelationForExtension(r, ExclusiveLock);
-
 	return buffer;
 }
 

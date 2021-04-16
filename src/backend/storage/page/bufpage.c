@@ -414,7 +414,7 @@ PageRestoreTempPage(Page tempPage, Page oldPage)
 
 	pageSize = PageGetPageSize(tempPage);
 	memcpy((char *) oldPage, (char *) tempPage, pageSize);
-
+	((PageHeader)oldPage)->pd_flags &= ~PD_WAL_LOGGED;
 	pfree(tempPage);
 }
 

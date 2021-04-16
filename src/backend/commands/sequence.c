@@ -53,7 +53,8 @@
  * so we pre-log a few fetches in advance. In the event of
  * crash we can lose (skip over) as many values as we pre-logged.
  */
-/* #define SEQ_LOG_VALS	32 */ /* Zenith XXX: we need to WAL log each sequence update to avoid 33 steps in sequences */
+/* Zenith XXX: to ensure sequence order of sequence in Zenith we need to WAL log each sequence update. */
+/* #define SEQ_LOG_VALS	32 */
 #define SEQ_LOG_VALS	0
 
 /*

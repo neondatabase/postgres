@@ -227,6 +227,63 @@ zm_to_string(ZenithMessage *msg)
 }
 
 static void
+zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
+{
+	XLogRecPtr lsn = PageGetLSN(buffer);
+	/*
+	 * If the page was not WAL-logged before eviction then we can loose this modification.
+	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
+	 *
+	 * Normally, changes need to be WAL-logged before releasing the exclusive
+	 * lock in it. But creating a new relation is an exception; no other
+	 * backend can look at the table until the transaction commits anyway, and
+	 * we take advantage of that in GiST/SP-GiST index build. The index is
+	 * created without WAL-logging anything, and at the end of the index
+	 * build, the just-built relation is scanned and WAL-logged. In principle,
+	 * any operation that holds an AccessExclusiveLock on the table could do
+	 * similar tricks, but index creation is the only case at the moment.
+	 *
+	 * FIXME: This assumes that if a page has a valid LSN, it has been
+	 * properly WAL-logged.  That currently covers the GiST/SP-GiST index
+	 * creation, but there are no guarantees that that assumption will hold in
+	 * the future.
+	 *
+	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the whole index .
+	 * That's duplicative with the WAL-logging that we do here.
+	 *
+	 * FIXME: Redoing this record will set the LSN on the page. That could
+	 * mess up the LSN-NSN interlock in GiST index build.
+	 */
+	if (!PageIsNew(buffer)
+		&& !(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
+		&& !RecoveryInProgress())
+	{
+		XLogRecPtr recptr;
+
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false/*true*/);
+		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
+
+		/*
+		 * Need to flush it too, so that it gets sent to the Page Server before we
+		 * might need to read it back. It should get flushed eventually anyway, at
+		 * least if there is some other WAL activity, so this isn't strictly
+		 * necessary for correctness. But if there is no other WAL activity, the
+		 * page read might get stuck waiting for the record to be streamed out
+		 * for an indefinite time.
+		 *
+		 * FIXME: Flushing the WAL is expensive. We should track the last "evicted"
+		 * LSN instead, and update it here. Or just kick the bgwriter to do the
+		 * flush, there is no need for us to block here waiting for it to finish.
+		 */
+		XLogFlush(recptr);
+		lsn = recptr;
+	}
+	SetLastWrittenPageLSN(lsn);
+}
+
+
+
+static void
 zenith_load(void)
 {
 	Assert(page_server_connstring && page_server_connstring[0]);
@@ -343,16 +400,12 @@ zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
  */
 void
 zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
-				char *buffer, bool skipFsync)
+			  char *buffer, bool skipFsync)
 {
 	ZenithResponse *resp;
-	XLogRecPtr lsn;
 
 	if (!loaded)
 		zenith_load();
-
-	lsn = PageGetLSN(buffer);
-	SetLastWrittenPageLSN(lsn);
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExtendRequest,
@@ -363,6 +416,8 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		}
 	});
 	pfree(resp);
+
+	zenith_wallog_page(reln, forkNum, blkno, buffer);
 }
 
 /*
@@ -458,7 +513,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 						forkNum)));
 
 	memcpy(buffer, resp->page, BLCKSZ);
-	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED but stored in WAL record */
+	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
 	pfree(resp);
 }
 
@@ -474,65 +529,7 @@ void
 zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		char *buffer, bool skipFsync)
 {
-	/* noop */
-	XLogRecPtr lsn2 = PageGetLSN(buffer);
-
-	/*
-	 * If the page was not WAL-logged before eviction then we can loose this modification.
-	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
-	 *
-	 * Normally, changes need to be WAL-logged before releasing the exclusive
-	 * lock in it. But creating a new relation is an exception; no other
-	 * backend can look at the table until the transaction commits anyway, and
-	 * we take advantage of that in GiST/SP-GiST index build. The index is
-	 * created without WAL-logging anything, and at the end of the index
-	 * build, the just-built relation is scanned and WAL-logged. In principle,
-	 * any operation that holds an AccessExclusiveLock on the table could do
-	 * similar tricks, but index creation is the only case at the moment.
-	 *
-	 * FIXME: This assumes that if a page has a valid LSN, it has been
-	 * properly WAL-logged.  That currently covers the GiST/SP-GiST index
-	 * creation, but there are no guarantees that that assumption will hold in
-	 * the future.
-	 *
-	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the whole index .
-	 * That's duplicative with the WAL-logging that we do here.
-	 *
-	 * FIXME: Redoing this record will set the LSN on the page. That could
-	 * mess up the LSN-NSN interlock in GiST index build.
-	 */
-	if (!PageIsNew(buffer)
-		&& !(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
-		&& !RecoveryInProgress())
-	{
-		XLogRecPtr recptr;
-
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
-		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* SHould be set by log_newpage */
-
-		/*
-		 * Need to flush it too, so that it gets sent to the Page Server before we
-		 * might need to read it back. It should get flushed eventually anyway, at
-		 * least if there is some other WAL activity, so this isn't strictly
-		 * necessary for correctness. But if there is no other WAL activity, the
-		 * page read might get stuck waiting for the record to be streamed out
-		 * for an indefinite time.
-		 *
-		 * FIXME: Flushing the WAL is expensive. We should track the last "evicted"
-		 * LSN instead, and update it here. Or just kick the bgwriter to do the
-		 * flush, there is no need for us to block here waiting for it to finish.
-		 */
-		XLogFlush(recptr);
-
-		elog(SmgrTrace, "[ZENITH_SMGR] write was WAL-logged lsn2=%X/%X",
-			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
-	}
-	else
-	{
-		elog(SmgrTrace, "[ZENITH_SMGR] write noop lsn2=%X/%X",
-			 (uint32) ((lsn2) >> 32), (uint32) (lsn2));
-	}
-	SetLastWrittenPageLSN(PageGetLSN(buffer));
+	zenith_wallog_page(reln, forknum, blocknum, buffer);
 }
 
 /*
