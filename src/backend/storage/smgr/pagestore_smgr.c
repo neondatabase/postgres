@@ -260,7 +260,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	{
 		XLogRecPtr recptr;
 
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false/*true*/);
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
 		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
 
 		/*
