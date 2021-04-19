@@ -654,7 +654,7 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	if (stmt->relation->relpersistence == RELPERSISTENCE_UNLOGGED)
 	{
 		/* Unlogged tables are not supported by Zenith */
-		stmt->relation->relpersistence == RELPERSISTENCE_PERMANENT;
+		stmt->relation->relpersistence = RELPERSISTENCE_PERMANENT;
 	}
 
 	/*

@@ -14,7 +14,7 @@
 
 #include "postgres.h"
 
-#define WAL_DEBUG
+//#define WAL_DEBUG
 
 #include <ctype.h>
 #include <math.h>
