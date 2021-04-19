@@ -4535,6 +4535,26 @@ static struct config_string ConfigureNamesString[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"callmemaybe_connstring", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Connection string that Page Server or WAL safekeeper should use to connect to us."),
+			NULL
+		},
+		&callmemaybe_connstring,
+		"",
+		NULL, NULL, NULL
+	},
+
+	{
+		{"zenith_timeline", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Zenith timelineid the server is running on."),
+			NULL
+		},
+		&zenith_timeline,
+		"",
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, NULL, NULL, NULL, NULL

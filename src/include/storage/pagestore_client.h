@@ -92,6 +92,8 @@ typedef struct
 extern page_server_api *page_server;
 
 extern char *page_server_connstring;
+extern char *callmemaybe_connstring;
+extern char *zenith_timeline;
 
 /* zenith storage manager functionality */
 

@@ -30,7 +30,10 @@ bool loaded = false;
 
 page_server_api *page_server;
 
+/* GUCs */
 char *page_server_connstring;
+char *callmemaybe_connstring;
+char *zenith_timeline;
 
 char const *const ZenithMessageStr[] =
 {

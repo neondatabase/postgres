@@ -63,7 +63,22 @@ zenith_connect()
 					errdetail_internal("%s", msg)));
 	}
 
-	query = psprintf("pagestream %lu", GetSystemIdentifier());
+	/* Ask the Page Server to connect to us, and stream WAL from us. */
+	if (callmemaybe_connstring && callmemaybe_connstring[0])
+	{
+		PGresult   *res;
+
+		query = psprintf("callmemaybe %s %s", zenith_timeline, callmemaybe_connstring);
+		res = PQexec(pageserver_conn, query);
+		if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		{
+			zenith_log(ERROR,
+					   "[ZENITH_SMGR] callmemaybe command failed");
+		}
+		PQclear(res);
+	}
+
+	query = psprintf("pagestream %s", zenith_timeline);
 	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 		zenith_log(ERROR,

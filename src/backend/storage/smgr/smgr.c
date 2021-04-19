@@ -18,6 +18,7 @@
 #include "postgres.h"
 
 #include "access/xlog.h"
+#include "catalog/pg_tablespace.h"
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
@@ -239,13 +240,14 @@ smgropen(RelFileNode rnode, BackendId backend)
 		else if (page_server_connstring && page_server_connstring[0])
 		{
 			/*
-			 * FIXME: Comparison with FirstNormalObjectId is not a proper way
-			 * to detect catalog tables. Initially, catalog tables will have
-			 * relNode < FirstNormalObjectId, but not after the first VACUUM
-			 * FULL or CLUSTER. The page server needs to be able to handle
-			 * catalog tables just as well.
+			 * Don't use the page server for shared catalogs. There's a chicken-and-egg
+			 * problem in particular with pg_authid: The Page Server needs to connect
+			 * to the compute node, to stream the latest WAL. Opening that replication
+			 * connection requires the compute node to check pg_authid to authenticate
+			 * the connection. And that pg_authid lookup in turn would make a call into
+			 * the Page Server, if we didn't special-case it here.
 			 */
-			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? SmgrMd : SmgrPageserver;
+			reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID) ? SmgrMd : SmgrPageserver;
 		}
 		/*
 		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the
