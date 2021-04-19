@@ -35,6 +35,8 @@ static char*        safekeepersList;
 static Safekeeper   safekeeper[MAX_SAFEKEEPERS];
 static WalMessage*  msgQueueHead;
 static WalMessage*  msgQueueTail;
+static XLogRecPtr	lastSentLsn;	/* WAL has been appended to msg queue up to this point */
+static XLogRecPtr	lastSentVCLLsn;	/* VCL replies have been sent to safekeeper up to here */
 static ServerInfo   serverInfo;
 static fd_set       readSet;
 static fd_set       writeSet;
@@ -46,6 +48,9 @@ static int          leader;     /* Most advanced safekeeper */
 static uint8		ztimelineid[16];
 
 static void parse_ztimelineid(char *str);
+
+static WalMessage* CreateMessageVCLOnly(void);
+static void BroadcastMessage(WalMessage* msg);
 
 static void
 disconnect_atexit(void)
@@ -232,6 +237,7 @@ HandleSafekeeperResponse(PGconn* conn)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
@@ -300,7 +306,7 @@ SendMessageToNode(int i, WalMessage* msg)
 	/* If there is no pending message then send new one */
 	if (safekeeper[i].currMsg == NULL)
 	{
-		// Skip already acknoledged messages */
+		/* Skip already acknowledged messages */
 		while (msg != NULL && (msg->ackMask & (1 << i)) != 0)
 			msg = msg->next;
 
@@ -313,6 +319,11 @@ SendMessageToNode(int i, WalMessage* msg)
 	{
 		msg->req.restartLsn = restartLsn;
 		msg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
+
+		pg_log_info("sending message with len %ld VCL=%X/%X to %d",
+					msg->size - sizeof(SafekeeperRequest),
+					(uint32) (msg->req.commitLsn >> 32), (uint32) msg->req.commitLsn, i);
+
 		rc = WriteSocketAsync(safekeeper[i].sock, &msg->req, msg->size);
 		if (rc < 0)
 		{
@@ -382,13 +393,15 @@ CreateMessage(char* data, int len)
 	/* Create new message and append it to message queue */
 	WalMessage*	msg;
 	XLogRecPtr startpos = fe_recvint64(&data[XLOG_HDR_START_POS]);
+	XLogRecPtr endpos = fe_recvint64(&data[XLOG_HDR_END_POS]);;
 
-	if (msgQueueTail && msgQueueTail->req.beginLsn >= startpos)
+	len -= XLOG_HDR_SIZE; /* skip message header */
+	endpos = startpos + len;
+	if (msgQueueTail && msgQueueTail->req.endLsn >= endpos)
 	{
 		/* Message already queued */
 		return NULL;
 	}
-	len -= XLOG_HDR_SIZE; /* skip message header */
 	Assert(len >= 0);
 	msg = (WalMessage*)pg_malloc(sizeof(WalMessage) + len);
 	if (msgQueueTail != NULL)
@@ -401,10 +414,46 @@ CreateMessage(char* data, int len)
 	msg->next = NULL;
 	msg->ackMask = 0;
 	msg->req.beginLsn = startpos;
-	msg->req.endLsn = startpos + len;
+	msg->req.endLsn = endpos;
 	msg->req.senderId = prop.nodeId;
 	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
 	PQfreemem(data);
+
+	Assert(msg->req.endLsn >= lastSentLsn);
+	lastSentLsn = msg->req.endLsn;
+	return msg;
+}
+
+/*
+ * Create WAL message with no data, just to let the safekeepers
+ * know that the VCL has advanced.
+ */
+static WalMessage*
+CreateMessageVCLOnly(void)
+{
+	/* Create new message and append it to message queue */
+	WalMessage*	msg;
+
+	if (lastSentLsn == 0)
+	{
+		/* FIXME: We haven't sent anything yet. Not sure what to do then.. */
+		return NULL;
+	}
+
+	msg = (WalMessage*)pg_malloc(sizeof(WalMessage));
+	if (msgQueueTail != NULL)
+		msgQueueTail->next = msg;
+	else
+		msgQueueHead = msg;
+	msgQueueTail = msg;
+
+	msg->size = sizeof(SafekeeperRequest);
+	msg->next = NULL;
+	msg->ackMask = 0;
+	msg->req.beginLsn = lastSentLsn;
+	msg->req.endLsn = lastSentLsn;
+	msg->req.senderId = prop.nodeId;
+	/* restartLsn and commitLsn are set just before the message sent, in SendMessageToNode() */
 	return msg;
 }
 
@@ -839,8 +888,31 @@ BroadcastWalStream(PGconn* conn)
 								  closesocket(server);
 								  server = PGINVALID_SOCKET;
 								  streaming = false;
-							  } else
+							  }
+							  else
+							  {
 								  SendMessageToNode(i, next);
+
+								  /*
+								   * Also send the new VCL to all the safekeepers.
+								   *
+								   * FIXME: This is redundant for safekeepers that have other outbound messages
+								   * pending.
+								   */
+								  if (1)
+								  {
+									  XLogRecPtr minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+									  WalMessage *vclUpdateMsg;
+
+									  if (minQuorumLsn > lastSentVCLLsn)
+									  {
+										  vclUpdateMsg = CreateMessageVCLOnly();
+										  if (vclUpdateMsg)
+											  BroadcastMessage(vclUpdateMsg);
+										  lastSentVCLLsn = minQuorumLsn;
+									  }
+								  }
+							  }
 						  }
 						  break;
 					  }
