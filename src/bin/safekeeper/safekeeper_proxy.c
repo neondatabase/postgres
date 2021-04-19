@@ -43,7 +43,9 @@ static SafekeeperResponse lastFeedback;
 static XLogRecPtr   restartLsn; /* Last position received by all safekeepers. */
 static RequestVote  prop;       /* Vote request for safekeeper */
 static int          leader;     /* Most advanced safekeeper */
+static uint8		ztimelineid[16];
 
+static void parse_ztimelineid(char *str);
 
 static void
 disconnect_atexit(void)
@@ -936,6 +938,7 @@ main(int argc, char **argv)
 		{"no-password", no_argument, NULL, 'w'},
 		{"password", no_argument, NULL, 'W'},
 		{"verbose", no_argument, NULL, 'v'},
+		{"ztimelineid", required_argument, NULL, 1},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -947,6 +950,7 @@ main(int argc, char **argv)
 	char       *port;
 	char       *sep;
 	char       *sysid;
+	char	   *ztimelineid_arg = NULL;
 
 	pg_logging_init(argv[0]);
 	progname = get_progname(argv[0]);
@@ -1003,6 +1007,9 @@ main(int argc, char **argv)
 				break;
 			case 'v':
 				verbose++;
+				break;
+			case 1:
+				ztimelineid_arg = pg_strdup(optarg);
 				break;
 			default:
 
@@ -1065,6 +1072,14 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
+	/* Parse the zenith timeline id */
+	if (!ztimelineid_arg)
+	{
+		pg_log_error("--ztimelineid is required");
+		exit(1);
+	}
+	parse_ztimelineid(ztimelineid_arg);
+
 	/*
 	 * Obtain a connection before doing anything.
 	 */
@@ -1082,7 +1097,6 @@ main(int argc, char **argv)
 	if (!RunIdentifySystem(conn, &sysid, &serverInfo.timeline, &serverInfo.walEnd, &db_name))
 		exit(1);
 
-
 	/* determine remote server's xlog segment size */
 	if (!RetrieveWalSegSize(conn))
 		exit(1);
@@ -1090,6 +1104,7 @@ main(int argc, char **argv)
 	/* Fill information about server */
 	serverInfo.walSegSize = WalSegSz;
 	serverInfo.pgVersion = PG_VERSION_NUM;
+	memcpy(serverInfo.ztimelineid, ztimelineid, 16);
 	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
 	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
 	sscanf(sysid, INT64_FORMAT, &serverInfo.systemId);
@@ -1109,4 +1124,56 @@ main(int argc, char **argv)
 	PQfinish(conn);
 
 	return 0;
+}
+
+/*
+ * Convert a character which represents a hexadecimal digit to an integer.
+ *
+ * Returns -1 if the character is not a hexadecimal digit.
+ */
+static int
+hexdecode_char(char c)
+{
+	if (c >= '0' && c <= '9')
+		return c - '0';
+	if (c >= 'a' && c <= 'f')
+		return c - 'a' + 10;
+	if (c >= 'A' && c <= 'F')
+		return c - 'A' + 10;
+
+	return -1;
+}
+
+/*
+ * Decode a hex string into a byte string, 2 hex chars per byte.
+ *
+ * Returns false if invalid characters are encountered; otherwise true.
+ */
+static bool
+hexdecode_string(uint8 *result, char *input, int nbytes)
+{
+	int			i;
+
+	for (i = 0; i < nbytes; ++i)
+	{
+		int			n1 = hexdecode_char(input[i * 2]);
+		int			n2 = hexdecode_char(input[i * 2 + 1]);
+
+		if (n1 < 0 || n2 < 0)
+			return false;
+		result[i] = n1 * 16 + n2;
+	}
+
+	return true;
+}
+
+
+static void
+parse_ztimelineid(char *str)
+{
+	if (!hexdecode_string(ztimelineid, str, 16))
+	{
+		pg_log_error("Could not parse --ztimelineid parameter");
+		exit(1);
+	}
 }

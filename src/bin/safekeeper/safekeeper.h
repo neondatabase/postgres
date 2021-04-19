@@ -59,6 +59,7 @@ typedef struct ServerInfo
 	uint32     pgVersion;         /* Postgres server version */
 	NodeId     nodeId;
 	uint64     systemId;          /* Postgres system identifier */
+	uint8	   ztimelineid[16];   /* Zenith timeline id */
 	XLogRecPtr walEnd;
     TimeLineID timeline;
 	int        walSegSize;
