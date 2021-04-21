@@ -29,12 +29,8 @@ typedef enum
 {
 	/* pagestore_client -> pagestore */
 	T_ZenithExistsRequest = 0,
-	T_ZenithTruncRequest,
-	T_ZenithUnlinkRequest,
 	T_ZenithNblocksRequest,
 	T_ZenithReadRequest,
-	T_ZenithCreateRequest,
-	T_ZenithExtendRequest,
 
 	/* pagestore -> pagestore_client */
 	T_ZenithStatusResponse = 100,

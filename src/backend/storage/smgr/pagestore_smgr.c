@@ -38,12 +38,8 @@ char *zenith_timeline;
 char const *const ZenithMessageStr[] =
 {
 	"ZenithExistsRequest",
-	"ZenithTruncRequest",
-	"ZenithUnlinkRequest",
 	"ZenithNblocksRequest",
 	"ZenithReadRequest",
-	"ZenithCreateRequest",
-	"ZenithExtendRequest",
 	"ZenithStatusResponse",
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
@@ -61,12 +57,8 @@ zm_pack(ZenithMessage *msg)
 	{
 		/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		case T_ZenithTruncRequest:
-		case T_ZenithUnlinkRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithCreateRequest:
-		case T_ZenithExtendRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -105,18 +97,14 @@ ZenithMessage *
 zm_unpack(StringInfo s)
 {
 	ZenithMessageTag tag = pq_getmsgbyte(s);
-	ZenithMessage *msg;
+	ZenithMessage *msg = NULL;
 
 	switch (tag)
 	{
 		/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		case T_ZenithTruncRequest:
-		case T_ZenithUnlinkRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithCreateRequest:
-		case T_ZenithExtendRequest:
 		{
 			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
 
@@ -182,12 +170,8 @@ zm_to_string(ZenithMessage *msg)
 	{
 		/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		case T_ZenithTruncRequest:
-		case T_ZenithUnlinkRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithCreateRequest:
-		case T_ZenithExtendRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -230,9 +214,25 @@ zm_to_string(ZenithMessage *msg)
 }
 
 static void
+zenith_load(void)
+{
+	Assert(page_server_connstring && page_server_connstring[0]);
+
+	load_file("libpqpagestore", false);
+	if (page_server == NULL)
+		elog(ERROR, "libpqpagestore didn't initialize correctly");
+
+	loaded = true;
+}
+
+static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
 {
 	XLogRecPtr lsn = PageGetLSN(buffer);
+
+	if (!loaded)
+		zenith_load();
+
 	/*
 	 * If the page was not WAL-logged before eviction then we can loose this modification.
 	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
@@ -257,8 +257,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * FIXME: Redoing this record will set the LSN on the page. That could
 	 * mess up the LSN-NSN interlock in GiST index build.
 	 */
-	if (!PageIsNew(buffer)
-		&& !(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
+	if (!(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
 		&& !RecoveryInProgress())
 	{
 		XLogRecPtr recptr;
@@ -280,23 +279,24 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 */
 		XLogFlush(recptr);
 		lsn = recptr;
+		elog(SmgrTrace, "Force wal logging of page %u of relation %u/%u/%u.%u, lsn=%X",
+			 blocknum,
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum, (uint32)lsn);
+	} else {
+		elog(SmgrTrace, "Page %u of relation %u/%u/%u.%u is alread wal logged at lsn=%X",
+			 blocknum,
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum, (uint32)lsn);
 	}
 	SetLastWrittenPageLSN(lsn);
 }
 
 
-
-static void
-zenith_load(void)
-{
-	Assert(page_server_connstring && page_server_connstring[0]);
-
-	load_file("libpqpagestore", false);
-	if (page_server == NULL)
-		elog(ERROR, "libpqpagestore didn't initialize correctly");
-
-	loaded = true;
-}
 
 /*
  *	zenith_init() -- Initialize private state
@@ -305,6 +305,30 @@ void
 zenith_init(void)
 {
 	/* noop */
+}
+
+
+/*
+ * Return LSN for requesting pages and number of blocks from page server
+ */
+static XLogRecPtr
+zenith_get_request_lsn(void)
+{
+	XLogRecPtr lsn;
+	if (RecoveryInProgress())
+		lsn = GetXLogReplayRecPtr(NULL);
+	else
+	{
+		lsn = GetLastWrittenPageLSN();
+		if (lsn > GetFlushRecPtr())
+			XLogFlush(lsn);
+		if (lsn == InvalidXLogRecPtr)
+		{
+			/* we haven't evicted anything yet since the server was started */
+			lsn = GetFlushRecPtr();
+		}
+	}
+	return lsn;
 }
 
 
@@ -325,7 +349,8 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum
-		}
+		},
+		.lsn = zenith_get_request_lsn()
 	});
 	ok = resp->ok;
 	pfree(resp);
@@ -340,20 +365,11 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 void
 zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 {
-	ZenithResponse *resp;
-
-	/* noop */
-	if (!loaded)
-		zenith_load();
-
-	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithCreateRequest,
-		.page_key = {
-			.rnode = reln->smgr_rnode.node,
-			.forknum = forkNum
-		}
-	});
-	pfree(resp);
+	elog(SmgrTrace, "Create relation %u/%u/%u.%u",
+		 reln->smgr_rnode.node.spcNode,
+		 reln->smgr_rnode.node.dbNode,
+		 reln->smgr_rnode.node.relNode,
+		 forkNum);
 }
 
 /*
@@ -377,19 +393,6 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 void
 zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 {
-	ZenithResponse *resp;
-
-	if (!loaded)
-		zenith_load();
-
-	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithUnlinkRequest,
-		.page_key = {
-			.rnode = rnode.node,
-			.forknum = forkNum
-		}
-	});
-	pfree(resp);
 }
 
 /*
@@ -405,22 +408,12 @@ void
 zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
-	ZenithResponse *resp;
-
-	if (!loaded)
-		zenith_load();
-
-	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithExtendRequest,
-		.page_key = {
-			.rnode = reln->smgr_rnode.node,
-			.forknum = forkNum,
-			.blkno = blkno
-		}
-	});
-	pfree(resp);
-
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
+	elog(SmgrTrace, "Extened relation %u/%u/%u.%u to %d",
+		 reln->smgr_rnode.node.spcNode,
+		 reln->smgr_rnode.node.dbNode,
+		 reln->smgr_rnode.node.relNode,
+		 forkNum, blkno+1);
 }
 
 /*
@@ -476,24 +469,9 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 char *buffer)
 {
 	ZenithResponse *resp;
-	XLogRecPtr lsn;
 
 	if (!loaded)
 		zenith_load();
-
-	if (RecoveryInProgress())
-		lsn = GetXLogReplayRecPtr(NULL);
-	else
-	{
-		lsn = GetLastWrittenPageLSN();
-		if (lsn > GetFlushRecPtr())
-			XLogFlush(lsn);
-		if (lsn == InvalidXLogRecPtr)
-		{
-			/* we haven't evicted anything yet since the server was started */
-			lsn = GetFlushRecPtr();
-		}
-	}
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
@@ -502,7 +480,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.forknum = forkNum,
 			.blkno = blkno
 		},
-		.lsn = lsn
+		.lsn = zenith_get_request_lsn()
 	});
 
 	if (!resp->ok)
@@ -530,7 +508,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
  */
 void
 zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
-		char *buffer, bool skipFsync)
+			 char *buffer, bool skipFsync)
 {
 	zenith_wallog_page(reln, forknum, blocknum, buffer);
 }
@@ -552,7 +530,8 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forknum,
-		}
+		},
+		.lsn = zenith_get_request_lsn()
 	});
 	n_blocks = resp->n_blocks;
 	pfree(resp);
@@ -565,20 +544,6 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
-	ZenithResponse *resp;
-
-	if (!loaded)
-		zenith_load();
-
-	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithTruncRequest,
-		.page_key = {
-			.rnode = reln->smgr_rnode.node,
-			.forknum = forknum,
-			.blkno = nblocks // XXX: change that to the different message type
-		}
-	});
-	pfree(resp);
 }
 
 /*
