@@ -248,6 +248,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 			 * the Page Server, if we didn't special-case it here.
 			 */
 			reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID) ? SmgrMd : SmgrPageserver;
+
+			/* Request all needed pages from pageserver, including catalog and SLRU */
+			if (computenode_mode)
+				reln->smgr_which = SmgrPageserver;
 		}
 		/*
 		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the

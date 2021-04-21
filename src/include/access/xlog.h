@@ -20,6 +20,8 @@
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
 
+extern bool computenode_mode;
+
 
 /* Sync methods */
 #define SYNC_METHOD_FSYNC		0

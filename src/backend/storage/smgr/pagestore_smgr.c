@@ -40,6 +40,7 @@ char const *const ZenithMessageStr[] =
 	"ZenithExistsRequest",
 	"ZenithNblocksRequest",
 	"ZenithReadRequest",
+	"ZenithPageExistsRequest",
 	"ZenithStatusResponse",
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
@@ -59,6 +60,7 @@ zm_pack(ZenithMessage *msg)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
+		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -105,6 +107,7 @@ zm_unpack(StringInfo s)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
+		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
 
@@ -172,6 +175,7 @@ zm_to_string(ZenithMessage *msg)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
+		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -484,17 +488,101 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	});
 
 	if (!resp->ok)
-		ereport(ERROR,
-				(errcode(ERRCODE_IO_ERROR),
-				 errmsg("could not read block %u in rel %u/%u/%u.%u from page server",
-						blkno,
-						reln->smgr_rnode.node.spcNode,
-						reln->smgr_rnode.node.dbNode,
-						reln->smgr_rnode.node.relNode,
-						forkNum)));
+	{
+		if (forkNum == 1 || forkNum == 2 || forkNum == 3)
+		{
+			ereport(WARNING,
+					(errcode(ERRCODE_IO_ERROR),
+					errmsg("could not read block %u in rel %u/%u/%u.%u from page server",
+							blkno,
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forkNum)));
+			memset(buffer, 0, BLCKSZ);
+			pfree(resp);
+			return;
+		}
 
+		ereport(ERROR,
+			(errcode(ERRCODE_IO_ERROR),
+			errmsg("could not read block %u in rel %u/%u/%u.%u from page server",
+					blkno,
+					reln->smgr_rnode.node.spcNode,
+					reln->smgr_rnode.node.dbNode,
+					reln->smgr_rnode.node.relNode,
+					forkNum)));
+	}
 	memcpy(buffer, resp->page, BLCKSZ);
 	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
+	pfree(resp);
+}
+
+#define PD_UNLOGGED 0x8
+
+bool
+zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
+{
+	bool ok;
+	ZenithResponse *resp;
+	if (!loaded)
+		zenith_load();
+
+
+	elog(SmgrTrace, "[ZENITH_SMGR] zenith_nonrel_page_exists relnode %u/%u/%u_%d blkno %u",
+		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno);
+
+	resp = page_server->request((ZenithRequest) {
+		.tag = T_ZenithPageExistsRequest,
+		.page_key = {
+			.rnode = rnode,
+			.forknum = forknum,
+			.blkno = blkno
+		}
+	});
+	ok = resp->ok;
+	pfree(resp);
+	return ok;
+}
+
+void
+zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forknum)
+{
+	XLogRecPtr lsn;
+	int bufsize = BLCKSZ;
+	ZenithResponse *resp;
+
+	//43 is magic for RELMAPPER_FILENAME in page cache
+	// relmapper files has non-standard size of 512bytes
+	if (forknum == 43)
+		bufsize = 512;
+
+	if (!loaded)
+		zenith_load();
+
+	if (RecoveryInProgress())
+		lsn = GetXLogReplayRecPtr(NULL);
+	else
+		lsn = GetFlushRecPtr();
+
+	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
+		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
+		(uint32) ((lsn) >> 32), (uint32) (lsn));
+
+	resp = page_server->request((ZenithRequest) {
+		.tag = T_ZenithReadRequest,
+		.page_key = {
+			.rnode = rnode,
+			.forknum = forknum,
+			.blkno = blkno
+		},
+		.lsn = lsn
+	});
+
+	if (!resp->ok)
+		elog(ERROR, "[ZENITH_SMGR] smgr page not found");
+
+	memcpy(buffer, resp->page, bufsize);
 	pfree(resp);
 }
 

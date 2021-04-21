@@ -531,6 +531,7 @@ char	   *event_source;
 bool		row_security;
 bool		check_function_bodies = true;
 
+bool 		computenode_mode;
 /*
  * This GUC exists solely for backward compatibility, check its definition for
  * details.
@@ -2068,6 +2069,14 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"computenode_mode", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Run node in zenith computenode mode."),
+		},
+		&computenode_mode,
+		true,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{

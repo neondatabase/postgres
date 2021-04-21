@@ -31,6 +31,7 @@ typedef enum
 	T_ZenithExistsRequest = 0,
 	T_ZenithNblocksRequest,
 	T_ZenithReadRequest,
+	T_ZenithPageExistsRequest,
 
 	/* pagestore -> pagestore_client */
 	T_ZenithStatusResponse = 100,
@@ -114,4 +115,6 @@ extern void zenith_truncate(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber nblocks);
 extern void zenith_immedsync(SMgrRelation reln, ForkNumber forknum);
 
+extern bool zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum);
+extern void zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forknum);
 #endif

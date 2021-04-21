@@ -59,6 +59,8 @@
 #include "storage/fd.h"
 #include "storage/shmem.h"
 
+#include "storage/pagestore_client.h"
+
 #define SlruFileName(ctl, path, seg) \
 	snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir, seg)
 
@@ -637,6 +639,20 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 
 	SlruFileName(ctl, path, segno);
 
+	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+		page_server_connstring && page_server_connstring[0])
+	{
+		int forknum;
+		RelFileNode rnode;
+		rnode.dbNode = 0;
+		rnode.spcNode = 0;
+		rnode.relNode = 0;
+
+		forknum = PG_CLOG_FORKNUM;
+
+		return zenith_nonrel_page_exists(rnode, pageno, forknum);
+	}
+
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
@@ -698,6 +714,23 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	 * SlruPhysicalWritePage).  Hence, if we are InRecovery, allow the case
 	 * where the file doesn't exist, and return zeroes instead.
 	 */
+
+	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+		page_server_connstring && page_server_connstring[0])
+	{
+		int forknum;
+		RelFileNode rnode;
+		rnode.dbNode = 0;
+		rnode.spcNode = 0;
+		rnode.relNode = 0;
+
+		if (strcmp(ctl->Dir, "pg_xact") == 0)
+			forknum = PG_CLOG_FORKNUM;
+
+		zenith_read_nonrel(rnode, pageno, shared->page_buffer[slotno], forknum);
+		return true;
+	}
+
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
@@ -804,6 +837,13 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruWriteAll fdata)
 			XLogFlush(max_lsn);
 			END_CRIT_SECTION();
 		}
+	}
+
+	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+		page_server_connstring && page_server_connstring[0])
+	{
+		elog(DEBUG2, "[ZENITH] SLRU SlruPhysicalWritePage noop");
+		return true;
 	}
 
 	/*
@@ -1596,6 +1636,14 @@ SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 	int			result;
 
 	SlruFileName(ctl, path, ftag->segno);
+
+
+	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+		page_server_connstring && page_server_connstring[0])
+	{
+		elog(DEBUG2, "[ZENITH] SLRU SlruSyncFileTag noop");
+		return true;
+	}
 
 	fd = OpenTransientFile(path, O_RDWR | PG_BINARY);
 	if (fd < 0)
