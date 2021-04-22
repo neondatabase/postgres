@@ -718,14 +718,11 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
 		page_server_connstring && page_server_connstring[0])
 	{
-		int forknum;
+		int forknum = PG_CLOG_FORKNUM;
 		RelFileNode rnode;
 		rnode.dbNode = 0;
 		rnode.spcNode = 0;
 		rnode.relNode = 0;
-
-		if (strcmp(ctl->Dir, "pg_xact") == 0)
-			forknum = PG_CLOG_FORKNUM;
 
 		zenith_read_nonrel(rnode, pageno, shared->page_buffer[slotno], forknum);
 		return true;
