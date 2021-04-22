@@ -23,6 +23,7 @@
 #include "storage/bufmgr.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "replication/walsender.h"
 
 const int SmgrTrace = DEBUG5;
 
@@ -315,17 +316,36 @@ static XLogRecPtr
 zenith_get_request_lsn(void)
 {
 	XLogRecPtr lsn;
+
 	if (RecoveryInProgress())
+	{
 		lsn = GetXLogReplayRecPtr(NULL);
+		elog(LOG, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
+			(uint32) ((lsn) >> 32), (uint32) (lsn));
+
+		lsn = InvalidXLogRecPtr;
+	}
+	else if (am_walsender)
+	{
+		lsn = InvalidXLogRecPtr;
+		elog(LOG, "am walsender zenith_get_request_lsn lsn 0 ");
+	}
 	else
 	{
 		lsn = GetLastWrittenPageLSN();
+
+		elog(LOG, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
+			(uint32) ((lsn) >> 32), (uint32) (lsn));
+
 		if (lsn > GetFlushRecPtr())
 			XLogFlush(lsn);
 		if (lsn == InvalidXLogRecPtr)
 		{
 			/* we haven't evicted anything yet since the server was started */
 			lsn = GetFlushRecPtr();
+			elog(LOG, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X request 0",
+			(uint32) ((lsn) >> 32), (uint32) (lsn));
+			lsn = InvalidXLogRecPtr;
 		}
 	}
 	return lsn;
@@ -556,6 +576,10 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 		zenith_load();
 
 	lsn = zenith_get_request_lsn();
+<<<<<<< HEAD
+=======
+
+>>>>>>> 4d0094254b... Request special lsn during bootstrap
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
 		(uint32) ((lsn) >> 32), (uint32) (lsn));
