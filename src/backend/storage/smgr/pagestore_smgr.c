@@ -576,10 +576,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 		zenith_load();
 
 	lsn = zenith_get_request_lsn();
-<<<<<<< HEAD
-=======
 
->>>>>>> 4d0094254b... Request special lsn during bootstrap
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
 		(uint32) ((lsn) >> 32), (uint32) (lsn));
