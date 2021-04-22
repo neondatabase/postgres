@@ -247,7 +247,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 			 * the connection. And that pg_authid lookup in turn would make a call into
 			 * the Page Server, if we didn't special-case it here.
 			 */
-			reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID) ? SmgrMd : SmgrPageserver;
+			// ZENITH-XXX: not working now for regression database 
+			// reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID) ? SmgrMd : SmgrPageserver;
+			reln->smgr_which = rnode.relNode < FirstNormalObjectId ? SmgrMd : SmgrPageserver;
+
 
 			/* Request all needed pages from pageserver, including catalog and SLRU */
 			if (computenode_mode)

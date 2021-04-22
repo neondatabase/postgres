@@ -40,7 +40,6 @@ char const *const ZenithMessageStr[] =
 	"ZenithExistsRequest",
 	"ZenithNblocksRequest",
 	"ZenithReadRequest",
-	"ZenithPageExistsRequest",
 	"ZenithStatusResponse",
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
@@ -60,7 +59,6 @@ zm_pack(ZenithMessage *msg)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -107,7 +105,6 @@ zm_unpack(StringInfo s)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
 
@@ -175,7 +172,6 @@ zm_to_string(ZenithMessage *msg)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithReadRequest:
-		case T_ZenithPageExistsRequest:
 		{
 			ZenithRequest *msg_req = (ZenithRequest *) msg;
 
@@ -523,20 +519,21 @@ zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
 {
 	bool ok;
 	ZenithResponse *resp;
+
 	if (!loaded)
 		zenith_load();
-
 
 	elog(SmgrTrace, "[ZENITH_SMGR] zenith_nonrel_page_exists relnode %u/%u/%u_%d blkno %u",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno);
 
 	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithPageExistsRequest,
+		.tag = T_ZenithExistsRequest,
 		.page_key = {
 			.rnode = rnode,
 			.forknum = forknum,
 			.blkno = blkno
-		}
+		},
+		.lsn = zenith_get_request_lsn()
 	});
 	ok = resp->ok;
 	pfree(resp);

@@ -31,7 +31,6 @@ typedef enum
 	T_ZenithExistsRequest = 0,
 	T_ZenithNblocksRequest,
 	T_ZenithReadRequest,
-	T_ZenithPageExistsRequest,
 
 	/* pagestore -> pagestore_client */
 	T_ZenithStatusResponse = 100,
