@@ -548,6 +548,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 {
 	int bufsize = BLCKSZ;
 	ZenithResponse *resp;
+	XLogRecPtr lsn;
 
 	//43 is magic for RELMAPPER_FILENAME in page cache
 	// relmapper files has non-standard size of 512bytes
@@ -557,6 +558,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 	if (!loaded)
 		zenith_load();
 
+	lsn = zenith_get_request_lsn();
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
 		(uint32) ((lsn) >> 32), (uint32) (lsn));
@@ -568,7 +570,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 			.forknum = forknum,
 			.blkno = blkno
 		},
-		.lsn = zenith_get_request_lsn()
+		.lsn = lsn
 	});
 
 	if (!resp->ok)
