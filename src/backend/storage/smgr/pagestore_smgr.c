@@ -518,8 +518,6 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	pfree(resp);
 }
 
-#define PD_UNLOGGED 0x8
-
 bool
 zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
 {
@@ -548,7 +546,6 @@ zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
 void
 zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forknum)
 {
-	XLogRecPtr lsn;
 	int bufsize = BLCKSZ;
 	ZenithResponse *resp;
 
@@ -559,11 +556,6 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 
 	if (!loaded)
 		zenith_load();
-
-	if (RecoveryInProgress())
-		lsn = GetXLogReplayRecPtr(NULL);
-	else
-		lsn = GetFlushRecPtr();
 
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
@@ -576,7 +568,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 			.forknum = forknum,
 			.blkno = blkno
 		},
-		.lsn = lsn
+		.lsn = zenith_get_request_lsn()
 	});
 
 	if (!resp->ok)
