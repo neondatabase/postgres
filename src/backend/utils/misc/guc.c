@@ -2074,7 +2074,7 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Run node in zenith computenode mode."),
 		},
 		&computenode_mode,
-		false,
+		true,
 		NULL, NULL, NULL
 	},
 
