@@ -8537,7 +8537,7 @@ GetLastWrittenPageLSN(void)
 }
 
 /*
- * GetLastWrittenPageLSN -- Returns maximal LSN of written page
+ * SetLastWrittenPageLSN -- Set maximal LSN of written page
  */
 void
 SetLastWrittenPageLSN(XLogRecPtr lsn)
