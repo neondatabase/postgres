@@ -78,6 +78,7 @@
 #include "storage/buf_internals.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
+#include "storage/pagestore_client.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -378,7 +379,7 @@ wait_with_timeout(void)
 		ret = select(1, &fds, NULL, NULL, &timeout);
 		if (ret != 0)
 			break;
-		elog(LOG, "still alive");
+		elog(DEBUG1, "still alive");
 	}
 }
 
@@ -639,6 +640,7 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropDatabaseBuffers(rnode.dbNode);
+	inmem_init();
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }

@@ -72,6 +72,7 @@ typedef enum SmgrImpl
 	SmgrMd,
 	SmgrLazyS3,
 	SmgrPageserver,
+	SmgrWalRedo
 } SmgrImpl;
 
 static const f_smgr smgrsw[] = {
@@ -128,7 +129,25 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = zenith_nblocks,
 		.smgr_truncate = zenith_truncate,
 		.smgr_immedsync = zenith_immedsync,
-	}
+	},
+	/* zenith_smgr */
+	{
+		.smgr_init = inmem_init,
+		.smgr_shutdown = NULL,
+		.smgr_open = inmem_open,
+		.smgr_close = inmem_close,
+		.smgr_create = inmem_create,
+		.smgr_exists = inmem_exists,
+		.smgr_unlink = inmem_unlink,
+		.smgr_extend = inmem_extend,
+		.smgr_prefetch = inmem_prefetch,
+		.smgr_read = inmem_read,
+		.smgr_write = inmem_write,
+		.smgr_writeback = inmem_writeback,
+		.smgr_nblocks = inmem_nblocks,
+		.smgr_truncate = inmem_truncate,
+		.smgr_immedsync = inmem_immedsync,
+	},
 };
 
 static const int NSmgr = lengthof(smgrsw);
@@ -236,6 +255,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 			/* Temporary rels are always local */
 			reln->smgr_which = SmgrMd;
 
+		}
+		else if (InRecovery)
+		{
+			reln->smgr_which = SmgrWalRedo;
 		}
 		else if (page_server_connstring && page_server_connstring[0])
 		{

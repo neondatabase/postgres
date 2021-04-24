@@ -16,6 +16,7 @@ OBJS = \
 	lazyrestore.o \
 	md.o \
 	pagestore_smgr.o \
+	inmem_smgr.o \
 	smgr.o
 
 include $(top_srcdir)/src/backend/common.mk

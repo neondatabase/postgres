@@ -116,4 +116,28 @@ extern void zenith_immedsync(SMgrRelation reln, ForkNumber forknum);
 
 extern bool zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum);
 extern void zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forknum);
+
+/* zenith wal-redo storage manager functionality */
+
+extern void inmem_init(void);
+extern void inmem_open(SMgrRelation reln);
+extern void inmem_close(SMgrRelation reln, ForkNumber forknum);
+extern void inmem_create(SMgrRelation reln, ForkNumber forknum, bool isRedo);
+extern bool inmem_exists(SMgrRelation reln, ForkNumber forknum);
+extern void inmem_unlink(RelFileNodeBackend rnode, ForkNumber forknum, bool isRedo);
+extern void inmem_extend(SMgrRelation reln, ForkNumber forknum,
+					 BlockNumber blocknum, char *buffer, bool skipFsync);
+extern bool inmem_prefetch(SMgrRelation reln, ForkNumber forknum,
+					   BlockNumber blocknum);
+extern void inmem_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+				   char *buffer);
+extern void inmem_write(SMgrRelation reln, ForkNumber forknum,
+					BlockNumber blocknum, char *buffer, bool skipFsync);
+extern void inmem_writeback(SMgrRelation reln, ForkNumber forknum,
+						BlockNumber blocknum, BlockNumber nblocks);
+extern BlockNumber inmem_nblocks(SMgrRelation reln, ForkNumber forknum);
+extern void inmem_truncate(SMgrRelation reln, ForkNumber forknum,
+					   BlockNumber nblocks);
+extern void inmem_immedsync(SMgrRelation reln, ForkNumber forknum);
+
 #endif
