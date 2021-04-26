@@ -313,7 +313,7 @@ zenith_init(void)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(void)
+zenith_get_request_lsn(bool nonrel)
 {
 	XLogRecPtr lsn;
 
@@ -329,6 +329,10 @@ zenith_get_request_lsn(void)
 	{
 		lsn = InvalidXLogRecPtr;
 		elog(LOG, "am walsender zenith_get_request_lsn lsn 0 ");
+	}
+	else if (nonrel)
+	{
+		lsn  = GetFlushRecPtr();
 	}
 	else
 	{
@@ -370,7 +374,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum
 		},
-		.lsn = zenith_get_request_lsn()
+		.lsn = zenith_get_request_lsn(false)
 	});
 	ok = resp->ok;
 	pfree(resp);
@@ -500,7 +504,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.forknum = forkNum,
 			.blkno = blkno
 		},
-		.lsn = zenith_get_request_lsn()
+		.lsn = zenith_get_request_lsn(false)
 	});
 
 	if (!resp->ok)
@@ -553,7 +557,7 @@ zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
 			.forknum = forknum,
 			.blkno = blkno
 		},
-		.lsn = zenith_get_request_lsn()
+		.lsn = zenith_get_request_lsn(true)
 	});
 	ok = resp->ok;
 	pfree(resp);
@@ -575,7 +579,7 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 	if (!loaded)
 		zenith_load();
 
-	lsn = zenith_get_request_lsn();
+	lsn = zenith_get_request_lsn(true);
 
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
@@ -631,7 +635,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forknum,
 		},
-		.lsn = zenith_get_request_lsn()
+		.lsn = zenith_get_request_lsn(false)
 	});
 	n_blocks = resp->n_blocks;
 	pfree(resp);
