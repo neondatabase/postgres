@@ -320,7 +320,7 @@ zenith_get_request_lsn(bool nonrel)
 	if (RecoveryInProgress())
 	{
 		lsn = GetXLogReplayRecPtr(NULL);
-		elog(LOG, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
+		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
 
 		lsn = InvalidXLogRecPtr;
@@ -328,17 +328,18 @@ zenith_get_request_lsn(bool nonrel)
 	else if (am_walsender)
 	{
 		lsn = InvalidXLogRecPtr;
-		elog(LOG, "am walsender zenith_get_request_lsn lsn 0 ");
+		elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
 	}
 	else if (nonrel)
 	{
-		lsn  = GetFlushRecPtr();
+		lsn = GetFlushRecPtr();
+		elog(DEBUG1, "zenith_get_request_lsn norel GetFlushRecPtr  %X/%X", (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
 	else
 	{
 		lsn = GetLastWrittenPageLSN();
 
-		elog(LOG, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
+		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
 
 		if (lsn > GetFlushRecPtr())
@@ -347,7 +348,7 @@ zenith_get_request_lsn(bool nonrel)
 		{
 			/* we haven't evicted anything yet since the server was started */
 			lsn = GetFlushRecPtr();
-			elog(LOG, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X request 0",
+			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X request 0",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
 			lsn = InvalidXLogRecPtr;
 		}
