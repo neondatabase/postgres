@@ -3,7 +3,7 @@ declare
     xid xid8;
 	i integer;
 begin
-    for i in 1..1000000 loop
+    for i in 1..10000 loop
 	    xid = txid_current();
 		commit;
 		if (pg_xact_status(xid) <> 'committed') then
@@ -13,4 +13,4 @@ begin
 end;
 $$ language plpgsql;
 
-select do_commits();
+call do_commits();
