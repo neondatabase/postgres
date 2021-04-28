@@ -298,10 +298,7 @@ vacuum full foo;
  c      | integer |           |          | 
 Indexes:
     "foo_pkey" PRIMARY KEY, btree (a)
-    "foo_pkey" PRIMARY KEY, btree (a)
     "foo_b_idx" btree (b)
-    "foo_b_idx" btree (b)
-    "foo_c_idx" btree (c)
     "foo_c_idx" btree (c)
 
 drop table foo;
