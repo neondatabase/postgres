@@ -75,6 +75,7 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "replication/walproposer.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
@@ -229,6 +230,7 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
+static bool check_zenith_timeline(char **newval, void **extra, GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -2074,7 +2076,7 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Run node in zenith computenode mode."),
 		},
 		&computenode_mode,
-		true,
+		false,
 		NULL, NULL, NULL
 	},
 
@@ -2249,6 +2251,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_receiver_timeout,
 		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_acceptor_reconnect", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Timeout for reconnecting to ofline wal acceptor."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_acceptor_reconnect_timeout,
+		1000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4560,6 +4573,17 @@ static struct config_string ConfigureNamesString[] =
 			NULL
 		},
 		&zenith_timeline,
+		"",
+		check_zenith_timeline, NULL, NULL
+	},
+
+	{
+		{"wal_acceptors", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("List of Zenith WAL acceptors (host:port)"),
+			NULL,
+			GUC_LIST_INPUT | GUC_LIST_QUOTE
+		},
+		&wal_acceptors_list,
 		"",
 		NULL, NULL, NULL
 	},
@@ -12004,6 +12028,14 @@ static void
 assign_backtrace_functions(const char *newval, void *extra)
 {
 	backtrace_symbol_list = (char *) extra;
+}
+
+
+static bool
+check_zenith_timeline(char **newval, void **extra, GucSource source)
+{
+	uint8 ztimelineid[16];
+	return **newval == '\0' || HexDecodeString(ztimelineid, *newval, 16);
 }
 
 static bool
