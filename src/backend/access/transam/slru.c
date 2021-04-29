@@ -639,7 +639,7 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 
 	SlruFileName(ctl, path, segno);
 
-	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+	if (zenith_clog && strcmp(ctl->Dir, "pg_xact") == 0 &&
 		page_server_connstring && page_server_connstring[0])
 	{
 		int forknum;
@@ -715,7 +715,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	 * where the file doesn't exist, and return zeroes instead.
 	 */
 
-	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+	if (zenith_clog && strcmp(ctl->Dir, "pg_xact") == 0 &&
 		page_server_connstring && page_server_connstring[0])
 	{
 		int forknum;
@@ -839,7 +839,7 @@ SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno, SlruWriteAll fdata)
 		}
 	}
 
-	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+	if (zenith_clog && strcmp(ctl->Dir, "pg_xact") == 0 &&
 		page_server_connstring && page_server_connstring[0])
 	{
 		elog(DEBUG2, "[ZENITH] SLRU SlruPhysicalWritePage noop");
@@ -1638,7 +1638,7 @@ SlruSyncFileTag(SlruCtl ctl, const FileTag *ftag, char *path)
 	SlruFileName(ctl, path, ftag->segno);
 
 
-	if (computenode_mode && strcmp(ctl->Dir, "pg_xact") == 0 &&
+	if (zenith_clog && strcmp(ctl->Dir, "pg_xact") == 0 &&
 		page_server_connstring && page_server_connstring[0])
 	{
 		elog(DEBUG2, "[ZENITH] SLRU SlruSyncFileTag noop");

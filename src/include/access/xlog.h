@@ -20,7 +20,7 @@
 #include "nodes/pg_list.h"
 #include "storage/fd.h"
 
-extern bool computenode_mode;
+extern bool zenith_clog;
 
 
 /* Sync methods */

@@ -533,7 +533,7 @@ char	   *event_source;
 bool		row_security;
 bool		check_function_bodies = true;
 
-bool 		computenode_mode;
+bool 		zenith_clog;
 /*
  * This GUC exists solely for backward compatibility, check its definition for
  * details.
@@ -2072,10 +2072,10 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"computenode_mode", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Run node in zenith computenode mode."),
+		{"zenith_clog", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Use Zenith page server also for CLOG."),
 		},
-		&computenode_mode,
+		&zenith_clog,
 		false,
 		NULL, NULL, NULL
 	},
