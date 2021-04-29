@@ -2314,7 +2314,12 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		{
 			send_data();
 			if (WalSndCaughtUp)
+			{
+				if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
+					WalSndSetState(WALSNDSTATE_STREAMING);
 				WalProposerPoll();
+				WalSndCaughtUp = false;
+			}
 			continue;
 		}
 
@@ -2781,9 +2786,12 @@ XLogSendPhysical(void)
 	/*
 	 * OK to read and send the slice.
 	 */
-	resetStringInfo(&output_message);
-	pq_sendbyte(&output_message, 'w');
+	if (output_message.data)
+		resetStringInfo(&output_message);
+	else
+		initStringInfo(&output_message);
 
+	pq_sendbyte(&output_message, 'w');
 	pq_sendint64(&output_message, startptr);	/* dataStart */
 	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
 	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */

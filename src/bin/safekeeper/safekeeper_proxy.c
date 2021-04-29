@@ -734,7 +734,7 @@ BroadcastWalStream(PGconn* conn)
 				{
 					Assert(copybuf[0] == 'k'); /* keep alive */
 					if (copybuf[KEEPALIVE_RR_OFFS] /* response requested */
-						&& !SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), true))
+						&& !SendFeedback(conn, lastFeedback.flushLsn, feGetCurrentTimestamp(), false))
 					{
 						FD_CLR(server, &readSet);
 						closesocket(server);

@@ -124,7 +124,7 @@ ResetConnection(int i)
 			/* Start handshake: first of all send information about server */
 			if (WriteSocket(walkeeper[i].sock, &serverInfo, sizeof serverInfo))
 			{
-				AddWaitEventToSet(waitEvents, WL_SOCKET_READABLE, walkeeper[i].sock, NULL, NULL);
+				walkeeper[i].eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_READABLE, walkeeper[i].sock, NULL, &walkeeper[i]);
 				walkeeper[i].state = SS_HANDSHAKE;
 				walkeeper[i].asyncOffs = 0;
 			}
@@ -135,7 +135,7 @@ ResetConnection(int i)
 		}
 		else
 		{
-			AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, walkeeper[i].sock, NULL, NULL);
+			walkeeper[i].eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, walkeeper[i].sock, NULL, &walkeeper[i]);
 			walkeeper[i].state = SS_CONNECTING;
 		}
 	}
@@ -203,6 +203,9 @@ HandleWalKeeperResponse(void)
 		msgQueueTail = NULL;
 }
 
+/*
+ * WAL proposer bgworeker entry point
+ */
 void
 WalProposerMain(Datum main_arg)
 {
@@ -213,6 +216,13 @@ WalProposerMain(Datum main_arg)
 	/* Establish signal handlers. */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
 	pqsignal(SIGTERM, die);
+
+		/* Load the libpq-specific functions */
+	load_file("libpqwalreceiver", false);
+	if (WalReceiverFunctions == NULL)
+		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
+
+
 	BackgroundWorkerUnblockSignals();
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
@@ -242,14 +252,14 @@ WalProposerMain(Datum main_arg)
 	}
 	quorum = n_walkeepers/2 + 1;
 
-	Assert(ThisTimeLineID);
+	GetXLogReplayRecPtr(&ThisTimeLineID);
 
 	/* Fill information about server */
 	serverInfo.timeline = ThisTimeLineID;
 	serverInfo.walEnd = GetFlushRecPtr();
 	serverInfo.walSegSize = wal_segment_size;
 	serverInfo.pgVersion = PG_VERSION_NUM;
-	if (!HexDecodeString(serverInfo.ztimelineid, zenith_timeline, 16))
+	if (*zenith_timeline != '\0' && !HexDecodeString(serverInfo.ztimelineid, zenith_timeline, 16))
 		elog(FATAL, "Could not parse zenith_timeline");
 	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
 	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
@@ -257,8 +267,10 @@ WalProposerMain(Datum main_arg)
 
 	last_reconnect_attempt = GetCurrentTimestamp();
 
+	application_name = (char*)"safekeeper_proxy"; /* for synchronous_standby_names */
 	am_wal_proposer = true;
-
+	am_walsender = true;
+	InitWalSender();
 	ResetWalProposerEventSet();
 
 	/* Initiate connections to all walkeeper nodes */
@@ -505,7 +517,14 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 	sprintf(conninfo, "host=%s port=%s dbname=replication",
 			walkeeper[leader].host, walkeeper[leader].port);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
-
+	if (!wrconn)
+	{
+		ereport(WARNING,
+				(errmsg("could not connect to WAL acceptor %s:%s: %s",
+						walkeeper[leader].host, walkeeper[leader].port,
+						err)));
+		return false;
+	}
 	elog(LOG, "Start recovery from %s:%s starting from %X/%08X till %X/%08X timeline %d",
 		 walkeeper[leader].host, walkeeper[leader].port,
 		 (uint32)(startpos>>32), (uint32)startpos, (uint32)(endpos >> 32), (uint32)endpos,
@@ -668,9 +687,13 @@ WalProposerPoll(void)
 							{
 								elog(LOG, "Successfully established connection with %d nodes", quorum);
 
-								/* Perform recovery */
-								if (!WalProposerRecovery(leader, serverInfo.timeline, restartLsn, prop.VCL))
-									elog(FATAL, "Failed to recover state");
+								/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
+								if (restartLsn != prop.VCL)
+								{
+									/* Perform recovery */
+									if (!WalProposerRecovery(leader, serverInfo.timeline, restartLsn, prop.VCL))
+										elog(FATAL, "Failed to recover state");
+								}
 								WalProposerStartStreaming(prop.VCL);
 								/* Should not return here */
 							}
@@ -687,7 +710,7 @@ WalProposerPoll(void)
 					/* Read walkeeper response with flushed WAL position */
 				    rc = ReadSocketAsync(wk->sock,
 										 (char*)&wk->feedback + wk->asyncOffs,
-									   sizeof(wk->feedback) - wk->asyncOffs);
+										 sizeof(wk->feedback) - wk->asyncOffs);
 					if (rc < 0)
 					{
 						ResetConnection(i);
