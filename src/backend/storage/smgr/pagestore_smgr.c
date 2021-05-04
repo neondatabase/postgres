@@ -337,21 +337,32 @@ zenith_get_request_lsn(bool nonrel)
 	}
 	else
 	{
-		lsn = GetLastWrittenPageLSN();
+		XLogRecPtr flushlsn = GetFlushRecPtr();
 
+		/*
+		 * Use the latest LSN that was evicted from the buffer cache. Any
+		 * pages modified by later WAL records must still in the buffer cache,
+		 * so our request cannot concern those.
+		 */
+		lsn = GetLastWrittenPageLSN();
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
-
-		if (lsn > GetFlushRecPtr())
-			XLogFlush(lsn);
 		if (lsn == InvalidXLogRecPtr)
 		{
-			/* we haven't evicted anything yet since the server was started */
-			lsn = GetFlushRecPtr();
-			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X request 0",
-			(uint32) ((lsn) >> 32), (uint32) (lsn));
-			lsn = InvalidXLogRecPtr;
+			/*
+			 * We haven't evicted anything yet since the server was
+			 * started. Then just use the latest flushed LSN. That's always
+			 * safe, using the latest evicted LSN is really just an
+			 * optimization.
+			 */
+			lsn = flushlsn;
+			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X",
+				 (uint32) ((lsn) >> 32), (uint32) (lsn));
 		}
+
+		/* The record should've been flushed already, since it was evicted, but let's be safe */
+		if (lsn > flushlsn)
+			XLogFlush(lsn);
 	}
 	return lsn;
 }
