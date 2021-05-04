@@ -25,6 +25,23 @@
 #include "miscadmin.h"
 #include "replication/walsender.h"
 
+/*
+ * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
+ * calls to md.c, and *also* do the calls to the Page Server. On every
+ * read, compare the versions we read from local disk and Page Server,
+ * and Assert that they are identical.
+ */
+/* #define DEBUG_COMPARE_LOCAL */
+
+#ifdef DEBUG_COMPARE_LOCAL
+#include "access/nbtree.h"
+#include "storage/bufpage.h"
+#include "storage/md.h"
+#include "access/xlog_internal.h"
+
+static char *hexdump_page(char *page);
+#endif
+
 const int SmgrTrace = DEBUG5;
 
 bool loaded = false;
@@ -306,6 +323,9 @@ void
 zenith_init(void)
 {
 	/* noop */
+#ifdef DEBUG_COMPARE_LOCAL
+	mdinit();
+#endif
 }
 
 
@@ -418,6 +438,10 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forkNum);
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdcreate(reln, forkNum, isRedo);
+#endif
 }
 
 /*
@@ -441,6 +465,9 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 void
 zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 {
+#ifdef DEBUG_COMPARE_LOCAL
+	mdunlink(rnode, forkNum, isRedo);
+#endif
 }
 
 /*
@@ -456,12 +483,21 @@ void
 zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
+	XLogRecPtr lsn;
+
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
-	elog(SmgrTrace, "Extened relation %u/%u/%u.%u to %d",
+
+	lsn = PageGetLSN(buffer);
+	elog(SmgrTrace, "smgrextend called for %u/%u/%u.%u blk %u, page LSN: %X/%08X",
 		 reln->smgr_rnode.node.spcNode,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
-		 forkNum, blkno+1);
+		 forkNum, blkno,
+		 (uint32) (lsn >> 32), (uint32) lsn);
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdextend(reln, forkNum, blkno, buffer, skipFsync);
+#endif
 }
 
 /*
@@ -472,6 +508,10 @@ zenith_open(SMgrRelation reln)
 {
 	/* no work */
 	elog(SmgrTrace, "[ZENITH_SMGR] open noop");
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdopen(reln);
+#endif
 }
 
 /*
@@ -482,6 +522,10 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 {
 	/* no work */
 	elog(SmgrTrace, "[ZENITH_SMGR] close noop");
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdclose(reln, forknum);
+#endif
 }
 
 /*
@@ -507,6 +551,10 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 {
 	/* not implemented */
 	elog(SmgrTrace, "[ZENITH_SMGR] writeback noop");
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdwriteback(reln, forknum, blocknum, nblocks);
+#endif
 }
 
 /*
@@ -517,10 +565,12 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 char *buffer)
 {
 	ZenithResponse *resp;
+	XLogRecPtr request_lsn;
 
 	if (!loaded)
 		zenith_load();
 
+	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
 		.page_key = {
@@ -528,7 +578,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.forknum = forkNum,
 			.blkno = blkno
 		},
-		.lsn = zenith_get_request_lsn(false)
+		.lsn = request_lsn
 	});
 
 	if (!resp->ok)
@@ -560,7 +610,106 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	memcpy(buffer, resp->page, BLCKSZ);
 	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
 	pfree(resp);
+
+
+#ifdef DEBUG_COMPARE_LOCAL
+	if (forkNum == MAIN_FORKNUM)
+	{
+		char pageserver_masked[BLCKSZ];
+		char mdbuf[BLCKSZ];
+		char mdbuf_masked[BLCKSZ];
+
+		mdread(reln, forkNum, blkno, mdbuf);
+
+		memcpy(pageserver_masked, buffer, BLCKSZ);
+		memcpy(mdbuf_masked, mdbuf, BLCKSZ);
+
+		if (PageIsNew(mdbuf)) {
+			if (!PageIsNew(pageserver_masked)) {
+				elog(PANIC, "page is new in MD but not in Page Server at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n%s\n",
+					 blkno,
+					 reln->smgr_rnode.node.spcNode,
+					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.relNode,
+					 forkNum,
+					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 hexdump_page(buffer));
+			}
+		}
+		else if (PageIsNew(buffer)) {
+			elog(PANIC, "page is new in Page Server but not in MD at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n%s\n",
+					 blkno,
+					 reln->smgr_rnode.node.spcNode,
+					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.relNode,
+					 forkNum,
+					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 hexdump_page(mdbuf));
+		}
+		else if (PageGetSpecialSize(mdbuf) == 0)
+		{
+			// assume heap
+			RmgrTable[RM_HEAP_ID].rm_mask(mdbuf_masked, blkno);
+			RmgrTable[RM_HEAP_ID].rm_mask(pageserver_masked, blkno);
+
+			if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0) {
+				elog(PANIC, "heap buffers differ at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n------ MD ------\n%s\n------ Page Server ------\n%s\n",
+					 blkno,
+					 reln->smgr_rnode.node.spcNode,
+					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.relNode,
+					 forkNum,
+					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 hexdump_page(mdbuf_masked),
+					 hexdump_page(pageserver_masked));
+			}
+		}
+		else if (PageGetSpecialSize(mdbuf) == MAXALIGN(sizeof(BTPageOpaqueData)))
+		{
+			if (((BTPageOpaqueData *) PageGetSpecialPointer(mdbuf))->btpo_cycleid < MAX_BT_CYCLE_ID)
+			{
+				// assume btree
+				RmgrTable[RM_BTREE_ID].rm_mask(mdbuf_masked, blkno);
+				RmgrTable[RM_BTREE_ID].rm_mask(pageserver_masked, blkno);
+
+				if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0) {
+					elog(PANIC, "btree buffers differ at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n------ MD ------\n%s\n------ Page Server ------\n%s\n",
+						 blkno,
+						 reln->smgr_rnode.node.spcNode,
+						 reln->smgr_rnode.node.dbNode,
+						 reln->smgr_rnode.node.relNode,
+						 forkNum,
+						 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+						 hexdump_page(mdbuf_masked),
+						 hexdump_page(pageserver_masked));
+				}
+			}
+		}
+	}
+#endif
 }
+
+#ifdef DEBUG_COMPARE_LOCAL
+static char *
+hexdump_page(char *page)
+{
+	StringInfoData result;
+
+	initStringInfo(&result);
+
+	for (int i = 0; i < BLCKSZ; i++)
+	{
+		if (i % 8 == 0)
+			appendStringInfo(&result, " ");
+		if (i % 40 == 0)
+			appendStringInfo(&result, "\n");
+		appendStringInfo(&result, "%02x", (unsigned char)(page[i]));
+	}
+
+	return result.data;
+}
+#endif
+
 
 bool
 zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
@@ -638,7 +787,21 @@ void
 zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			 char *buffer, bool skipFsync)
 {
+	XLogRecPtr lsn;
+
 	zenith_wallog_page(reln, forknum, blocknum, buffer);
+
+	lsn = PageGetLSN(buffer);
+	elog(SmgrTrace, "smgrwrite called for %u/%u/%u.%u blk %u, page LSN: %X/%08X",
+		 reln->smgr_rnode.node.spcNode,
+		 reln->smgr_rnode.node.dbNode,
+		 reln->smgr_rnode.node.relNode,
+		 forknum, blocknum,
+		 (uint32) (lsn >> 32), (uint32) lsn);
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdwrite(reln, forknum, blocknum, buffer, skipFsync);
+#endif
 }
 
 /*
@@ -649,19 +812,30 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	ZenithResponse *resp;
 	int			n_blocks;
+	XLogRecPtr request_lsn;
 
 	if (!loaded)
 		zenith_load();
 
+	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithNblocksRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forknum,
 		},
-		.lsn = zenith_get_request_lsn(false)
+		.lsn = request_lsn
 	});
 	n_blocks = resp->n_blocks;
+
+	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
+		 reln->smgr_rnode.node.spcNode,
+		 reln->smgr_rnode.node.dbNode,
+		 reln->smgr_rnode.node.relNode,
+		 forknum,
+		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+		 n_blocks);
+
 	pfree(resp);
 	return n_blocks;
 }
@@ -691,6 +865,10 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	XLogFlush(lsn);
 
 	SetLastWrittenPageLSN(lsn);
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdtruncate(reln, forknum, nblocks);
+#endif
 }
 
 /*
@@ -708,4 +886,8 @@ void
 zenith_immedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	elog(SmgrTrace, "[ZENITH_SMGR] immedsync noop");
+
+#ifdef DEBUG_COMPARE_LOCAL
+	mdimmedsync(reln, forknum);
+#endif
 }
