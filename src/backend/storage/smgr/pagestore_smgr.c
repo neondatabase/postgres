@@ -316,6 +316,7 @@ static XLogRecPtr
 zenith_get_request_lsn(bool nonrel)
 {
 	XLogRecPtr lsn;
+	XLogRecPtr flushlsn;
 
 	if (RecoveryInProgress())
 	{
@@ -337,7 +338,8 @@ zenith_get_request_lsn(bool nonrel)
 	}
 	else
 	{
-		XLogRecPtr flushlsn = GetFlushRecPtr();
+		lsn = GetLastWrittenPageLSN();
+		flushlsn = GetFlushRecPtr();
 
 		/*
 		 * Use the latest LSN that was evicted from the buffer cache. Any
@@ -347,6 +349,7 @@ zenith_get_request_lsn(bool nonrel)
 		lsn = GetLastWrittenPageLSN();
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
+
 		if (lsn == InvalidXLogRecPtr)
 		{
 			/*
@@ -360,9 +363,18 @@ zenith_get_request_lsn(bool nonrel)
 				 (uint32) ((lsn) >> 32), (uint32) (lsn));
 		}
 
-		/* The record should've been flushed already, since it was evicted, but let's be safe */
+		/*
+		 * Is it possible that the last-written LSN is ahead of last flush LSN? Probably not,
+		 * we shouldn't evict a page from the buffer cache before all its modifications have
+		 * been safely flushed. That's the "WAL before data" rule. But better safe than sorry.
+		 */
 		if (lsn > flushlsn)
+		{
+			elog(LOG, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
+				 (uint32) (lsn >> 32), (uint32) lsn,
+				 (uint32) (flushlsn >> 32), (uint32) flushlsn);
 			XLogFlush(lsn);
+		}
 	}
 	return lsn;
 }
@@ -660,6 +672,25 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
+	XLogRecPtr lsn;
+
+	/*
+	 * Truncating a relation drops all its buffers from the buffer cache without
+	 * calling smgrwrite() on them. But we must account for that in our tracking
+	 * of last-written-LSN all the same: any future smgrnblocks() request must
+	 * return the new size after the truncation. We don't know what the LSN of
+	 * the truncation record was, so be conservative and use the most recently
+	 * inserted WAL record's LSN.
+	 */
+	lsn = GetXLogInsertRecPtr();
+
+	/*
+	 * Flush it, too. We don't actually care about it here, but let's uphold
+	 * the invariant that last-written LSN <= flush LSN.
+	 */
+	XLogFlush(lsn);
+
+	SetLastWrittenPageLSN(lsn);
 }
 
 /*
