@@ -264,7 +264,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * FIXME: Redoing this record will set the LSN on the page. That could
 	 * mess up the LSN-NSN interlock in GiST index build.
 	 */
-	if (forknum == FSM_FORKNUM)
+	if (forknum == FSM_FORKNUM && !RecoveryInProgress())
 	{
 		// FSM is never WAL-logged and we don't care.
 		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u doesn't need force logging. Evicted at lsn=%X",
@@ -274,7 +274,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.relNode,
 			 forknum, (uint32)lsn);
 	}
-	else if (forknum == VISIBILITYMAP_FORKNUM)
+	else if (forknum == VISIBILITYMAP_FORKNUM && !RecoveryInProgress())
 	{
 		/* Always WAL-log vm.
 		 * We should never miss clearing visibility map bits.
@@ -308,7 +308,18 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 */
 
 		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
-		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
+
+		/* If we wal-log hint bits, someone could concurrently update page
+		 * and reset PD_WAL_LOGGED again, so this assert is not relevant anymore.
+		 *
+		 * See comment to FlushBuffer().
+		 * The caller must hold a pin on the buffer and have share-locked the
+		 * buffer contents.  (Note: a share-lock does not prevent updates of
+		 * hint bits in the buffer, so the page could change while the write
+		 * is in progress, but we assume that that will not invalidate the data
+		 * written.)
+		 */
+		//Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
 
 		/*
 		 * Need to flush it too, so that it gets sent to the Page Server before we
