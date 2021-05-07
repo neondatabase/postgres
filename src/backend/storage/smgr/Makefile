@@ -13,7 +13,6 @@ top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
 OBJS = \
-	lazyrestore.o \
 	md.o \
 	pagestore_smgr.o \
 	inmem_smgr.o \

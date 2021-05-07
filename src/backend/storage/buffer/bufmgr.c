@@ -46,7 +46,6 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
-#include "storage/lazyrestore.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "storage/standby.h"

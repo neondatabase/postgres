@@ -22,7 +22,6 @@
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
-#include "storage/lazyrestore.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
 #include "storage/pagestore_client.h"
@@ -70,7 +69,6 @@ typedef struct f_smgr
 typedef enum SmgrImpl
 {
 	SmgrMd,
-	SmgrLazyS3,
 	SmgrPageserver,
 	SmgrWalRedo
 } SmgrImpl;
@@ -93,24 +91,6 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-	},
-	/* lazyrestore */
-	{
-		.smgr_init = lazyrestore_init,
-		.smgr_shutdown = NULL,
-		.smgr_open = lazyrestore_open,
-		.smgr_close = lazyrestore_close,
-		.smgr_create = lazyrestore_create,
-		.smgr_exists = lazyrestore_exists,
-		.smgr_unlink = lazyrestore_unlink,
-		.smgr_extend = lazyrestore_extend,
-		.smgr_prefetch = lazyrestore_prefetch,
-		.smgr_read = lazyrestore_read,
-		.smgr_write = lazyrestore_write,
-		.smgr_writeback = lazyrestore_writeback,
-		.smgr_nblocks = lazyrestore_nblocks,
-		.smgr_truncate = lazyrestore_truncate,
-		.smgr_immedsync = lazyrestore_immedsync,
 	},
 	/* zenith_smgr */
 	{
@@ -241,14 +221,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
-		{
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-			reln->possibly_lazy[i] = false;
-		}
 
 		/*
 		 * Use pageserver whenever page_server_connstring is not null.
-		 * We may integrate this with lazyrestore, but now it is one of two options.
 		 */
 		if (backend != InvalidBackendId)
 		{
@@ -272,19 +248,6 @@ smgropen(RelFileNode rnode, BackendId backend)
 			 */
 			reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID)
 				? SmgrMd : SmgrPageserver;
-		}
-		/*
-		 * FIXME: lazyrestore is 2, but we don't actually use the smgr API for the
-		 * calls. Instead, there is a direct call to restore_if_lazy() in
-		 * ReadBuffer_common()
-		 */
-		/* use main forknum because it must always be present  */
-		else if (enable_lazyrestore && reln_is_lazy(reln, MAIN_FORKNUM, true))
-		{
-			for (int i = 0; i <= MAX_FORKNUM; ++i)
-				reln->possibly_lazy[i] = true;
-
-			reln->smgr_which = SmgrLazyS3; /* lazy */
 		}
 		else
 		{
