@@ -252,33 +252,60 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		zenith_load();
 
 	/*
-	 * If the page was not WAL-logged before eviction then we can loose this modification.
+	 * If the page was not WAL-logged before eviction then we can lose its modification.
 	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
 	 *
-	 * Normally, changes need to be WAL-logged before releasing the exclusive
-	 * lock in it. But creating a new relation is an exception; no other
-	 * backend can look at the table until the transaction commits anyway, and
-	 * we take advantage of that in GiST/SP-GiST index build. The index is
-	 * created without WAL-logging anything, and at the end of the index
-	 * build, the just-built relation is scanned and WAL-logged. In principle,
-	 * any operation that holds an AccessExclusiveLock on the table could do
-	 * similar tricks, but index creation is the only case at the moment.
-	 *
-	 * FIXME: This assumes that if a page has a valid LSN, it has been
-	 * properly WAL-logged.  That currently covers the GiST/SP-GiST index
-	 * creation, but there are no guarantees that that assumption will hold in
-	 * the future.
+	 * See also comments to PD_WAL_LOGGED.
 	 *
 	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the whole index .
 	 * That's duplicative with the WAL-logging that we do here.
+	 * See log_newpage_range() calls.
 	 *
 	 * FIXME: Redoing this record will set the LSN on the page. That could
 	 * mess up the LSN-NSN interlock in GiST index build.
 	 */
-	if (!(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
+	if (forknum == FSM_FORKNUM)
+	{
+		// FSM is never WAL-logged and we don't care.
+		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u doesn't need force logging. Evicted at lsn=%X",
+			 blocknum,
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum, (uint32)lsn);
+	}
+	else if (forknum == VISIBILITYMAP_FORKNUM)
+	{
+		/* Always WAL-log vm.
+		 * We should never miss clearing visibility map bits.
+		 *
+		 * TODO Is it too bad for performance?
+		 * Hopefully we do not evict actively used vm too often.
+		 */
+ 		XLogRecPtr recptr;
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		XLogFlush(recptr);
+		lsn = recptr;
+
+		elog(SmgrTrace, "Visibilitymap page %u of relation %u/%u/%u.%u was force logged at lsn=%X",
+			 blocknum,
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum, (uint32)lsn);
+
+	}
+	else if (!(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
 		&& !RecoveryInProgress())
 	{
 		XLogRecPtr recptr;
+		/*
+		 * We assume standard page layout here.
+		 *
+		 * But at smgr level we don't really know what kind of a page this is.
+		 * We have filtered visibility map pages and fsm pages above.
+		 * TODO Do we have any special page types?
+		 */
 
 		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
 		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */

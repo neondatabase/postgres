@@ -1181,6 +1181,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 			MarkBufferDirty(bufpack[i]);
 		}
 
+		//Zenith XXX: What's the purpose of this change?
 		if (nbufs > 0)
 			recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
 		else
