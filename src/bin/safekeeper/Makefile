@@ -57,7 +57,7 @@ uninstall:
 
 clean distclean maintainer-clean:
 	rm -f s3offload$(X) safekeeper$(X) safekeeper_proxy$(X) \
-		safekeeper.o safekeeper_proxy.o streamutil.o xlogreader.o s3offload.o \
+		safekeeper.o walsender.o  safekeeper_proxy.o streamutil.o xlogreader.o s3offload.o \
 		$(OBJS)
 	rm -rf tmp_check
 
