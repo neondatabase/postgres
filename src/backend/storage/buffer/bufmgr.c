@@ -3924,10 +3924,13 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		buf_state |= BM_DIRTY | BM_JUST_DIRTIED;
 
 		/* Zenith XXX
-		 * Mark this page as not WAL-logged,
-		 * so that pagestore_smgr issued a log record before eviction.
+		 * Consider marking this page as not WAL-logged,
+		 * so that pagestore_smgr issued a log record before eviction
+		 * and persisted hint changes.
+		 * TODO: check performance impacts of this approach
+		 * since extra wal-logging may worsen the performance.
 		 */
-		((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
+		//((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
 
 		UnlockBufHdr(bufHdr, buf_state);
 
