@@ -1181,7 +1181,14 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 			MarkBufferDirty(bufpack[i]);
 		}
 
-		//Zenith XXX: What's the purpose of this change?
+		/*
+		 * Zenith forces WAL logging of evicted pages,
+		 * so it can happen that in some cases when pages are first
+		 * modified and then WAL logged (for example building GiST/GiN
+		 * indexes) there are no more pages which need to be WAL logged at
+		 * the end of build procedure. As far as XLogInsert throws error
+		 * if not records were inserted, we need to reset the insert state.
+		 */
 		if (nbufs > 0)
 			recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
 		else
