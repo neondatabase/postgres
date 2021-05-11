@@ -69,7 +69,7 @@ brin_xlog_insert_update(XLogReaderState *record,
 	}
 
 	/* need this page's blkno to store in revmap */
-	XLogRecGetBlockTag(record, 0, NULL, NULL, &regpgno);
+	regpgno = BufferGetBlockNumber(buffer);
 
 	/* insert the index item into the page */
 	if (action == BLK_NEEDS_REDO)

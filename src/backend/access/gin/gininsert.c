@@ -316,7 +316,6 @@ ginBuildCallback(Relation index, ItemPointer tid, Datum *values,
 	MemoryContextSwitchTo(oldCtx);
 }
 
-
 IndexBuildResult *
 ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 {
@@ -335,7 +334,6 @@ ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	if (RelationGetNumberOfBlocks(index) != 0)
 		elog(ERROR, "index \"%s\" already contains data",
 			 RelationGetRelationName(index));
-
 
 	initGinState(&buildstate.ginstate, index);
 	buildstate.indtuples = 0;
