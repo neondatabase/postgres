@@ -1531,11 +1531,15 @@ MarkBufferDirty(Buffer buffer)
 	if (!(old_buf_state & BM_DIRTY))
 	{
 		VacuumPageDirty++;
-		((PageHeader)BufferGetPage(buffer))->pd_flags &= ~PD_WAL_LOGGED;
 		pgBufferUsage.shared_blks_dirtied++;
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;
 	}
+	/*
+	 * Clear PD_WAL_LOGGED flag so that if dirty page is evicted from page pool
+     * before been WAL logged, FPI WAL record will be enforced.
+     */
+	((PageHeader)BufferGetPage(buffer))->pd_flags &= ~PD_WAL_LOGGED;
 }
 
 /*
