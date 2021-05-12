@@ -6,7 +6,7 @@
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- * src/include/storage/pagestore_client.h
+ * contrib/zenith/pagestore_client.h
  *
  *-------------------------------------------------------------------------
  */
@@ -90,6 +90,14 @@ extern page_server_api *page_server;
 extern char *page_server_connstring;
 extern char *callmemaybe_connstring;
 extern char *zenith_timeline;
+extern bool wal_redo;
+
+extern const f_smgr *smgr_zenith(BackendId backend, RelFileNode rnode);
+extern void smgr_init_zenith(void);
+
+extern const f_smgr *smgr_inmem(BackendId backend, RelFileNode rnode);
+extern void smgr_init_inmem(void);
+extern void smgr_shutdown_inmem(void);
 
 /* zenith storage manager functionality */
 

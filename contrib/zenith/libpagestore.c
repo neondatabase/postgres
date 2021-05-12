@@ -8,13 +8,13 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/storage/smgr/libpqpagestore/libpqpagestore.c
+ *	 contrib/zenith/libpqpagestore.c
  *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
-#include "storage/pagestore_client.h"
+#include "pagestore_client.h"
 #include "fmgr.h"
 #include "access/xlog.h"
 
@@ -24,6 +24,9 @@
 
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "utils/guc.h"
+
+#include "replication/walproposer.h"
 
 PG_MODULE_MAGIC;
 
@@ -178,15 +181,75 @@ zenith_call(ZenithRequest request)
 	return (ZenithResponse *) resp;
 }
 
+
+static bool
+check_zenith_timeline(char **newval, void **extra, GucSource source)
+{
+	uint8 ztimelineid[16];
+	return **newval == '\0' || HexDecodeString(ztimelineid, *newval, 16);
+}
+
 /*
  * Module initialization function
  */
 void
 _PG_init(void)
 {
+	DefineCustomStringVariable("zenith.page_server_connstring",
+							   "connection string to the page server",
+							   NULL,
+							   &page_server_connstring,
+							   "",
+							   PGC_POSTMASTER,
+							   0,	/* no flags required */
+							   NULL, NULL, NULL);
+
+	DefineCustomStringVariable("zenith.callmemaybe_connstring",
+							   "Connection string that Page Server or WAL safekeeper should use to connect to us",
+							   NULL,
+							   &callmemaybe_connstring,
+							   "",
+							   PGC_POSTMASTER,
+							   0,	/* no flags required */
+							   NULL, NULL, NULL);
+
+	DefineCustomStringVariable("zenith.zenith_timeline",
+							   "Zenith timelineid the server is running on",
+							   NULL,
+							   &zenith_timeline,
+							   "",
+							   PGC_POSTMASTER,
+							   0,	/* no flags required */
+							   check_zenith_timeline, NULL, NULL);
+
+	DefineCustomBoolVariable("zenith.wal_redo",
+							 "start in wal-redo mode",
+							 NULL,
+							 &wal_redo,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL, NULL, NULL);
+
 	if (page_server != NULL)
 		zenith_log(ERROR, "libpqpagestore already loaded");
 
 	zenith_log(PqPageStoreTrace, "libpqpagestore already loaded");
 	page_server = &api;
+
+	//Is there more correct way to pass CustomGUC to postgres code?
+	zenith_timeline_walproposer = zenith_timeline;
+
+	if (wal_redo)
+	{
+		zenith_log(PqPageStoreTrace, "set inmem_smgr hook");
+		smgr_hook = smgr_inmem;
+		smgr_init_hook = smgr_init_inmem;
+	}
+	else if (page_server_connstring && page_server_connstring[0])
+	{
+		zenith_log(PqPageStoreTrace, "set zenith_smgr hook");
+		smgr_hook = smgr_zenith;
+		smgr_init_hook = smgr_init_zenith;
+	}
 }

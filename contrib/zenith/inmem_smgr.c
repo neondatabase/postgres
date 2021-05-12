@@ -2,21 +2,21 @@
  *
  * inmem_smgr.c
  *
- *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
- *
  * IDENTIFICATION
- *	  src/backend/storage/smgr/inmem_smgr.c
+ *	  contrib/zenith/inmem_smgr.c
  *
+ * TODO cleanup obsolete copy-pasted comments
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 #include "storage/block.h"
 #include "storage/relfilenode.h"
-#include "storage/pagestore_client.h"
+#include "pagestore_client.h"
 #include "utils/hsearch.h"
+#include "access/xlog.h"
 
 typedef struct
 {
@@ -256,4 +256,40 @@ inmem_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 void
 inmem_immedsync(SMgrRelation reln, ForkNumber forknum)
 {
+}
+static const struct f_smgr inmem_smgr =
+{
+	.smgr_init = inmem_init,
+	.smgr_shutdown = NULL,
+	.smgr_open = inmem_open,
+	.smgr_close = inmem_close,
+	.smgr_create = inmem_create,
+	.smgr_exists = inmem_exists,
+	.smgr_unlink = inmem_unlink,
+	.smgr_extend = inmem_extend,
+	.smgr_prefetch = inmem_prefetch,
+	.smgr_read = inmem_read,
+	.smgr_write = inmem_write,
+	.smgr_writeback = inmem_writeback,
+	.smgr_nblocks = inmem_nblocks,
+	.smgr_truncate = inmem_truncate,
+	.smgr_immedsync = inmem_immedsync,
+};
+
+const f_smgr *
+smgr_inmem(BackendId backend, RelFileNode rnode)
+{
+	if (backend != InvalidBackendId && !InRecovery)
+		return smgr_standard(backend, rnode);
+	else
+	{
+		elog(LOG, "use inmem_smgr");
+		return &inmem_smgr;
+	}
+}
+
+void
+smgr_init_inmem()
+{
+	inmem_init();
 }

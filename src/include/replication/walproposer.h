@@ -22,6 +22,8 @@ extern bool  am_wal_proposer;
 struct WalMessage;
 typedef struct WalMessage WalMessage;
 
+extern char *zenith_timeline_walproposer;
+
 /* WalKeeper_proxy states */
 typedef enum
 {

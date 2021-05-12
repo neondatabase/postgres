@@ -24,58 +24,11 @@
 #include "storage/ipc.h"
 #include "storage/md.h"
 #include "storage/smgr.h"
-#include "storage/pagestore_client.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
-
-/*
- * This struct of function pointers defines the API between smgr.c and
- * any individual storage manager module.  Note that smgr subfunctions are
- * generally expected to report problems via elog(ERROR).  An exception is
- * that smgr_unlink should use elog(WARNING), rather than erroring out,
- * because we normally unlink relations during post-commit/abort cleanup,
- * and so it's too late to raise an error.  Also, various conditions that
- * would normally be errors should be allowed during bootstrap and/or WAL
- * recovery --- see comments in md.c for details.
- */
-typedef struct f_smgr
-{
-	void		(*smgr_init) (void);	/* may be NULL */
-	void		(*smgr_shutdown) (void);	/* may be NULL */
-	void		(*smgr_open) (SMgrRelation reln);
-	void		(*smgr_close) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_create) (SMgrRelation reln, ForkNumber forknum,
-								bool isRedo);
-	bool		(*smgr_exists) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_unlink) (RelFileNodeBackend rnode, ForkNumber forknum,
-								bool isRedo);
-	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
-								BlockNumber blocknum, char *buffer, bool skipFsync);
-	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber blocknum);
-	void		(*smgr_read) (SMgrRelation reln, ForkNumber forknum,
-							  BlockNumber blocknum, char *buffer);
-	void		(*smgr_write) (SMgrRelation reln, ForkNumber forknum,
-							   BlockNumber blocknum, char *buffer, bool skipFsync);
-	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
-								   BlockNumber blocknum, BlockNumber nblocks);
-	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
-	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber nblocks);
-	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
-} f_smgr;
-
-typedef enum SmgrImpl
-{
-	SmgrMd,
-	SmgrPageserver,
-	SmgrWalRedo
-} SmgrImpl;
-
-static const f_smgr smgrsw[] = {
+static const f_smgr smgr_md = {
 	/* magnetic disk */
-	{
 		.smgr_init = mdinit,
 		.smgr_shutdown = NULL,
 		.smgr_open = mdopen,
@@ -91,47 +44,7 @@ static const f_smgr smgrsw[] = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-	},
-	/* zenith_smgr */
-	{
-		.smgr_init = zenith_init,
-		.smgr_shutdown = NULL,
-		.smgr_open = zenith_open,
-		.smgr_close = zenith_close,
-		.smgr_create = zenith_create,
-		.smgr_exists = zenith_exists,
-		.smgr_unlink = zenith_unlink,
-		.smgr_extend = zenith_extend,
-		.smgr_prefetch = zenith_prefetch,
-		.smgr_read = zenith_read,
-		.smgr_write = zenith_write,
-		.smgr_writeback = zenith_writeback,
-		.smgr_nblocks = zenith_nblocks,
-		.smgr_truncate = zenith_truncate,
-		.smgr_immedsync = zenith_immedsync,
-	},
-	/* zenith_smgr */
-	{
-		.smgr_init = inmem_init,
-		.smgr_shutdown = NULL,
-		.smgr_open = inmem_open,
-		.smgr_close = inmem_close,
-		.smgr_create = inmem_create,
-		.smgr_exists = inmem_exists,
-		.smgr_unlink = inmem_unlink,
-		.smgr_extend = inmem_extend,
-		.smgr_prefetch = inmem_prefetch,
-		.smgr_read = inmem_read,
-		.smgr_write = inmem_write,
-		.smgr_writeback = inmem_writeback,
-		.smgr_nblocks = inmem_nblocks,
-		.smgr_truncate = inmem_truncate,
-		.smgr_immedsync = inmem_immedsync,
-	},
 };
-
-static const int NSmgr = lengthof(smgrsw);
-int smgr_which = 0;
 
 /*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
@@ -142,7 +55,7 @@ static HTAB *SMgrRelationHash = NULL;
 static dlist_head unowned_relns;
 
 /* local function prototypes */
-static void smgrshutdown(int code, Datum arg);
+//static void smgrshutdown(int code, Datum arg);
 
 
 /*
@@ -156,32 +69,70 @@ static void smgrshutdown(int code, Datum arg);
 void
 smgrinit(void)
 {
-	int			i;
+	if (smgr_init_hook)
+		(*smgr_init_hook)();
 
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_init)
-			smgrsw[i].smgr_init();
-	}
+	smgr_init_standard();
 
-	/* register the shutdown proc */
-	on_proc_exit(smgrshutdown, 0);
+	/*
+	 * ZENITH XXX
+	 * This doesn't work with inmem_smgr, so temporarily disable.
+	 * Anyway, we don't have any real smgrshutdown function.
+	 */
+	// /* register the shutdown proc */
+	// on_proc_exit(smgrshutdown, 0);
 }
 
-/*
- * on_proc_exit hook for smgr cleanup during backend shutdown
- */
-static void
-smgrshutdown(int code, Datum arg)
+//ZENITH XXX See comment above. Silence compiler warning.
+// /*
+//  * on_proc_exit hook for smgr cleanup during backend shutdown
+//  */
+// static void
+// smgrshutdown(int code, Datum arg)
+// {
+// 	if (smgr_shutdown_hook)
+// 		(*smgr_shutdown_hook)();
+
+// 	smgr_shutdown_standard();
+// }
+
+/* Hook for plugins to get control in smgr */
+smgr_hook_type smgr_hook = NULL;
+smgr_init_hook_type smgr_init_hook = NULL;
+smgr_shutdown_hook_type smgr_shutdown_hook = NULL;
+
+const f_smgr *
+smgr_standard(BackendId backend, RelFileNode rnode)
 {
-	int			i;
-
-	for (i = 0; i < NSmgr; i++)
-	{
-		if (smgrsw[i].smgr_shutdown)
-			smgrsw[i].smgr_shutdown();
-	}
+	return &smgr_md;
 }
+
+void
+smgr_init_standard(void)
+{
+	mdinit();
+}
+
+void
+smgr_shutdown_standard(void)
+{
+}
+
+const f_smgr *
+smgr(BackendId backend, RelFileNode rnode)
+{
+	const f_smgr *result;
+
+	if (smgr_hook)
+	{
+		result = (*smgr_hook)(backend, rnode);
+	}
+	else
+		result = smgr_standard(backend, rnode);
+
+	return result;
+}
+
 
 /*
  *	smgropen() -- Return an SMgrRelation object, creating it if need be.
@@ -223,39 +174,10 @@ smgropen(RelFileNode rnode, BackendId backend)
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
 
-		/*
-		 * Use pageserver whenever page_server_connstring is not null.
-		 */
-		if (backend != InvalidBackendId)
-		{
-			/* Temporary rels are always local */
-			reln->smgr_which = SmgrMd;
-
-		}
-		else if (InRecovery)
-		{
-			reln->smgr_which = SmgrWalRedo;
-		}
-		else if (page_server_connstring && page_server_connstring[0])
-		{
-			/*
-			 * Don't use the page server for shared catalogs. There's a chicken-and-egg
-			 * problem in particular with pg_authid: The Page Server needs to connect
-			 * to the compute node, to stream the latest WAL. Opening that replication
-			 * connection requires the compute node to check pg_authid to authenticate
-			 * the connection. And that pg_authid lookup in turn would make a call into
-			 * the Page Server, if we didn't special-case it here.
-			 */
-			reln->smgr_which = (rnode.spcNode == GLOBALTABLESPACE_OID)
-				? SmgrMd : SmgrPageserver;
-		}
-		else
-		{
-			reln->smgr_which = SmgrMd; /* md */
-		}
+		reln->smgr = smgr(backend, rnode);
 
 		/* implementation-specific initialization */
-		smgrsw[reln->smgr_which].smgr_open(reln);
+		(*reln->smgr).smgr_open(reln);
 
 		/* it has no owner yet */
 		dlist_push_tail(&unowned_relns, &reln->node);
@@ -322,7 +244,7 @@ smgrclearowner(SMgrRelation *owner, SMgrRelation reln)
 bool
 smgrexists(SMgrRelation reln, ForkNumber forknum)
 {
-	return smgrsw[reln->smgr_which].smgr_exists(reln, forknum);
+	return (*reln->smgr).smgr_exists(reln, forknum);
 }
 
 /*
@@ -335,7 +257,7 @@ smgrclose(SMgrRelation reln)
 	ForkNumber	forknum;
 
 	for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
+		(*reln->smgr).smgr_close(reln, forknum);
 
 	owner = reln->smgr_owner;
 
@@ -408,7 +330,7 @@ smgrclosenode(RelFileNodeBackend rnode)
 void
 smgrcreate(SMgrRelation reln, ForkNumber forknum, bool isRedo)
 {
-	smgrsw[reln->smgr_which].smgr_create(reln, forknum, isRedo);
+	(*reln->smgr).smgr_create(reln, forknum, isRedo);
 }
 
 /*
@@ -436,12 +358,10 @@ smgrdosyncall(SMgrRelation *rels, int nrels)
 	 */
 	for (i = 0; i < nrels; i++)
 	{
-		int			which = rels[i]->smgr_which;
-
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
 		{
-			if (smgrsw[which].smgr_exists(rels[i], forknum))
-				smgrsw[which].smgr_immedsync(rels[i], forknum);
+			if ((*rels[i]->smgr).smgr_exists(rels[i], forknum))
+				(*rels[i]->smgr).smgr_immedsync(rels[i], forknum);
 		}
 	}
 }
@@ -480,13 +400,12 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	for (i = 0; i < nrels; i++)
 	{
 		RelFileNodeBackend rnode = rels[i]->smgr_rnode;
-		int			which = rels[i]->smgr_which;
 
 		rnodes[i] = rnode;
 
 		/* Close the forks at smgr level */
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_close(rels[i], forknum);
+			(*rels[i]->smgr).smgr_close(rels[i], forknum);
 	}
 
 	/*
@@ -515,10 +434,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 
 	for (i = 0; i < nrels; i++)
 	{
-		int			which = rels[i]->smgr_which;
-
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_unlink(rnodes[i], forknum, isRedo);
+			(*rels[i]->smgr).smgr_unlink(rnodes[i], forknum, isRedo);
 	}
 
 	pfree(rnodes);
@@ -538,7 +455,7 @@ void
 smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		   char *buffer, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].smgr_extend(reln, forknum, blocknum,
+	(*reln->smgr).smgr_extend(reln, forknum, blocknum,
 										 buffer, skipFsync);
 
 	/*
@@ -562,7 +479,7 @@ smgrextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 bool
 smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
-	return smgrsw[reln->smgr_which].smgr_prefetch(reln, forknum, blocknum);
+	return (*reln->smgr).smgr_prefetch(reln, forknum, blocknum);
 }
 
 /*
@@ -577,7 +494,7 @@ void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 char *buffer)
 {
-	smgrsw[reln->smgr_which].smgr_read(reln, forknum, blocknum, buffer);
+	(*reln->smgr).smgr_read(reln, forknum, blocknum, buffer);
 }
 
 /*
@@ -599,7 +516,7 @@ void
 smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		  char *buffer, bool skipFsync)
 {
-	smgrsw[reln->smgr_which].smgr_write(reln, forknum, blocknum,
+	(*reln->smgr).smgr_write(reln, forknum, blocknum,
 										buffer, skipFsync);
 }
 
@@ -612,7 +529,7 @@ void
 smgrwriteback(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			  BlockNumber nblocks)
 {
-	smgrsw[reln->smgr_which].smgr_writeback(reln, forknum, blocknum,
+	(*reln->smgr).smgr_writeback(reln, forknum, blocknum,
 											nblocks);
 }
 
@@ -630,7 +547,7 @@ smgrnblocks(SMgrRelation reln, ForkNumber forknum)
 	if (result != InvalidBlockNumber)
 		return result;
 
-	result = smgrsw[reln->smgr_which].smgr_nblocks(reln, forknum);
+	result = (*reln->smgr).smgr_nblocks(reln, forknum);
 
 	reln->smgr_cached_nblocks[forknum] = result;
 
@@ -696,7 +613,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 		/* Make the cached size is invalid if we encounter an error. */
 		reln->smgr_cached_nblocks[forknum[i]] = InvalidBlockNumber;
 
-		smgrsw[reln->smgr_which].smgr_truncate(reln, forknum[i], nblocks[i]);
+		(*reln->smgr).smgr_truncate(reln, forknum[i], nblocks[i]);
 
 		/*
 		 * We might as well update the local smgr_cached_nblocks values. The
@@ -735,7 +652,7 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks, BlockNumber *nb
 void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
-	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+	(*reln->smgr).smgr_immedsync(reln, forknum);
 }
 
 /*
