@@ -78,7 +78,6 @@
 #include "storage/buf_internals.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
-#include "storage/pagestore_client.h"
 #include "tcop/tcopprot.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -205,6 +204,8 @@ WalRedoMain(int argc, char *argv[],
 
 	/* read control file (error checking and contains config ) */
 	LocalProcessControlFile(false);
+
+	process_shared_preload_libraries();
 
 	/* Initialize MaxBackends (if under postmaster, was done already) */
 	InitializeMaxBackends();
@@ -640,7 +641,7 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropDatabaseBuffers(rnode.dbNode);
-	inmem_init();
+	smgrinit(); //reset inmem smgr state
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }

@@ -80,10 +80,10 @@
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
 #include "storage/large_object.h"
-#include "storage/pagestore_client.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
+#include "storage/smgr.h"
 #include "storage/standby.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
@@ -179,6 +179,7 @@ static int	syslog_facility = 0;
 static void assign_syslog_facility(int newval, void *extra);
 static void assign_syslog_ident(const char *newval, void *extra);
 static void assign_session_replication_role(int newval, void *extra);
+
 static bool check_temp_buffers(int *newval, void **extra, GucSource source);
 static bool check_bonjour(bool *newval, void **extra, GucSource source);
 static bool check_ssl(bool *newval, void **extra, GucSource source);
@@ -229,7 +230,6 @@ static bool check_recovery_target_lsn(char **newval, void **extra, GucSource sou
 static void assign_recovery_target_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
-static bool check_zenith_timeline(char **newval, void **extra, GucSource source);
 
 /* Private functions in guc-file.l that need to be called from guc.c */
 static ConfigVariable *ProcessConfigFileInternal(GucContext context,
@@ -532,7 +532,6 @@ char	   *event_source;
 bool		row_security;
 bool		check_function_bodies = true;
 
-bool 		zenith_clog;
 /*
  * This GUC exists solely for backward compatibility, check its definition for
  * details.
@@ -2061,14 +2060,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
-	{
-		{"zenith_clog", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Use Zenith page server also for CLOG."),
-		},
-		&zenith_clog,
-		false,
-		NULL, NULL, NULL
-	},
 
 	/* End-of-list marker */
 	{
@@ -4535,36 +4526,6 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
-	},
-
-	{
-		{"page_server_connstring", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Connection string to the page server."),
-			NULL
-		},
-		&page_server_connstring,
-		"",
-		NULL, NULL, NULL
-	},
-
-	{
-		{"callmemaybe_connstring", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Connection string that Page Server or WAL safekeeper should use to connect to us."),
-			NULL
-		},
-		&callmemaybe_connstring,
-		"",
-		NULL, NULL, NULL
-	},
-
-	{
-		{"zenith_timeline", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Zenith timelineid the server is running on."),
-			NULL
-		},
-		&zenith_timeline,
-		"",
-		check_zenith_timeline, NULL, NULL
 	},
 
 	{
@@ -11536,6 +11497,7 @@ assign_session_replication_role(int newval, void *extra)
 		ResetPlanCache();
 }
 
+
 static bool
 check_temp_buffers(int *newval, void **extra, GucSource source)
 {
@@ -12018,14 +11980,6 @@ static void
 assign_backtrace_functions(const char *newval, void *extra)
 {
 	backtrace_symbol_list = (char *) extra;
-}
-
-
-static bool
-check_zenith_timeline(char **newval, void **extra, GucSource source)
-{
-	uint8 ztimelineid[16];
-	return **newval == '\0' || HexDecodeString(ztimelineid, *newval, 16);
 }
 
 static bool

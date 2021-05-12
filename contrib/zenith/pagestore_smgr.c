@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/storage/smgr/pagestore_smgr.c
+ *	  contrib/zenith/pagestore_smgr.c
  *
  *-------------------------------------------------------------------------
  */
@@ -16,7 +16,7 @@
 
 #include "access/xlog.h"
 #include "access/xloginsert.h"
-#include "storage/pagestore_client.h"
+#include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
@@ -24,6 +24,7 @@
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "replication/walsender.h"
+#include "catalog/pg_tablespace_d.h"
 
 /*
  * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
@@ -52,6 +53,7 @@ page_server_api *page_server;
 char *page_server_connstring;
 char *callmemaybe_connstring;
 char *zenith_timeline;
+bool wal_redo = false;
 
 char const *const ZenithMessageStr[] =
 {
@@ -231,25 +233,11 @@ zm_to_string(ZenithMessage *msg)
 	return s.data;
 }
 
-static void
-zenith_load(void)
-{
-	Assert(page_server_connstring && page_server_connstring[0]);
-
-	load_file("libpqpagestore", false);
-	if (page_server == NULL)
-		elog(ERROR, "libpqpagestore didn't initialize correctly");
-
-	loaded = true;
-}
 
 static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
 {
 	XLogRecPtr lsn = PageGetLSN(buffer);
-
-	if (!loaded)
-		zenith_load();
 
 	/*
 	 * If the page was not WAL-logged before eviction then we can lose its modification.
@@ -293,7 +281,6 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
 			 forknum, (uint32)lsn);
-
 	}
 	else if (!(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
 		&& !RecoveryInProgress())
@@ -319,7 +306,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 * is in progress, but we assume that that will not invalidate the data
 		 * written.)
 		 */
-		//Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
+		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
 
 		/*
 		 * Need to flush it too, so that it gets sent to the Page Server before we
@@ -446,9 +433,6 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 {
 	bool		ok;
 	ZenithResponse *resp;
-
-	if (!loaded)
-		zenith_load();
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExistsRequest,
@@ -605,9 +589,6 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	ZenithResponse *resp;
 	XLogRecPtr request_lsn;
 
-	if (!loaded)
-		zenith_load();
-
 	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
@@ -755,9 +736,6 @@ zenith_nonrel_page_exists(RelFileNode rnode, BlockNumber blkno, int forknum)
 	bool ok;
 	ZenithResponse *resp;
 
-	if (!loaded)
-		zenith_load();
-
 	elog(SmgrTrace, "[ZENITH_SMGR] zenith_nonrel_page_exists relnode %u/%u/%u_%d blkno %u",
 		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno);
 
@@ -786,9 +764,6 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 	// relmapper files has non-standard size of 512bytes
 	if (forknum == 43)
 		bufsize = 512;
-
-	if (!loaded)
-		zenith_load();
 
 	lsn = zenith_get_request_lsn(true);
 
@@ -851,9 +826,6 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	ZenithResponse *resp;
 	int			n_blocks;
 	XLogRecPtr request_lsn;
-
-	if (!loaded)
-		zenith_load();
 
 	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
@@ -928,4 +900,52 @@ zenith_immedsync(SMgrRelation reln, ForkNumber forknum)
 #ifdef DEBUG_COMPARE_LOCAL
 	mdimmedsync(reln, forknum);
 #endif
+}
+
+static const struct f_smgr zenith_smgr =
+{
+	.smgr_init = zenith_init,
+	.smgr_shutdown = NULL,
+	.smgr_open = zenith_open,
+	.smgr_close = zenith_close,
+	.smgr_create = zenith_create,
+	.smgr_exists = zenith_exists,
+	.smgr_unlink = zenith_unlink,
+	.smgr_extend = zenith_extend,
+	.smgr_prefetch = zenith_prefetch,
+	.smgr_read = zenith_read,
+	.smgr_write = zenith_write,
+	.smgr_writeback = zenith_writeback,
+	.smgr_nblocks = zenith_nblocks,
+	.smgr_truncate = zenith_truncate,
+	.smgr_immedsync = zenith_immedsync,
+};
+
+
+const f_smgr *
+smgr_zenith(BackendId backend, RelFileNode rnode)
+{
+
+	/* Don't use page server for temp relations */
+	if (backend != InvalidBackendId ||
+		/*
+		 * Don't use the page server for shared catalogs. There's a chicken-and-egg
+		 * problem in particular with pg_authid: The Page Server needs to connect
+		 * to the compute node, to stream the latest WAL. Opening that replication
+		 * connection requires the compute node to check pg_authid to authenticate
+		 * the connection. And that pg_authid lookup in turn would make a call into
+		 * the Page Server, if we didn't special-case it here.
+		 */
+		rnode.spcNode == GLOBALTABLESPACE_OID)
+	{
+		return smgr_standard(backend, rnode);
+	}
+	else
+		return &zenith_smgr;
+}
+
+void
+smgr_init_zenith(void)
+{
+	zenith_init();
 }

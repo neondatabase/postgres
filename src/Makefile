@@ -23,7 +23,6 @@ SUBDIRS = \
 	interfaces \
 	backend/replication/libpqwalreceiver \
 	backend/replication/pgoutput \
-	backend/storage/smgr/libpqpagestore \
 	fe_utils \
 	bin \
 	pl \

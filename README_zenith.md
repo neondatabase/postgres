@@ -53,9 +53,6 @@ smgr changes
 libpqpagestore.c -  Handles network communications with the remote pagestore.
 pagestore_smgr.c - Implements interaction with pageserver.
 
-zenith_clog - functions to request clog pages from pageserver.
-//TODO remove this code if we choose to maintain SLRU locally after compute_node upload
-
 WAL redo helper
 -------------------
 

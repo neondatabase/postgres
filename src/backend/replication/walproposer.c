@@ -14,7 +14,6 @@
 #include "replication/walreceiver.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
-#include "storage/pagestore_client.h"
 #include "storage/pmsignal.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -203,6 +202,8 @@ HandleWalKeeperResponse(void)
 		msgQueueTail = NULL;
 }
 
+char *zenith_timeline_walproposer = NULL;
+
 /*
  * WAL proposer bgworeker entry point
  */
@@ -222,6 +223,7 @@ WalProposerMain(Datum main_arg)
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
 
+	load_file("zenith", false);
 
 	BackgroundWorkerUnblockSignals();
 
@@ -259,8 +261,11 @@ WalProposerMain(Datum main_arg)
 	serverInfo.walEnd = GetFlushRecPtr();
 	serverInfo.walSegSize = wal_segment_size;
 	serverInfo.pgVersion = PG_VERSION_NUM;
-	if (*zenith_timeline != '\0' && !HexDecodeString(serverInfo.ztimelineid, zenith_timeline, 16))
-		elog(FATAL, "Could not parse zenith_timeline");
+	if (!zenith_timeline_walproposer)
+		elog(FATAL, "zenith.zenith_timeline is not provided");
+	if (*zenith_timeline_walproposer != '\0' &&
+	 !HexDecodeString(serverInfo.ztimelineid, zenith_timeline_walproposer, 16))
+		elog(FATAL, "Could not parse zenith.zenith_timeline, %s", zenith_timeline_walproposer);
 	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
 	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
 	serverInfo.systemId = GetSystemIdentifier();
