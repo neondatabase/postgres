@@ -283,7 +283,6 @@ smgr_inmem(BackendId backend, RelFileNode rnode)
 		return smgr_standard(backend, rnode);
 	else
 	{
-		elog(LOG, "use inmem_smgr");
 		return &inmem_smgr;
 	}
 }
