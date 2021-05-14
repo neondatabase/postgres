@@ -602,24 +602,23 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	 * record is.  This is so that we can check the additional identification
 	 * info that is present in the first page's "long" header.
 	 */
+	if (targetSegNo != state->seg.ws_segno && targetPageOff != 0)
+	{
+		XLogRecPtr	targetSegmentPtr = pageptr - targetPageOff;
 
-	// if (targetSegNo != state->seg.ws_segno && targetPageOff != 0)
-	// {
-	// 	XLogRecPtr	targetSegmentPtr = pageptr - targetPageOff;
+		readLen = state->routine.page_read(state, targetSegmentPtr, XLOG_BLCKSZ,
+										   state->currRecPtr,
+										   state->readBuf);
+		if (readLen < 0)
+			goto err;
 
-	// 	readLen = state->routine.page_read(state, targetSegmentPtr, XLOG_BLCKSZ,
-	// 									   state->currRecPtr,
-	// 									   state->readBuf);
-	// 	if (readLen < 0)
-	// 		goto err;
+		/* we can be sure to have enough WAL available, we scrolled back */
+		Assert(readLen == XLOG_BLCKSZ);
 
-	// 	/* we can be sure to have enough WAL available, we scrolled back */
-	// 	Assert(readLen == XLOG_BLCKSZ);
-
-	// 	if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
-	// 									  state->readBuf))
-	// 		goto err;
-	// }
+		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
+										  state->readBuf))
+			goto err;
+	}
 
 	/*
 	 * First, read the requested data length, but at least a short page header
@@ -920,7 +919,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	return true;
 }
 
-// #ifdef FRONTEND
+#ifdef FRONTEND
 /*
  * Functions that are currently not needed in the backend, but are better
  * implemented inside xlogreader.c because of the internal facilities available
@@ -1044,7 +1043,7 @@ err:
 	return InvalidXLogRecPtr;
 }
 
-// #endif							/* FRONTEND */
+#endif							/* FRONTEND */
 
 /*
  * Helper function to ease writing of XLogRoutine->page_read callbacks.
@@ -1592,6 +1591,7 @@ RestoreBlockImage(XLogReaderState *record, uint8 block_id, char *page)
 			   ptr + bkpb->hole_offset,
 			   BLCKSZ - (bkpb->hole_offset + bkpb->hole_length));
 	}
+
 	return true;
 }
 
