@@ -467,10 +467,10 @@ BeginRedoForBlock(StringInfo input_message)
 	 * ForkNumber
 	 * BlockNumber
 	 */
+	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
 	rnode.dbNode = pq_getmsgint(input_message, 4);
 	rnode.relNode = pq_getmsgint(input_message, 4);
-	forknum = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
 
 	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
@@ -515,10 +515,10 @@ PushPage(StringInfo input_message)
 	 * BlockNumber
 	 * 8k page content
 	 */
+	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
 	rnode.dbNode = pq_getmsgint(input_message, 4);
 	rnode.relNode = pq_getmsgint(input_message, 4);
-	forknum = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
@@ -623,10 +623,10 @@ GetPage(StringInfo input_message)
 	 * ForkNumber
 	 * BlockNumber
 	 */
+	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
 	rnode.dbNode = pq_getmsgint(input_message, 4);
 	rnode.relNode = pq_getmsgint(input_message, 4);
-	forknum = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
 
 	/* FIXME: check that we got a BeginRedoForBlock message or this earlier */
