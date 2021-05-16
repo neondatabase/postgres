@@ -1527,6 +1527,11 @@ MarkBufferDirty(Buffer buffer)
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;
 	}
+	/*
+	 * Clear PD_WAL_LOGGED flag so that if dirty page is evicted from page pool
+     * before been WAL logged, FPI WAL record will be enforced.
+     */
+	((PageHeader)BufferGetPage(buffer))->pd_flags &= ~PD_WAL_LOGGED;
 }
 
 /*
@@ -1909,6 +1914,15 @@ BufferSync(int flags)
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
+
+		/* Zenith XXX
+		 * Consider marking this page as not WAL-logged,
+		 * so that pagestore_smgr issued a log record before eviction
+		 * and persisted hint changes.
+		 * TODO: check performance impacts of this approach
+		 * since extra wal-logging may worsen the performance.
+		 */
+		//((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
 
 		UnlockBufHdr(bufHdr, buf_state);
 
