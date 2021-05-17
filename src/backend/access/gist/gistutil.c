@@ -892,6 +892,7 @@ gistNewBuffer(Relation r)
 
 	if (needLock)
 		UnlockRelationForExtension(r, ExclusiveLock);
+
 	return buffer;
 }
 

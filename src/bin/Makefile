@@ -29,14 +29,9 @@ SUBDIRS = \
 	pg_upgrade \
 	pg_verifybackup \
 	pg_waldump \
-	safekeeper \
 	pgbench \
 	psql \
 	scripts
-
-SUBDIRS += zenith_slicedice \
-	zenith_restore \
-	zenith_push
 
 ifeq ($(PORTNAME), win32)
 SUBDIRS += pgevent

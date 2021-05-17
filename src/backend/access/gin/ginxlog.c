@@ -408,6 +408,7 @@ ginRedoSplit(XLogReaderState *record)
 	bool		isLeaf = (data->flags & GIN_INSERT_ISLEAF) != 0;
 	bool		isRoot = (data->flags & GIN_SPLIT_ROOT) != 0;
 	XLogRedoAction action;
+
 	/*
 	 * First clear incomplete-split flag on child page if this finishes a
 	 * split

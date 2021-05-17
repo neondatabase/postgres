@@ -600,9 +600,6 @@ submake-libpgfeutils: | submake-generated-headers
 
 .PHONY: submake-libpq submake-libpgport submake-libpgfeutils
 
-submake-libzeniths3: submake-libpgport
-	$(MAKE) -C $(top_builddir)/src/zenith_s3 all
-.PHONY: submake-libzeniths3
 
 ##########################################################################
 #
