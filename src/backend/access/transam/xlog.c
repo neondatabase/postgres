@@ -14,8 +14,6 @@
 
 #include "postgres.h"
 
-//#define WAL_DEBUG
-
 #include <ctype.h>
 #include <math.h>
 #include <time.h>
@@ -7286,7 +7284,7 @@ StartupXLOG(void)
 				bool		switchedTLI = false;
 
 #ifdef WAL_DEBUG
-				if (true || XLOG_DEBUG ||
+				if (XLOG_DEBUG ||
 					(rmid == RM_XACT_ID && trace_recovery_messages <= DEBUG2) ||
 					(rmid != RM_XACT_ID && trace_recovery_messages <= DEBUG3))
 				{

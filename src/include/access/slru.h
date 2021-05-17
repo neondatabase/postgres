@@ -17,11 +17,6 @@
 #include "storage/lwlock.h"
 #include "storage/sync.h"
 
-/* Fake forknums to communicate with zenith pageserver */
-#define PG_CLOG_FORKNUM 44
-#define PG_MXACT_OFFSET_FORKNUM 45
-#define PG_MXACT_MEMBERS_FORKNUM 46
-
 
 /*
  * Define SLRU segment size.  A page is the same BLCKSZ as is used everywhere

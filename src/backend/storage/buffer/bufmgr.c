@@ -464,7 +464,7 @@ static Buffer ReadBuffer_common(SMgrRelation reln, char relpersistence,
 								ForkNumber forkNum, BlockNumber blockNum,
 								ReadBufferMode mode, BufferAccessStrategy strategy,
 								bool *hit);
-// static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
+static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf, bool fixOwner);
 static void BufferSync(int flags);
@@ -838,15 +838,10 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 		if (!PageIsNew((Page) bufBlock))
-		{
-			// XXX-ZENITH
-			MemSet((char *) bufBlock, 0, BLCKSZ);
-
-			// ereport(ERROR,
-			// 		(errmsg("unexpected data beyond EOF in block %u of relation %s",
-			// 				blockNum, relpath(smgr->smgr_rnode, forkNum)),
-			// 		 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
-		}
+			ereport(ERROR,
+					(errmsg("unexpected data beyond EOF in block %u of relation %s",
+							blockNum, relpath(smgr->smgr_rnode, forkNum)),
+					 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
 
 		/*
 		 * We *must* do smgrextend before succeeding, else the page will not
@@ -943,7 +938,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			{
 				if (mode == RBM_ZERO_ON_ERROR || zero_damaged_pages)
 				{
-					ereport(DEBUG1,
+					ereport(WARNING,
 							(errcode(ERRCODE_DATA_CORRUPTED),
 							 errmsg("invalid page in block %u of relation %s; zeroing out page",
 									blockNum,
@@ -1389,7 +1384,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
  * The buffer could get reclaimed by someone else while we are waiting
  * to acquire the necessary locks; if so, don't mess it up.
  */
-void
+static void
 InvalidateBuffer(BufferDesc *buf)
 {
 	BufferTag	oldTag;
@@ -1613,7 +1608,7 @@ ReleaseAndReadBuffer(Buffer buffer,
  * Returns true if buffer is BM_VALID, else false.  This provision allows
  * some callers to avoid an extra spinlock cycle.
  */
-bool
+static bool
 PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);
@@ -1948,6 +1943,15 @@ BufferSync(int flags)
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
+
+		/* Zenith XXX
+		 * Consider marking this page as not WAL-logged,
+		 * so that pagestore_smgr issued a log record before eviction
+		 * and persisted hint changes.
+		 * TODO: check performance impacts of this approach
+		 * since extra wal-logging may worsen the performance.
+		 */
+		//((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
 
 		UnlockBufHdr(bufHdr, buf_state);
 
@@ -3922,16 +3926,6 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		}
 
 		buf_state |= BM_DIRTY | BM_JUST_DIRTIED;
-
-		/* Zenith XXX
-		 * Consider marking this page as not WAL-logged,
-		 * so that pagestore_smgr issued a log record before eviction
-		 * and persisted hint changes.
-		 * TODO: check performance impacts of this approach
-		 * since extra wal-logging may worsen the performance.
-		 */
-		//((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
-
 		UnlockBufHdr(bufHdr, buf_state);
 
 		if (delayChkpt)
