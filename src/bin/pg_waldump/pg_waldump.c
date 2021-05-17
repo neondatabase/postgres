@@ -49,8 +49,7 @@ typedef struct XLogDumpConfig
 	bool		stats_per_record;
 
 	/* filter options */
-	bool		filter_by_rmgr[RM_MAX_ID + 1];
-	bool		filter_by_rmgr_enabled;
+	int			filter_by_rmgr;
 	TransactionId filter_by_xid;
 	bool		filter_by_xid_enabled;
 } XLogDumpConfig;
@@ -806,7 +805,7 @@ main(int argc, char **argv)
 	config.stop_after_records = -1;
 	config.already_displayed_records = 0;
 	config.follow = false;
-	config.filter_by_rmgr_enabled = false;
+	config.filter_by_rmgr = -1;
 	config.filter_by_xid = InvalidTransactionId;
 	config.filter_by_xid_enabled = false;
 	config.stats = false;
@@ -861,18 +860,16 @@ main(int argc, char **argv)
 						exit(EXIT_SUCCESS);
 					}
 
-					config.filter_by_rmgr_enabled = true;
-
 					for (i = 0; i <= RM_MAX_ID; i++)
 					{
 						if (pg_strcasecmp(optarg, RmgrDescTable[i].rm_name) == 0)
 						{
-							config.filter_by_rmgr[i] = true;
+							config.filter_by_rmgr = i;
 							break;
 						}
 					}
 
-					if (i > RM_MAX_ID)
+					if (config.filter_by_rmgr == -1)
 					{
 						pg_log_error("resource manager \"%s\" does not exist",
 									 optarg);
@@ -1084,9 +1081,8 @@ main(int argc, char **argv)
 		}
 
 		/* apply all specified filters */
-		if (config.filter_by_rmgr_enabled &&
-			(record->xl_rmid < 0 || record->xl_rmid > RM_MAX_ID ||
-			 !config.filter_by_rmgr[record->xl_rmid]))
+		if (config.filter_by_rmgr != -1 &&
+			config.filter_by_rmgr != record->xl_rmid)
 			continue;
 
 		if (config.filter_by_xid_enabled &&
