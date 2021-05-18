@@ -255,7 +255,11 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	if (forknum == FSM_FORKNUM && !RecoveryInProgress())
 	{
 		// FSM is never WAL-logged and we don't care.
-		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u doesn't need force logging. Evicted at lsn=%X",
+		XLogRecPtr recptr;
+		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		XLogFlush(recptr);
+		lsn = recptr;
+		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u was force logged. Evicted at lsn=%X",
 			 blocknum,
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
