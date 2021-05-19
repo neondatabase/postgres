@@ -449,7 +449,8 @@ CreateMessageVCLOnly(void)
 static void
 StartElection(void)
 {
-	XLogRecPtr initWALPos = serverInfo.walSegSize;
+	// FIXME: pg_resetwal used for node startup create second segment
+	XLogRecPtr initWALPos = serverInfo.walSegSize*2;
 	prop.VCL = restartLsn = initWALPos;
 	prop.nodeId = serverInfo.nodeId;
 	for (int i = 0; i < n_walkeepers; i++)
