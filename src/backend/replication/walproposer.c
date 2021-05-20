@@ -82,7 +82,22 @@ ResetWalProposerEventSet(void)
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		if (walkeeper[i].sock != PGINVALID_SOCKET)
-			walkeeper[i].eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_READABLE, walkeeper[i].sock, NULL, &walkeeper[i]);
+		{
+			int events;
+			switch (walkeeper[i].state)
+			{
+				case SS_SEND_WAL:
+					events = WL_SOCKET_READABLE|WL_SOCKET_WRITEABLE;
+					break;
+				case SS_CONNECTING:
+					events = WL_SOCKET_WRITEABLE;
+					break;
+				default:
+					events = WL_SOCKET_READABLE;
+					break;
+			}
+			walkeeper[i].eventPos = AddWaitEventToSet(waitEvents, events, walkeeper[i].sock, NULL, &walkeeper[i]);
+		}
 	}
 }
 
