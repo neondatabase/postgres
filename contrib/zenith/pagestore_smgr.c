@@ -605,31 +605,16 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	});
 
 	if (!resp->ok)
-	{
-		if (forkNum == 1 || forkNum == 2 || forkNum == 3)
-		{
-			ereport(WARNING,
-					(errcode(ERRCODE_IO_ERROR),
-					errmsg("could not read block %u in rel %u/%u/%u.%u from page server",
-							blkno,
-							reln->smgr_rnode.node.spcNode,
-							reln->smgr_rnode.node.dbNode,
-							reln->smgr_rnode.node.relNode,
-							forkNum)));
-			memset(buffer, 0, BLCKSZ);
-			pfree(resp);
-			return;
-		}
-
 		ereport(ERROR,
 			(errcode(ERRCODE_IO_ERROR),
-			errmsg("could not read block %u in rel %u/%u/%u.%u from page server",
+			errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
 					blkno,
 					reln->smgr_rnode.node.spcNode,
 					reln->smgr_rnode.node.dbNode,
 					reln->smgr_rnode.node.relNode,
-					forkNum)));
-	}
+					forkNum,
+					(uint32) (request_lsn >> 32), (uint32) request_lsn)));
+
 	memcpy(buffer, resp->page, BLCKSZ);
 	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
 	pfree(resp);
