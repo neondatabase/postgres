@@ -932,18 +932,7 @@ smgr_zenith(BackendId backend, RelFileNode rnode)
 
 	/* Don't use page server for temp relations */
 	if (backend != InvalidBackendId ||
-		/*
-		 * Don't use the page server for shared catalogs. There's a chicken-and-egg
-		 * problem in particular with pg_authid: The Page Server needs to connect
-		 * to the compute node, to stream the latest WAL. Opening that replication
-		 * connection requires the compute node to check pg_authid to authenticate
-		 * the connection. And that pg_authid lookup in turn would make a call into
-		 * the Page Server, if we didn't special-case it here.
-		 */
-		rnode.spcNode == GLOBALTABLESPACE_OID)
-	{
 		return smgr_standard(backend, rnode);
-	}
 	else
 		return &zenith_smgr;
 }
