@@ -931,7 +931,7 @@ smgr_zenith(BackendId backend, RelFileNode rnode)
 {
 
 	/* Don't use page server for temp relations */
-	if (backend != InvalidBackendId ||
+	if (backend != InvalidBackendId)
 		return smgr_standard(backend, rnode);
 	else
 		return &zenith_smgr;
