@@ -464,8 +464,8 @@ CreateMessageVCLOnly(void)
 static void
 StartElection(void)
 {
-	// FIXME: pg_resetwal used for node startup create second segment
-	XLogRecPtr initWALPos = serverInfo.walSegSize*2;
+	// FIXME: If the WAL acceptors have nothing, start from "the beginning of time"
+	XLogRecPtr initWALPos = serverInfo.walSegSize;
 	prop.VCL = restartLsn = initWALPos;
 	prop.nodeId = serverInfo.nodeId;
 	for (int i = 0; i < n_walkeepers; i++)
@@ -706,7 +706,10 @@ WalProposerPoll(void)
 							wk->state = SS_IDLE;
 							if (++n_votes == quorum)
 							{
-								elog(LOG, "Successfully established connection with %d nodes", quorum);
+								elog(LOG, "Successfully established connection with %d nodes, VCL %X/%X",
+									 quorum,
+									 (uint32) (prop.VCL >> 32), (uint32) (prop.VCL)
+									);
 
 								/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
 								if (restartLsn != prop.VCL)
