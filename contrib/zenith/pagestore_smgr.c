@@ -16,6 +16,7 @@
 
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlog_internal.h"
 #include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -410,6 +411,16 @@ zenith_get_request_lsn(bool nonrel)
 			lsn = flushlsn;
 			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X",
 				 (uint32) ((lsn) >> 32), (uint32) (lsn));
+		}
+		/* If lsn points to the beging of first record on page or segment,
+		 * then "return" it back to the page origin */
+		else if ((lsn & (XLOG_BLCKSZ-1)) == SizeOfXLogShortPHD)
+		{
+			lsn -= SizeOfXLogShortPHD;
+		}
+		else if ((lsn & (wal_segment_size-1)) == SizeOfXLogLongPHD)
+		{
+			lsn -= SizeOfXLogLongPHD;
 		}
 
 		/*
