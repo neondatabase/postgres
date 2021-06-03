@@ -16,6 +16,7 @@
 
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlog_internal.h"
 #include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -857,6 +858,20 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 * inserted WAL record's LSN.
 	 */
 	lsn = GetXLogInsertRecPtr();
+
+	/*
+	 * If lsn points to the begining of first record on page or segment,
+	 * "return" it back to the page origin, so that we wouldn't request
+	 * flush of non-existing WAL page below.
+	 */
+	if ((lsn & (XLOG_BLCKSZ-1)) == SizeOfXLogShortPHD)
+	{
+		lsn -= SizeOfXLogShortPHD;
+	}
+	else if ((lsn & (wal_segment_size-1)) == SizeOfXLogLongPHD)
+	{
+		lsn -= SizeOfXLogLongPHD;
+	}
 
 	/*
 	 * Flush it, too. We don't actually care about it here, but let's uphold
