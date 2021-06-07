@@ -16,6 +16,7 @@
 
 #include "access/xlog.h"
 #include "access/xloginsert.h"
+#include "access/xlog_internal.h"
 #include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
@@ -358,6 +359,29 @@ zenith_init(void)
 #endif
 }
 
+/*
+ * GetXLogInsertRecPtr uses XLogBytePosToRecPtr to convert logical insert (reserved) position
+ * to physical position in WAL. It always adds SizeOfXLogShortPHD:
+ *		seg_offset += fullpages * XLOG_BLCKSZ + bytesleft + SizeOfXLogShortPHD;
+ * so even if there are no records on the page, offset will be SizeOfXLogShortPHD.
+ * It may cause problems with XLogFlush. So return pointer backward to the origin of the page.
+ */
+static XLogRecPtr
+zm_adjust_lsn(XLogRecPtr lsn)
+{
+	/* If lsn points to the beging of first record on page or segment,
+	 * then "return" it back to the page origin
+	 */
+	if ((lsn & (XLOG_BLCKSZ-1)) == SizeOfXLogShortPHD)
+	{
+		lsn -= SizeOfXLogShortPHD;
+	}
+	else if ((lsn & (wal_segment_size-1)) == SizeOfXLogLongPHD)
+	{
+		lsn -= SizeOfXLogLongPHD;
+	}
+	return lsn;
+}
 
 /*
  * Return LSN for requesting pages and number of blocks from page server
@@ -388,7 +412,6 @@ zenith_get_request_lsn(bool nonrel)
 	}
 	else
 	{
-		lsn = GetLastWrittenPageLSN();
 		flushlsn = GetFlushRecPtr();
 
 		/*
@@ -412,6 +435,8 @@ zenith_get_request_lsn(bool nonrel)
 			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X",
 				 (uint32) ((lsn) >> 32), (uint32) (lsn));
 		}
+		else
+			lsn = zm_adjust_lsn(lsn);
 
 		/*
 		 * Is it possible that the last-written LSN is ahead of last flush LSN? Probably not,
@@ -857,6 +882,8 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 * inserted WAL record's LSN.
 	 */
 	lsn = GetXLogInsertRecPtr();
+
+	lsn = zm_adjust_lsn(lsn);
 
 	/*
 	 * Flush it, too. We don't actually care about it here, but let's uphold
