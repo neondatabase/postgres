@@ -11,6 +11,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "access/xlog.h"
+#include "replication/slot.h"
 #include "replication/walreceiver.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
@@ -23,6 +24,8 @@
 char* wal_acceptors_list;
 int   wal_acceptor_reconnect_timeout;
 bool  am_wal_proposer;
+
+#define WAL_PROPOSER_SLOT_NAME "wal_proposer_slot"
 
 static int          n_walkeepers = 0;
 static int          quorum = 0;
@@ -293,6 +296,13 @@ WalProposerMain(Datum main_arg)
 	InitWalSender();
 	ResetWalProposerEventSet();
 
+	/* Create replication slot for WAL proposer if not exists */
+	if (SearchNamedReplicationSlot(WAL_PROPOSER_SLOT_NAME, false) == NULL)
+	{
+		ReplicationSlotCreate(WAL_PROPOSER_SLOT_NAME, false, RS_PERSISTENT, false);
+		ReplicationSlotRelease();
+	}
+
 	/* Initiate connections to all walkeeper nodes */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -312,7 +322,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 	 */
 	startpos -= XLogSegmentOffset(startpos, serverInfo.walSegSize);
 
-	cmd.slotname = NULL;
+	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
 	cmd.timeline = serverInfo.timeline;
 	cmd.startpoint = startpos;
 	StartReplication(&cmd);
@@ -535,8 +545,8 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 	WalReceiverConn *wrconn;
 	WalRcvStreamOptions options;
 
-	sprintf(conninfo, "host=%s port=%s dbname=replication",
-			walkeeper[leader].host, walkeeper[leader].port);
+	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s'",
+			walkeeper[leader].host, walkeeper[leader].port, zenith_timeline_walproposer);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
 	{
