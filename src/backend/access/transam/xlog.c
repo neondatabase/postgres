@@ -6577,6 +6577,7 @@ StartupXLOG(void)
 	bool		reachedRecoveryTarget = false;
 	bool		haveBackupLabel = false;
 	bool		haveTblspcMap = false;
+	bool        skipLastRecordReread = false;
 	XLogRecPtr	RecPtr,
 				checkPointLoc,
 				EndOfLog;
