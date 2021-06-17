@@ -6495,6 +6495,7 @@ StartupXLOG(void)
 	bool		reachedRecoveryTarget = false;
 	bool		haveBackupLabel = false;
 	bool		haveTblspcMap = false;
+	bool        skipLastRecordReread = false;
 	XLogRecPtr	RecPtr,
 				checkPointLoc,
 				EndOfLog;
@@ -7039,10 +7040,26 @@ StartupXLOG(void)
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
-
 	if (RecPtr < checkPoint.redo)
-		ereport(PANIC,
-				(errmsg("invalid redo in checkpoint record")));
+	{
+		int fd = BasicOpenFile("zenith.signal", O_RDWR | PG_BINARY);
+		if (fd >= 0) {
+			XLogRecPtr prevRecPtr = 0;
+			if ((size_t)read(fd, &prevRecPtr, sizeof prevRecPtr) != sizeof(prevRecPtr)) {
+				elog(LOG, "can't read previous record position from zenith.signal file: %m");
+			}
+			LastRec = prevRecPtr;
+			/* Zenith hacks to spawn compute node without WAL */
+			EndRecPtr = RecPtr = checkPoint.redo;
+			skipLastRecordReread = true;
+			close(fd);
+		}
+		else
+		{
+			ereport(PANIC,
+					(errmsg("invalid redo in checkpoint record")));
+		}
+	}
 
 	/*
 	 * Check whether we need to force recovery from WAL.  If it appears to
@@ -7708,8 +7725,28 @@ StartupXLOG(void)
 	 * valid or last applied record, so we can identify the exact endpoint of
 	 * what we consider the valid portion of WAL.
 	 */
-	XLogBeginRead(xlogreader, LastRec);
-	record = ReadRecord(xlogreader, PANIC, false);
+
+	/*
+	 * We use the last WAL page to initialize the WAL for writing,
+	 * so we better have it in memory.
+	 */
+	if (skipLastRecordReread)
+	{
+		XLogRecPtr lastPage = EndRecPtr - (EndRecPtr % XLOG_BLCKSZ);
+		int idx = XLogRecPtrToBufIdx(lastPage);
+		XLogPageHeader xlogPageHdr = (XLogPageHeader)(XLogCtl->pages + idx*XLOG_BLCKSZ);
+		xlogPageHdr->xlp_pageaddr = lastPage;
+		xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+		readOff = XLogSegmentOffset(lastPage, wal_segment_size);
+		elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
+	}
+	else
+	{
+		XLogBeginRead(xlogreader, LastRec);
+		record = ReadRecord(xlogreader, PANIC, false);
+		if (!record)
+			elog(PANIC, "could not re-read last record");
+	}
 	EndOfLog = EndRecPtr;
 
 	/*
@@ -7896,7 +7933,8 @@ StartupXLOG(void)
 		/* Copy the valid part of the last block, and zero the rest */
 		page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
 		len = EndOfLog % XLOG_BLCKSZ;
-		memcpy(page, xlogreader->readBuf, len);
+		if (!skipLastRecordReread)
+			memcpy(page, xlogreader->readBuf, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
 		XLogCtl->xlblocks[firstIdx] = pageBeginPtr + XLOG_BLCKSZ;
