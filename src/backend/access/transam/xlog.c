@@ -7017,9 +7017,16 @@ StartupXLOG(void)
 	doPageWrites = lastFullPageWrites;
 	if (RecPtr < checkPoint.redo)
 	{
-		/* Zenith hacks to spawn compute node without WAL */
-		LastRec = EndRecPtr = RecPtr = checkPoint.redo;
-		skipLastRecordReread = true;
+		if (access("zenith.signal", F_OK) == 0) {
+			/* Zenith hacks to spawn compute node without WAL */
+			LastRec = EndRecPtr = RecPtr = checkPoint.redo;
+			skipLastRecordReread = true;
+		}
+		else
+		{
+			ereport(PANIC,
+					(errmsg("invalid redo in checkpoint record")));
+		}
 	}
 
 	/*
