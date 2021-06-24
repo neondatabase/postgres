@@ -62,6 +62,11 @@
 #include <sys/resource.h>
 #endif
 
+#if defined(HAVE_LIBSECCOMP) && defined(__GLIBC__)
+#define MALLOC_NO_MMAP
+#include <malloc.h>
+#endif
+
 #ifndef HAVE_GETRUSAGE
 #include "rusagestub.h"
 #endif
@@ -73,9 +78,10 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "postmaster/postmaster.h"
-#include "storage/ipc.h"
-#include "storage/bufmgr.h"
+#include "postmaster/seccomp.h"
 #include "storage/buf_internals.h"
+#include "storage/bufmgr.h"
+#include "storage/ipc.h"
 #include "storage/proc.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
@@ -92,6 +98,43 @@ static void GetPage(StringInfo input_message);
 static BufferTag target_redo_tag;
 
 #define TRACE DEBUG5
+
+#ifdef HAVE_LIBSECCOMP
+static void
+enter_seccomp_mode(void)
+{
+	PgSeccompRule syscalls[] =
+	{
+		/* Hard requirements */
+		PG_SCMP_ALLOW(exit_group),
+		PG_SCMP_ALLOW(pselect6),
+		PG_SCMP_ALLOW(read),
+		PG_SCMP_ALLOW(write),
+
+		/* Memory allocation */
+		PG_SCMP_ALLOW(brk),
+#ifndef MALLOC_NO_MMAP
+		/* TODO: musl doesn't have mallopt */
+		PG_SCMP_ALLOW(mmap),
+		PG_SCMP_ALLOW(munmap),
+#endif
+
+		/* Enable those for a proper shutdown.
+		PG_SCMP_ALLOW(munmap),
+		PG_SCMP_ALLOW(shmctl),
+		PG_SCMP_ALLOW(shmdt),
+		PG_SCMP_ALLOW(unlink), // shm_unlink
+		*/
+	};
+
+#ifdef MALLOC_NO_MMAP
+	/* Ask glibc not to use mmap() */
+	mallopt(M_MMAP_MAX, 0);
+#endif
+
+	seccomp_load_rules(syscalls, lengthof(syscalls));
+}
+#endif
 
 /* ----------------------------------------------------------------
  * FIXME comment
@@ -245,6 +288,22 @@ WalRedoMain(int argc, char *argv[],
 			RmgrTable[rmid].rm_startup();
 	}
 
+#ifdef HAVE_LIBSECCOMP
+	/* We prefer opt-out to opt-in for greater security */
+	bool enable_seccomp = true;
+	for (int i = 1; i < argc; i++)
+		if (strcmp(argv[i], "--disable-seccomp") == 0)
+			enable_seccomp = false;
+
+	/*
+	 * We deliberately delay the transition to the seccomp mode
+	 * until it's time to enter the main processing loop;
+	 * else we'd have to add a lot more syscalls to the allowlist.
+	 */
+	if (enable_seccomp)
+		enter_seccomp_mode();
+#endif
+
 	/*
 	 * Main processing loop
 	 */
@@ -289,6 +348,16 @@ WalRedoMain(int argc, char *argv[],
 				 */
 			case EOF:
 
+#ifdef HAVE_LIBSECCOMP
+				/*
+				 * Skip the shutdown sequence, leaving some garbage behind.
+				 * Hopefully, postgres will clean it up in the next run.
+				 * This way we don't have to enable extra syscalls, which is nice.
+				 * See enter_seccomp_mode() above.
+				 */
+				if (enable_seccomp)
+					_exit(0);
+#endif
 				/*
 				 * NOTE: if you are tempted to add more code here, DON'T!
 				 * Whatever you had in mind to do should be set up as an
@@ -636,8 +705,7 @@ GetPage(StringInfo input_message)
 	/* single thread, so don't bother locking the page */
 
 	/* Response: Page content */
-	fwrite(page, 1, BLCKSZ, stdout); /* FIXME: check errors */
-	fflush(stdout);
+	write(STDOUT_FILENO, page, BLCKSZ); /* FIXME: check errors */
 
 	ReleaseBuffer(buf);
 	DropDatabaseBuffers(rnode.dbNode);
