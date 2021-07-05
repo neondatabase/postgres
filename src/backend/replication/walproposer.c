@@ -876,7 +876,7 @@ WalProposerPoll(void)
 		 * each wal flush), then exit loop. (no need for pm death check due to
 		 * WL_EXIT_ON_PM_DEATH)
 		 */
-		if (event.events & (WL_LATCH_SET) != 0)
+		if (event.events & WL_LATCH_SET)
 		{
 			ResetLatch(MyLatch);
 			break;
