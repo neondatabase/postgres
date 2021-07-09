@@ -44,6 +44,8 @@
 static char *hexdump_page(char *page);
 #endif
 
+#define IS_LOCAL_REL(reln) (reln->smgr_rnode.node.dbNode != 0 && reln->smgr_rnode.node.relNode > FirstNormalObjectId)
+
 const int SmgrTrace = DEBUG5;
 
 bool loaded = false;
@@ -492,7 +494,8 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 		 forkNum);
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdcreate(reln, forkNum, isRedo);
+	if (IS_LOCAL_REL(reln))
+		mdcreate(reln, forkNum, isRedo);
 #endif
 }
 
@@ -548,7 +551,8 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdextend(reln, forkNum, blkno, buffer, skipFsync);
+	if (IS_LOCAL_REL(reln))
+		mdextend(reln, forkNum, blkno, buffer, skipFsync);
 #endif
 }
 
@@ -562,7 +566,8 @@ zenith_open(SMgrRelation reln)
 	elog(SmgrTrace, "[ZENITH_SMGR] open noop");
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdopen(reln);
+	if (IS_LOCAL_REL(reln))
+		mdopen(reln);
 #endif
 }
 
@@ -576,7 +581,8 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 	elog(SmgrTrace, "[ZENITH_SMGR] close noop");
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdclose(reln, forknum);
+	if (IS_LOCAL_REL(reln))
+		mdclose(reln, forknum);
 #endif
 }
 
@@ -605,7 +611,8 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 	elog(SmgrTrace, "[ZENITH_SMGR] writeback noop");
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdwriteback(reln, forknum, blocknum, nblocks);
+	if (IS_LOCAL_REL(reln))
+		mdwriteback(reln, forknum, blocknum, nblocks);
 #endif
 }
 
@@ -647,7 +654,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 
 #ifdef DEBUG_COMPARE_LOCAL
-	if (forkNum == MAIN_FORKNUM)
+	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
 	{
 		char pageserver_masked[BLCKSZ];
 		char mdbuf[BLCKSZ];
@@ -828,7 +835,8 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdwrite(reln, forknum, blocknum, buffer, skipFsync);
+	if (IS_LOCAL_REL(reln))
+		mdwrite(reln, forknum, blocknum, buffer, skipFsync);
 #endif
 }
 
@@ -894,7 +902,8 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	SetLastWrittenPageLSN(lsn);
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdtruncate(reln, forknum, nblocks);
+	if (IS_LOCAL_REL(reln))
+		mdtruncate(reln, forknum, nblocks);
 #endif
 }
 
@@ -915,7 +924,8 @@ zenith_immedsync(SMgrRelation reln, ForkNumber forknum)
 	elog(SmgrTrace, "[ZENITH_SMGR] immedsync noop");
 
 #ifdef DEBUG_COMPARE_LOCAL
-	mdimmedsync(reln, forknum);
+	if (IS_LOCAL_REL(reln))
+		mdimmedsync(reln, forknum);
 #endif
 }
 
@@ -953,5 +963,6 @@ smgr_zenith(BackendId backend, RelFileNode rnode)
 void
 smgr_init_zenith(void)
 {
+	smgr_init_standard();
 	zenith_init();
 }
