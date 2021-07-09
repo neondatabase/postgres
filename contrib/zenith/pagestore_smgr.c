@@ -963,5 +963,6 @@ smgr_zenith(BackendId backend, RelFileNode rnode)
 void
 smgr_init_zenith(void)
 {
+	smgr_init_standard();
 	zenith_init();
 }
