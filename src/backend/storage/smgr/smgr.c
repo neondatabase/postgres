@@ -69,10 +69,7 @@ static dlist_head unowned_relns;
 void
 smgrinit(void)
 {
-	if (smgr_init_hook)
-		(*smgr_init_hook)();
-
-	smgr_init_standard();
+	(*smgr_init_hook)();
 
 	/*
 	 * ZENITH XXX
@@ -98,7 +95,7 @@ smgrinit(void)
 
 /* Hook for plugins to get control in smgr */
 smgr_hook_type smgr_hook = NULL;
-smgr_init_hook_type smgr_init_hook = NULL;
+smgr_init_hook_type smgr_init_hook = smgr_init_standard;
 smgr_shutdown_hook_type smgr_shutdown_hook = NULL;
 
 const f_smgr *
