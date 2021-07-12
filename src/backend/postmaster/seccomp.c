@@ -140,7 +140,7 @@ void seccomp_load_rules(PgSeccompRule *rules, int count)
 		raise_error("failed to install a proper SIGSYS handler");
 
 	/* If this succeeds, any syscall not in the list will crash the process */
-	if (do_seccomp_load_rules(rules, count, SCMP_ACT_KILL_PROCESS) != 0)
+	if (do_seccomp_load_rules(rules, count, SCMP_ACT_TRAP) != 0)
 		raise_error("failed to enter seccomp mode");
 
 #undef raise_error
@@ -185,7 +185,7 @@ static void
 die(int code, const char *str)
 {
 	/* Best effort write to stderr */
-	(void)write(STDERR_FILENO, str, strlen(str));
+	(void)write(fileno(stderr), str, strlen(str));
 
 	/* XXX: we don't want to run any atexit callbacks */
 	_exit(code);
@@ -221,8 +221,10 @@ seccomp_deny_sighandler(int signum, siginfo_t *info, void *cxt pg_attribute_unus
 	 */
 	char buffer[128];
 	(void)snprintf(buffer, lengthof(buffer),
-			       "seccomp: bad syscall %d\n",
-				   info->si_syscall);
+			"---------------------------------------\n"
+			"seccomp: bad syscall %d\n"
+			"---------------------------------------\n",
+			info->si_syscall);
 
 	/*
 	 * Instead of silently crashing the process with
