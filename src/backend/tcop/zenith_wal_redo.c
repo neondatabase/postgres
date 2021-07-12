@@ -109,6 +109,7 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(exit_group),
 		PG_SCMP_ALLOW(pselect6),
 		PG_SCMP_ALLOW(read),
+		PG_SCMP_ALLOW(select),
 		PG_SCMP_ALLOW(write),
 
 		/* Memory allocation */
