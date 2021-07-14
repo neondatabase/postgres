@@ -91,6 +91,7 @@ extern char *page_server_connstring;
 extern char *callmemaybe_connstring;
 extern char *zenith_timeline;
 extern bool wal_redo;
+extern int32 max_timeline_size;
 
 extern const f_smgr *smgr_zenith(BackendId backend, RelFileNode rnode);
 extern void smgr_init_zenith(void);

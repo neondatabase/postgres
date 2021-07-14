@@ -14,6 +14,8 @@
  */
 #include "postgres.h"
 
+#include <limits.h>
+
 #include "pagestore_client.h"
 #include "fmgr.h"
 #include "access/xlog.h"
@@ -233,6 +235,15 @@ _PG_init(void)
 							 PGC_POSTMASTER,
 							 0,
 							 NULL, NULL, NULL);
+
+	DefineCustomIntVariable("zenith.max_timeline_size",
+							"Hard limit on instance relation data size.",
+							NULL,
+							&max_timeline_size,
+							-1, -1, MAX_KILOBYTES,
+							PGC_SIGHUP,
+							GUC_UNIT_KB,
+							NULL, NULL,	NULL);
 
 	if (page_server != NULL)
 		zenith_log(ERROR, "libpqpagestore already loaded");

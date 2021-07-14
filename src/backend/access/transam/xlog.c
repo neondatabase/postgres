@@ -735,6 +735,10 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 	XLogRecPtr  lastWrittenPageLSN;
 
+	// Total size of all relations in the timeline in bytes.
+	// Used to enforce size quota.
+	int64		timelineSize;
+
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -7858,6 +7862,22 @@ StartupXLOG(void)
 	XLogCtl->ThisTimeLineID = ThisTimeLineID;
 	XLogCtl->PrevTimeLineID = PrevTimeLineID;
 
+	XLogCtl->timelineSize = 0;
+
+	// Set initial timeline size that will be used to enforce space usage quota
+	{
+		int fd = BasicOpenFile("zenith.size", O_RDWR | PG_BINARY);
+		if (fd >= 0) {
+			int64 timelineSize = 0;
+			if ((size_t)read(fd, &timelineSize, sizeof(timelineSize)) != sizeof(timelineSize)) {
+				elog(ERROR, "Can't read initial timeline size from zenith.size file: %m");
+			}
+			XLogCtl->timelineSize = timelineSize;
+			elog(LOG, "initial timelineSize %ld", timelineSize);
+			close(fd);
+			unlink("zenith.size");
+		}
+	}
 	/*
 	 * Prepare to write WAL starting at EndOfLog location, and init xlog
 	 * buffer cache using the block containing the last record from the
@@ -8642,6 +8662,28 @@ SetLastWrittenPageLSN(XLogRecPtr lsn)
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 
+int64
+IncreaseTimelineSize(int64 size)
+{
+	int64 newsize;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->timelineSize = XLogCtl->timelineSize + size;
+	newsize = XLogCtl->timelineSize;
+	SpinLockRelease(&XLogCtl->info_lck);
+	return newsize;
+}
+
+int64
+DecreaseTimelineSize(int64 size)
+{
+	int64 newsize;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (XLogCtl->timelineSize > size)
+		XLogCtl->timelineSize = XLogCtl->timelineSize - size;
+	newsize = XLogCtl->timelineSize;
+	SpinLockRelease(&XLogCtl->info_lck);
+	return newsize;
+}
 
 
 

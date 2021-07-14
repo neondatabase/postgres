@@ -353,9 +353,12 @@ extern void RemovePromoteSignalFiles(void);
 extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
 extern XLogRecPtr GetLastWrittenPageLSN(void);
 
+int64 IncreaseTimelineSize(int64 size);
+int64 DecreaseTimelineSize(int64 size);
+
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
-extern void WakeupRecovery(void);
+extern void WakeupRecovery(void); 
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern void StartupRequestWalReceiverRestart(void);

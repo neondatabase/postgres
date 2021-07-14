@@ -57,6 +57,9 @@ char *page_server_connstring;
 char *callmemaybe_connstring;
 char *zenith_timeline;
 bool wal_redo = false;
+int32 max_timeline_size = -1;
+
+static BlockNumber zenith_nblocks_internal(RelFileNode rnode, ForkNumber forknum);
 
 char const *const ZenithMessageStr[] =
 {
@@ -520,6 +523,13 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 void
 zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 {
+
+	// This operation requires access to the pageserver,
+	// which is quite expensive. TODO cache relation size.
+	BlockNumber	n_blocks = zenith_nblocks_internal(rnode.node, forkNum);
+
+	DecreaseTimelineSize(n_blocks*BLCKSZ);
+
 #ifdef DEBUG_COMPARE_LOCAL
 	mdunlink(rnode, forkNum, isRedo);
 #endif
@@ -539,6 +549,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
 	XLogRecPtr lsn;
+	int64 newsize;
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
 
@@ -549,6 +560,15 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		 reln->smgr_rnode.node.relNode,
 		 forkNum, blkno,
 		 (uint32) (lsn >> 32), (uint32) lsn);
+
+	newsize = IncreaseTimelineSize(BLCKSZ);
+
+	if (max_timeline_size > 0 && newsize/1024 > max_timeline_size)
+		ereport(ERROR,
+			(errcode(ERRCODE_DISK_FULL),
+				errmsg("could not extend file. Timeline size limit of %d KB is reached",
+					max_timeline_size),
+				errhint("Limit is defined by zenith.max_timeline_size GUC")));
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -840,11 +860,9 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 #endif
 }
 
-/*
- *	zenith_nblocks() -- Get the number of blocks stored in a relation.
- */
-BlockNumber
-zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
+
+static BlockNumber
+zenith_nblocks_internal(RelFileNode rnode, ForkNumber forknum)
 {
 	ZenithResponse *resp;
 	int			n_blocks;
@@ -854,7 +872,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithNblocksRequest,
 		.page_key = {
-			.rnode = reln->smgr_rnode.node,
+			.rnode = rnode,
 			.forknum = forknum,
 		},
 		.lsn = request_lsn
@@ -862,9 +880,9 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	n_blocks = resp->n_blocks;
 
 	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
-		 reln->smgr_rnode.node.spcNode,
-		 reln->smgr_rnode.node.dbNode,
-		 reln->smgr_rnode.node.relNode,
+		 rnode.spcNode,
+		 rnode.dbNode,
+		 rnode.relNode,
 		 forknum,
 		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
 		 n_blocks);
@@ -874,12 +892,28 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
+ *	zenith_nblocks() -- Get the number of blocks stored in a relation.
+ */
+BlockNumber
+zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
+{
+	return zenith_nblocks_internal(reln->smgr_rnode.node, forknum);
+}
+
+
+
+/*
  *	zenith_truncate() -- Truncate relation to specified number of blocks.
  */
 void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
 	XLogRecPtr lsn;
+
+	// This operation requires access to the pageserver,
+	// which is quite expensive. TODO cache relation size.
+	BlockNumber	prev_nblocks = zenith_nblocks_internal(reln->smgr_rnode.node, forknum);
+	DecreaseTimelineSize((prev_nblocks-nblocks)*BLCKSZ);
 
 	/*
 	 * Truncating a relation drops all its buffers from the buffer cache without
