@@ -7017,10 +7017,17 @@ StartupXLOG(void)
 	doPageWrites = lastFullPageWrites;
 	if (RecPtr < checkPoint.redo)
 	{
-		if (access("zenith.signal", F_OK) == 0) {
+		int fd = BasicOpenFile("zenith.signal", O_RDWR | PG_BINARY);
+		if (fd >= 0) {
+			XLogRecPtr prevRecPtr = 0;
+			if ((size_t)read(fd, &prevRecPtr, sizeof prevRecPtr) != sizeof(prevRecPtr)) {
+				elog(LOG, "can't read previous record position from zenith.signal file: %m");
+			}
+			LastRec = prevRecPtr;
 			/* Zenith hacks to spawn compute node without WAL */
-			LastRec = EndRecPtr = RecPtr = checkPoint.redo;
+			EndRecPtr = RecPtr = checkPoint.redo;
 			skipLastRecordReread = true;
+			close(fd);
 		}
 		else
 		{
@@ -7697,6 +7704,7 @@ StartupXLOG(void)
 		xlogPageHdr->xlp_pageaddr = lastPage;
 		xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
 		readOff = XLogSegmentOffset(lastPage, wal_segment_size);
+		elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
 	}
 	else
 	{
