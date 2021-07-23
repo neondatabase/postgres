@@ -143,6 +143,16 @@ zm_pack_request(ZenithRequest *msg)
 
 				break;
 			}
+		case T_ZenithDbSizeRequest:
+			{
+				ZenithDbSizeRequest *msg_req = (ZenithDbSizeRequest *) msg;
+
+					pq_sendbyte(&s, msg_req->req.latest);
+					pq_sendint64(&s, msg_req->req.lsn);
+					pq_sendint32(&s, msg_req->dbNode);
+
+					break;
+			}
 		case T_ZenithGetPageRequest:
 			{
 				ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
@@ -163,6 +173,7 @@ zm_pack_request(ZenithRequest *msg)
 		case T_ZenithNblocksResponse:
 		case T_ZenithGetPageResponse:
 		case T_ZenithErrorResponse:
+		case T_ZenithDbSizeResponse:
 		default:
 			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
 			break;
@@ -216,6 +227,18 @@ zm_unpack_response(StringInfo s)
 				break;
 			}
 
+		case T_ZenithDbSizeResponse:
+			{
+				ZenithDbSizeResponse *msg_resp = palloc0(sizeof(ZenithDbSizeResponse));
+
+				msg_resp->tag = tag;
+				msg_resp->db_size = pq_getmsgint64(s);
+				pq_getmsgend(s);
+
+				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
+
 		case T_ZenithErrorResponse:
 			{
 				ZenithErrorResponse *msg_resp;
@@ -242,6 +265,7 @@ zm_unpack_response(StringInfo s)
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithGetPageRequest:
+		case T_ZenithDbSizeRequest:
 		default:
 			elog(ERROR, "unexpected zenith message tag 0x%02x", tag);
 			break;
@@ -309,6 +333,18 @@ zm_to_string(ZenithMessage *msg)
 				appendStringInfoChar(&s, '}');
 				break;
 			}
+		case T_ZenithDbSizeRequest:
+			{
+				ZenithDbSizeRequest *msg_req = (ZenithDbSizeRequest *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"ZenithDbSizeRequest\"");
+				appendStringInfo(&s, ", \"dbnode\": \"%u\"", msg_req->dbNode);
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
+
 
 			/* pagestore -> pagestore_client */
 		case T_ZenithExistsResponse:
@@ -354,6 +390,18 @@ zm_to_string(ZenithMessage *msg)
 				appendStringInfoString(&s, "{\"type\": \"ZenithErrorResponse\"");
 				appendStringInfo(&s, ", \"message\": \"%s\"}", msg_resp->message);
 				appendStringInfoChar(&s, '}');
+				break;
+			}
+		case T_ZenithDbSizeResponse:
+			{
+				ZenithDbSizeResponse *msg_resp = (ZenithDbSizeResponse *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"ZenithDbSizeResponse\"");
+				appendStringInfo(&s, ", \"db_size\": %ld}",
+								 msg_resp->db_size
+					);
+				appendStringInfoChar(&s, '}');
+
 				break;
 			}
 
@@ -1284,6 +1332,58 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 
 	pfree(resp);
 	return n_blocks;
+}
+
+/*
+ *	zenith_db_size() -- Get the size of the database in bytes.
+ */
+int64
+zenith_dbsize(Oid dbNode)
+{
+	ZenithResponse *resp;
+	int64 db_size;
+	XLogRecPtr request_lsn;
+	bool		latest;
+
+	request_lsn = zenith_get_request_lsn(&latest);
+	{
+		ZenithDbSizeRequest request = {
+			.req.tag = T_ZenithDbSizeRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
+			.dbNode = dbNode,
+		};
+
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag)
+	{
+		case T_ZenithDbSizeResponse:
+			db_size = ((ZenithDbSizeResponse *) resp)->db_size;
+			break;
+
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read db size of db %u from page server at lsn %X/%08X",
+							dbNode,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s",
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
+	elog(SmgrTrace, "zenith_dbsize: db %u (request LSN %X/%08X): %ld bytes",
+		 dbNode,
+		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+		 db_size);
+
+	pfree(resp);
+	return db_size;
 }
 
 /*
