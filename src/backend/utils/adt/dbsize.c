@@ -77,6 +77,8 @@ db_dir_size(const char *path)
 	return dirsize;
 }
 
+dbsize_hook_type dbsize_hook = NULL;
+
 /*
  * calculate size of database in all tablespaces
  */
@@ -106,6 +108,13 @@ calculate_database_size(Oid dbOid)
 
 	/* Include pg_default storage */
 	snprintf(pathname, sizeof(pathname), "base/%u", dbOid);
+
+	if (dbsize_hook)
+	{
+		totalsize = (*dbsize_hook)(dbOid);
+		return totalsize;
+	}
+
 	totalsize = db_dir_size(pathname);
 
 	/* Scan the non-default tablespaces */
