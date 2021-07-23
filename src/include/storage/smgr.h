@@ -131,6 +131,9 @@ extern PGDLLIMPORT smgr_shutdown_hook_type smgr_shutdown_hook;
 extern void smgr_init_standard(void);
 extern void smgr_shutdown_standard(void);
 
+// Alternative implementation of calculate_database_size()
+typedef const int64 (*dbsize_hook_type) (Oid dbOid);
+extern PGDLLIMPORT dbsize_hook_type dbsize_hook;
 
 typedef const f_smgr *(*smgr_hook_type) (BackendId backend, RelFileNode rnode);
 extern PGDLLIMPORT smgr_hook_type smgr_hook;
