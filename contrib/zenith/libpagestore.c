@@ -457,5 +457,6 @@ _PG_init(void)
 		zenith_log(PqPageStoreTrace, "set zenith_smgr hook");
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
+		dbsize_hook = zenith_dbsize;
 	}
 }
