@@ -149,4 +149,11 @@ extern void inmem_truncate(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber nblocks);
 extern void inmem_immedsync(SMgrRelation reln, ForkNumber forknum);
 
+
+/* utils for zenith relsize cache */
+extern void relsize_hash_init(void);
+extern bool get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber* size);
+extern void set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
+extern void update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
+
 #endif
