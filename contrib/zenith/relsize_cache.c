@@ -1,0 +1,150 @@
+/*-------------------------------------------------------------------------
+ *
+ * relsize_cache.c
+ *      Relation size cache for better zentih performance.
+ *
+ * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ *
+ * IDENTIFICATION
+ *	  contrib/zenith/relsize_cache.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "pagestore_client.h"
+#include "storage/relfilenode.h"
+#include "storage/smgr.h"
+#include "storage/lwlock.h"
+#include "storage/ipc.h"
+#include "storage/shmem.h"
+#include "catalog/pg_tablespace_d.h"
+#include "utils/dynahash.h"
+#include "utils/guc.h"
+
+
+typedef struct
+{
+	RelFileNode rnode;
+	ForkNumber	forknum;
+} RelTag;
+
+typedef struct
+{
+	RelTag tag;
+	BlockNumber size;
+} RelSizeEntry;
+
+static HTAB *relsize_hash;
+static LWLockId relsize_lock;
+static int relsize_hash_size;
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+static void
+zenith_smgr_shmem_startup(void)
+{
+	static HASHCTL info;
+
+	if (prev_shmem_startup_hook)
+		prev_shmem_startup_hook();
+
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+	relsize_lock = (LWLockId)GetNamedLWLockTranche("zenith_relsize");
+	info.keysize = sizeof(RelTag);
+	info.entrysize = sizeof(RelSizeEntry);
+	relsize_hash = ShmemInitHash("zenith_relsize",
+								 relsize_hash_size, relsize_hash_size,
+								 &info,
+								 HASH_ELEM | HASH_BLOBS);
+	LWLockRelease(AddinShmemInitLock);
+}
+
+bool
+get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber* size)
+{
+	bool found = false;
+	if (relsize_hash_size > 0)
+	{
+		RelTag tag;
+		RelSizeEntry* entry;
+
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_SHARED);
+		entry = hash_search(relsize_hash, &tag, HASH_FIND, NULL);
+		if (entry != NULL)
+		{
+			*size = entry->size;
+			found = true;
+		}
+		LWLockRelease(relsize_lock);
+	}
+	return found;
+}
+
+void
+set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
+{
+	if (relsize_hash_size > 0)
+	{
+		RelTag tag;
+		RelSizeEntry* entry;
+
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+		entry = hash_search(relsize_hash, &tag, HASH_ENTER, NULL);
+		entry->size = size;
+		LWLockRelease(relsize_lock);
+	}
+}
+
+void
+update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
+{
+	if (relsize_hash_size > 0)
+	{
+		RelTag tag;
+		RelSizeEntry* entry;
+		bool found;
+
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+		entry = hash_search(relsize_hash, &tag, HASH_ENTER, &found);
+		if (!found || entry->size < size)
+			entry->size = size;
+		LWLockRelease(relsize_lock);
+	}
+}
+
+void
+relsize_hash_init(void)
+{
+	DefineCustomIntVariable("zenith.relsize_hash_size",
+							"Sets the maximum number of cached relation sizes for zenith",
+							NULL,
+							&relsize_hash_size,
+							/* 
+							 * Size of cache entry is 20 bytes.
+							 * So 64 entry will take about 1.2 Mb,
+							 * which seems to be a reasonable default.
+							 */
+							64*1024,
+							0,
+							INT_MAX,
+							PGC_POSTMASTER,
+							0,
+							NULL, NULL,	NULL);
+
+	if (relsize_hash_size > 0)
+	{
+		RequestAddinShmemSpace(hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
+		RequestNamedLWLockTranche("zenith_relsize", 1);
+
+		prev_shmem_startup_hook = shmem_startup_hook;
+		shmem_startup_hook = zenith_smgr_shmem_startup;
+	}
+}
