@@ -25,6 +25,7 @@
 #include "storage/bufmgr.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "replication/walsender.h"
 #include "catalog/pg_tablespace_d.h"
 
@@ -565,6 +566,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	XLogRecPtr lsn;
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
+	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno+1);
 
 	lsn = PageGetLSN(buffer);
 	elog(SmgrTrace, "smgrextend called for %u/%u/%u.%u blk %u, page LSN: %X/%08X",
@@ -871,8 +873,11 @@ BlockNumber
 zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	ZenithResponse *resp;
-	int			n_blocks;
+	BlockNumber n_blocks;
 	XLogRecPtr request_lsn;
+
+	if (get_cached_relsize(reln->smgr_rnode.node, forknum, &n_blocks))
+		return n_blocks;
 
 	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
@@ -884,6 +889,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		.lsn = request_lsn
 	});
 	n_blocks = resp->n_blocks;
+	update_cached_relsize(reln->smgr_rnode.node, forknum, n_blocks);
 
 	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
 		 reln->smgr_rnode.node.spcNode,
@@ -904,6 +910,8 @@ void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
 	XLogRecPtr lsn;
+
+	set_cached_relsize(reln->smgr_rnode.node, forknum, nblocks);
 
 	/*
 	 * Truncating a relation drops all its buffers from the buffer cache without
