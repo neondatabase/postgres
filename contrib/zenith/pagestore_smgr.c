@@ -22,10 +22,16 @@
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
 #include "storage/bufmgr.h"
+#include "storage/lwlock.h"
+#include "storage/ipc.h"
+#include "storage/shmem.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "replication/walsender.h"
 #include "catalog/pg_tablespace_d.h"
+#include "utils/dynahash.h"
+#include "utils/guc.h"
 
 /*
  * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
@@ -68,6 +74,113 @@ char const *const ZenithMessageStr[] =
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
 };
+
+
+typedef struct
+{
+	RelFileNode rnode;
+	ForkNumber	forknum;
+} RelTag;
+
+typedef struct
+{
+	RelTag tag;
+	BlockNumber size;
+} RelSizeEntry;
+
+static HTAB *relsize_hash;
+static LWLockId relsize_lock;
+static int relsize_hash_size;
+static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+static void
+zenith_smgr_shmem_startup(void)
+{
+	static HASHCTL info;
+
+	if (prev_shmem_startup_hook) {
+		prev_shmem_startup_hook();
+	}
+
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+	relsize_lock = (LWLockId)GetNamedLWLockTranche("zenith_relsize");
+	info.keysize = sizeof(RelTag);
+	info.entrysize = sizeof(RelSizeEntry);
+	relsize_hash = ShmemInitHash("zenith_relsize",
+								 relsize_hash_size, relsize_hash_size,
+								 &info,
+								 HASH_ELEM | HASH_BLOBS);
+	LWLockRelease(AddinShmemInitLock);
+}
+
+static bool
+get_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber* size)
+{
+	RelTag tag;
+	RelSizeEntry* entry;
+	bool found = false;
+	tag.rnode = reln->smgr_rnode.node;
+	tag.forknum = forknum;
+	LWLockAcquire(relsize_lock, LW_SHARED);
+	entry = hash_search(relsize_hash, &tag, HASH_FIND, NULL);
+	if (entry != NULL)
+	{
+		*size = entry->size;
+		found = true;
+	}
+	LWLockRelease(relsize_lock);
+	return found;
+}
+
+static
+void set_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber size)
+{
+	RelTag tag;
+	RelSizeEntry* entry;
+	tag.rnode = reln->smgr_rnode.node;
+	tag.forknum = forknum;
+	LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+	entry = hash_search(relsize_hash, &tag, HASH_ENTER, NULL);
+	entry->size = size;
+	LWLockRelease(relsize_lock);
+}
+
+static
+void update_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber size)
+{
+	RelTag tag;
+	RelSizeEntry* entry;
+	bool found;
+	tag.rnode = reln->smgr_rnode.node;
+	tag.forknum = forknum;
+	LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+	entry = hash_search(relsize_hash, &tag, HASH_ENTER, &found);
+	if (!found || entry->size < size)
+		entry->size = size;
+	LWLockRelease(relsize_lock);
+}
+
+void
+relsize_hash_init(void)
+{
+	DefineCustomIntVariable("zenith.relsize_hash_size",
+							"Size of zenith relation hash",
+							NULL,
+							&relsize_hash_size,
+							64*1024, /* 1Mb */
+							0,
+							INT_MAX,
+							PGC_POSTMASTER,
+							0,
+							NULL,
+							NULL,
+							NULL);
+	RequestAddinShmemSpace(hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
+	RequestNamedLWLockTranche("zenith_relsize", 1);
+
+	prev_shmem_startup_hook = shmem_startup_hook;
+	shmem_startup_hook = zenith_smgr_shmem_startup;
+}
 
 StringInfoData
 zm_pack(ZenithMessage *msg)
@@ -242,6 +355,8 @@ static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
 {
 	XLogRecPtr lsn = PageGetLSN(buffer);
+
+	update_cached_relsize(reln, forknum, blocknum+1);
 
 	/*
 	 * If the page was not WAL-logged before eviction then we can lose its modification.
@@ -848,8 +963,11 @@ BlockNumber
 zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	ZenithResponse *resp;
-	int			n_blocks;
+	BlockNumber n_blocks;
 	XLogRecPtr request_lsn;
+
+	if (get_cached_relsize(reln, forknum, &n_blocks))
+		return n_blocks;
 
 	request_lsn = zenith_get_request_lsn(false);
 	resp = page_server->request((ZenithRequest) {
@@ -861,6 +979,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		.lsn = request_lsn
 	});
 	n_blocks = resp->n_blocks;
+	update_cached_relsize(reln, forknum, n_blocks);
 
 	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
 		 reln->smgr_rnode.node.spcNode,
@@ -881,6 +1000,8 @@ void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
 	XLogRecPtr lsn;
+
+	set_cached_relsize(reln, forknum, nblocks);
 
 	/*
 	 * Truncating a relation drops all its buffers from the buffer cache without

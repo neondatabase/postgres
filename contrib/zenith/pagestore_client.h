@@ -148,5 +148,6 @@ extern BlockNumber inmem_nblocks(SMgrRelation reln, ForkNumber forknum);
 extern void inmem_truncate(SMgrRelation reln, ForkNumber forknum,
 						   BlockNumber nblocks);
 extern void inmem_immedsync(SMgrRelation reln, ForkNumber forknum);
+extern void relsize_hash_init(void);
 
 #endif
