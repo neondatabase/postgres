@@ -98,9 +98,8 @@ zenith_smgr_shmem_startup(void)
 {
 	static HASHCTL info;
 
-	if (prev_shmem_startup_hook) {
+	if (prev_shmem_startup_hook)
 		prev_shmem_startup_hook();
-	}
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
 	relsize_lock = (LWLockId)GetNamedLWLockTranche("zenith_relsize");
@@ -116,48 +115,60 @@ zenith_smgr_shmem_startup(void)
 static bool
 get_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber* size)
 {
-	RelTag tag;
-	RelSizeEntry* entry;
 	bool found = false;
-	tag.rnode = reln->smgr_rnode.node;
-	tag.forknum = forknum;
-	LWLockAcquire(relsize_lock, LW_SHARED);
-	entry = hash_search(relsize_hash, &tag, HASH_FIND, NULL);
-	if (entry != NULL)
+	if (relsize_hash_size > 0)
 	{
-		*size = entry->size;
-		found = true;
+		RelTag tag;
+		RelSizeEntry* entry;
+
+		tag.rnode = reln->smgr_rnode.node;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_SHARED);
+		entry = hash_search(relsize_hash, &tag, HASH_FIND, NULL);
+		if (entry != NULL)
+		{
+			*size = entry->size;
+			found = true;
+		}
+		LWLockRelease(relsize_lock);
 	}
-	LWLockRelease(relsize_lock);
 	return found;
 }
 
 static
 void set_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber size)
 {
-	RelTag tag;
-	RelSizeEntry* entry;
-	tag.rnode = reln->smgr_rnode.node;
-	tag.forknum = forknum;
-	LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
-	entry = hash_search(relsize_hash, &tag, HASH_ENTER, NULL);
-	entry->size = size;
-	LWLockRelease(relsize_lock);
+	if (relsize_hash_size > 0)
+	{
+		RelTag tag;
+		RelSizeEntry* entry;
+
+		tag.rnode = reln->smgr_rnode.node;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+		entry = hash_search(relsize_hash, &tag, HASH_ENTER, NULL);
+		entry->size = size;
+		LWLockRelease(relsize_lock);
+	}
 }
 
 static
 void update_cached_relsize(SMgrRelation reln, ForkNumber forknum, BlockNumber size)
 {
-	RelTag tag;
-	RelSizeEntry* entry;
-	bool found;
-	tag.rnode = reln->smgr_rnode.node;
-	tag.forknum = forknum;
-	LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
-	entry = hash_search(relsize_hash, &tag, HASH_ENTER, &found);
-	if (!found || entry->size < size)
-		entry->size = size;
-	LWLockRelease(relsize_lock);
+	if (relsize_hash_size > 0)
+	{
+		RelTag tag;
+		RelSizeEntry* entry;
+		bool found;
+
+		tag.rnode = reln->smgr_rnode.node;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+		entry = hash_search(relsize_hash, &tag, HASH_ENTER, &found);
+		if (!found || entry->size < size)
+			entry->size = size;
+		LWLockRelease(relsize_lock);
+	}
 }
 
 void
@@ -175,11 +186,14 @@ relsize_hash_init(void)
 							NULL,
 							NULL,
 							NULL);
-	RequestAddinShmemSpace(hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
-	RequestNamedLWLockTranche("zenith_relsize", 1);
+	if (relsize_hash_size > 0)
+	{
+		RequestAddinShmemSpace(hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
+		RequestNamedLWLockTranche("zenith_relsize", 1);
 
-	prev_shmem_startup_hook = shmem_startup_hook;
-	shmem_startup_hook = zenith_smgr_shmem_startup;
+		prev_shmem_startup_hook = shmem_startup_hook;
+		shmem_startup_hook = zenith_smgr_shmem_startup;
+	}
 }
 
 StringInfoData
