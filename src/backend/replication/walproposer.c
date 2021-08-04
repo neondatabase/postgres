@@ -612,7 +612,6 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 			if (rec_end_lsn >= endpos)
 				break;
 		}
-		walrcv_endstreaming(wrconn, &timeline);
 		walrcv_disconnect(wrconn);
 	}
 	else
