@@ -50,10 +50,91 @@ page_server_api api = {
 static void
 zenith_connect()
 {
-	char	   *query;
-	int			ret;
+	char			 *query;
+	int				  ret;
+	char			 *auth_token;
+	char			 *err = NULL;
+	PQconninfoOption *conn_options;
+	PQconninfoOption *conn_option;
+	int 			 noptions = 0;
 
-	pageserver_conn = PQconnectdb(page_server_connstring);
+    // this is heavily inspired by psql/command.c::do_connect
+	conn_options = PQconninfoParse(
+		page_server_connstring,
+	 	&err
+	);
+
+	if (conn_options == NULL) {
+		/* The error string is malloc'd, so we must free it explicitly */
+		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+		PQfreemem(err);
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	// Trying to populate pageserver connection string with auth token from environment.
+	// We are looking for password in with placeholder value like $ENV_VAR_NAME, so if password field is present 
+	// and starts with $ we try to fetch environment variable value and fail loudly if it is not set
+	for (conn_option = conn_options; conn_option->keyword != NULL; conn_option++)
+	{
+		noptions++;
+		if (strcmp(conn_option->keyword, "password") == 0)
+		{
+			if (conn_option->val != NULL && conn_option->val[0] != '\0')
+			{
+				// ensure that this is a template
+				if (strncmp(conn_option->val, "$", 1) != 0) {
+					ereport(
+						ERROR,
+						(
+							errcode(ERRCODE_CONNECTION_EXCEPTION),
+							errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])
+						)
+					);
+				}
+		
+				zenith_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
+				auth_token = getenv(&conn_option->val[1]);
+				if (!auth_token) {
+					ereport(
+						ERROR,
+						(
+							errcode(ERRCODE_CONNECTION_EXCEPTION),
+							errmsg("cannot get auth token, environment variable %s is not set", &conn_option->val[1])
+						)
+					);
+				} else {
+					zenith_log(LOG, "using auth token from environment passed via env");
+
+				// inspired by PQconninfoFree and conninfo_storeval
+				// so just free the old one and replace with freshly malloc'ed one
+				free(conn_option->val);
+				conn_option->val = strdup(auth_token);
+				}
+			}
+		}
+	}
+
+	// copy values from PQconninfoOption to key/value arrays because PQconnectdbParams accepts options this way
+	const char **keywords = malloc((noptions + 1) * sizeof(*keywords));
+	const char **values = malloc((noptions + 1) * sizeof(*values));
+	int			 i = 0;
+	
+	for (i = 0; i < noptions; i++)
+	{
+		keywords[i] = conn_options[i].keyword;
+		values[i] = conn_options[i].val;
+	}
+	// add array terminator
+	keywords[i] = NULL;
+	values[i] = NULL;
+
+	pageserver_conn = PQconnectdbParams(keywords, values, false);
+	free(keywords);
+	free(values);
+
+	PQconninfoFree(conn_options);
 
 	if (PQstatus(pageserver_conn) == CONNECTION_BAD)
 	{
