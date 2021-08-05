@@ -17,6 +17,9 @@
 #include "pagestore_client.h"
 #include "fmgr.h"
 #include "access/xlog.h"
+#include "access/xact.h"
+#include "executor/spi.h"
+
 
 #include "libpq-fe.h"
 #include "libpq/pqformat.h"
@@ -29,6 +32,9 @@
 #include "replication/walproposer.h"
 
 PG_MODULE_MAGIC;
+
+PG_FUNCTION_INFO_V1(test_consume_xids);
+
 
 void		_PG_init(void);
 
@@ -112,7 +118,7 @@ zenith_connect()
 		}
 	}
 
-	zenith_log(LOG, "libpqpagestore: connected to '%s'", page_server_connstring);
+	zenith_log(PqPageStoreTrace, "libpqpagestore: connected to '%s'", page_server_connstring);
 
 	connected = true;
 }
@@ -267,4 +273,36 @@ _PG_init(void)
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
 	}
+}
+
+
+/*
+ * test_consume_xids(int4), for rapidly consuming XIDs, to test wraparound.
+ */
+Datum
+test_consume_xids(PG_FUNCTION_ARGS)
+{
+	int32		nxids = PG_GETARG_INT32(0);
+	TransactionId topxid;
+	FullTransactionId fullxid;
+	TransactionId xid;
+	TransactionId targetxid;
+
+	/* make sure we have a top-XID first */
+	topxid = GetTopTransactionId();
+
+	xid = ReadNextTransactionId();
+
+	targetxid = xid + nxids;
+	while (targetxid < FirstNormalTransactionId)
+		targetxid++;
+
+	while (TransactionIdPrecedes(xid, targetxid))
+	{
+		fullxid = GetNewTransactionId(true);
+		xid = XidFromFullTransactionId(fullxid);
+		elog(DEBUG1, "topxid: %u xid: %u", topxid, xid);
+	}
+
+	PG_RETURN_VOID();
 }

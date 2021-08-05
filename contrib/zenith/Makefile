@@ -10,6 +10,7 @@ PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 
 EXTENSION = zenith
+DATA = zenith--1.0.sql
 PGFILEDESC = "zenith - cloud storage for PostgreSQL"
 
 ifdef USE_PGXS
