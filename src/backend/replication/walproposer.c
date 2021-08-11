@@ -212,7 +212,10 @@ HandleWalKeeperResponse(void)
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
 		if (restartLsn < msg->req.beginLsn)
+		{
+			Assert(restartLsn < msg->req.endLsn);
 			restartLsn = msg->req.endLsn;
+		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(WalKeeperRequest));
 		free(msg);
 	}
@@ -326,6 +329,8 @@ static void
 WalProposerStartStreaming(XLogRecPtr startpos)
 {
 	StartReplicationCmd cmd;
+	elog(LOG, "WAL proposer starts streaming at %X/%X",
+		 LSN_FORMAT_ARGS(startpos));
 	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
 	cmd.timeline = serverInfo.timeline;
 	cmd.startpoint = startpos;
@@ -357,9 +362,11 @@ SendMessageToNode(int i, WalMessage* msg)
 		msg->req.restartLsn = restartLsn;
 		msg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
 
-		elog(LOG, "sending message with len %ld VCL=%X/%X to %d",
-					msg->size - sizeof(WalKeeperRequest),
-					(uint32) (msg->req.commitLsn >> 32), (uint32) msg->req.commitLsn, i);
+		elog(LOG, "sending message with len %ld VCL=%X/%X restart LSN=%X/%X to %d",
+			 msg->size - sizeof(WalKeeperRequest),
+			 LSN_FORMAT_ARGS(msg->req.commitLsn),
+			 LSN_FORMAT_ARGS(restartLsn),
+			 i);
 
 		rc = WriteSocketAsync(walkeeper[i].sock, &msg->req, msg->size);
 		if (rc < 0)
@@ -743,8 +750,10 @@ WalProposerPoll(void)
 										);
 
 									/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
-									if (restartLsn != prop.VCL)
+									if (restartLsn < prop.VCL)
 									{
+										elog(LOG, "Start recovery because restart LSN=%X/%X is not equal to VCL=%X/%X",
+											 LSN_FORMAT_ARGS(restartLsn), LSN_FORMAT_ARGS(prop.VCL));
 										/* Perform recovery */
 										if (!WalProposerRecovery(leader, serverInfo.timeline, restartLsn, prop.VCL))
 											elog(FATAL, "Failed to recover state");
