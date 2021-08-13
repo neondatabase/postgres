@@ -238,6 +238,25 @@ zm_to_string(ZenithMessage *msg)
 	return s.data;
 }
 
+/*
+ * Wrapper around log_newpage() that makes a temporary copy of the block and
+ * WAL-logs that. This makes it safe to use while holding only a shared lock
+ * on the page, see XLogSaveBufferForHint. We don't use XLogSaveBufferForHint
+ * directly because it skips the logging if the LSN is new enough.
+ */
+static XLogRecPtr
+log_newpage_copy(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
+				 Page page, bool page_std)
+{
+	PGAlignedBlock copied_buffer;
+
+	/* set the flag in the original page, like log_newpage() does. */
+	((PageHeader)page)->pd_flags |= PD_WAL_LOGGED;
+
+	memcpy(copied_buffer.data, page, BLCKSZ);
+	return log_newpage(rnode, forkNum, blkno, copied_buffer.data, page_std);
+}
+
 
 static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
@@ -264,7 +283,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	{
 		/* FSM is never WAL-logged and we don't care. */
 		XLogRecPtr recptr;
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
 		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u was force logged. Evicted at lsn=%X",
@@ -284,7 +303,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 * Hopefully we do not evict actively used vm too often.
 		 */
 		XLogRecPtr recptr;
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
+		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
 
@@ -307,7 +326,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 * TODO Do we have any special page types?
 		 */
 
-		recptr = log_newpage(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
+		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
 
 		/* If we wal-log hint bits, someone could concurrently update page
 		 * and reset PD_WAL_LOGGED again, so this assert is not relevant anymore.
