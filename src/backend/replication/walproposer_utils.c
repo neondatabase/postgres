@@ -1,6 +1,7 @@
 #include "replication/walproposer.h"
 #include "common/logging.h"
 #include "common/ip.h"
+#include "../interfaces/libpq/libpq-fe.h"
 #include <netinet/tcp.h>
 #include <unistd.h>
 
@@ -28,170 +29,166 @@ CompareLsn(const void *a, const void *b)
 		return 1;
 }
 
-static bool
-SetSocketOptions(pgsocket sock)
+/* Converts a `WKSockWaitKind` into the bit flags that would match it
+ * 
+ * Note: For `wait_kind = WANTS_NO_WAIT`, this will return a value of zero,
+ * which does not match any events. Attempting to wait on no events will
+ * always timeout, so it's best to double-check the value being provided to
+ * this function where necessary. */
+uint32
+WaitKindAsEvents(WKSockWaitKind wait_kind)
 {
-	int on = 1;
-	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
-				   (char *) &on, sizeof(on)) < 0)
-	{
-		elog(WARNING, "setsockopt(TCP_NODELAY) failed: %m");
-		closesocket(sock);
-		return false;
-	}
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-				   (char *) &on, sizeof(on)) < 0)
-	{
-		elog(WARNING, "setsockopt(SO_REUSEADDR) failed: %m");
-		closesocket(sock);
-		return false;
-	}
-	if (!pg_set_noblock(sock))
-	{
-		elog(WARNING, "faied to switch socket to non-blocking mode: %m");
-		closesocket(sock);
-		return false;
-	}
-	return true;
-}
+	uint32 return_val;
 
-pgsocket
-ConnectSocketAsync(char const* host, char const* port, bool* established)
-{
-	struct addrinfo *addrs = NULL,
-		*addr,
-		hints;
-	int	ret;
-	pgsocket sock = PGINVALID_SOCKET;
-
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = 0;
-	hints.ai_addrlen = 0;
-	hints.ai_addr = NULL;
-	hints.ai_canonname = NULL;
-	hints.ai_next = NULL;
-	ret = pg_getaddrinfo_all(host, port, &hints, &addrs);
-	if (ret || !addrs)
+	switch (wait_kind)
 	{
-		elog(WARNING, "Could not resolve \"%s\": %s",
-					 host, gai_strerror(ret));
-		return -1;
-	}
-	for (addr = addrs; addr; addr = addr->ai_next)
-	{
-		sock = socket(addr->ai_family, SOCK_STREAM, 0);
-		if (sock == PGINVALID_SOCKET)
-		{
-			elog(WARNING, "could not create socket: %m");
-			continue;
-		}
-		if (!SetSocketOptions(sock))
-			continue;
-
-		/*
-		 * Bind it to a kernel assigned port on localhost and get the assigned
-		 * port via getsockname().
-		 */
-		while ((ret = connect(sock, addr->ai_addr, addr->ai_addrlen)) < 0 && errno == EINTR);
-		if (ret < 0)
-		{
-			if (errno == EINPROGRESS)
-			{
-				*established = false;
-				break;
-			}
-			elog(WARNING, "Could not establish connection to %s:%s: %m",
-						 host, port);
-			closesocket(sock);
-		}
-		else
-		{
-			*established = true;
+		case WANTS_NO_WAIT:
+			return_val = WL_NO_EVENTS;
 			break;
-		}
+		case WANTS_SOCK_READ:
+			return_val = WL_SOCKET_READABLE;
+			break;
+		case WANTS_SOCK_WRITE:
+			return_val = WL_SOCKET_WRITEABLE;
+			break;
+		case WANTS_SOCK_EITHER:
+			return_val = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
+			break;
 	}
-	return sock;
-}
-ssize_t
-ReadSocketAsync(pgsocket sock, void* buf, size_t size)
-{
-	size_t offs = 0;
 
-	while (size != offs)
-	{
-		ssize_t rc = recv(sock, (char*)buf + offs, size - offs, 0);
-		if (rc < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
-				return offs;
-			elog(WARNING, "Socket write failed: %m");
-			return -1;
-		}
-		else if (rc == 0)
-		{
-			elog(WARNING, "Connection was closed by peer");
-			return -1;
-		}
-		offs += rc;
-	}
-	return offs;
+	return return_val;
 }
 
-ssize_t
-WriteSocketAsync(pgsocket sock, void const* buf, size_t size)
+/* Returns a human-readable string corresonding to the WalKeeperState
+ *
+ * The string should not be freed.
+ *
+ * The strings are intended to be used as a prefix to "state", e.g.:
+ *
+ *   elog(LOG, "currently in %s state", FormatWalKeeperState(wk->state));
+ *
+ * If this sort of phrasing doesn't fit the message, instead use something like:
+ *
+ *   elog(LOG, "currently in state [%s]", FormatWalKeeperState(wk->state));
+ */
+char*
+FormatWalKeeperState(WalKeeperState state)
 {
-	size_t offs = 0;
+	char* return_val;
 
-	while (size != offs)
+	switch (state)
 	{
-		ssize_t rc = send(sock, (char const*)buf + offs, size - offs, 0);
-		if (rc < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			if (errno == EAGAIN || errno == EWOULDBLOCK)
-				return offs;
-			elog(WARNING, "Socket write failed: %m");
-			return -1;
-		}
-		else if (rc == 0)
-		{
-			elog(WARNING, "Connection was closed by peer");
-			return -1;
-		}
-		offs += rc;
+		case SS_OFFLINE:
+			return_val = "offline";
+			break;
+		case SS_CONNECTING:
+			return_val = "connecting";
+			break;
+		case SS_EXEC_STARTWALPUSH:
+			return_val = "sending 'START_WAL_PUSH' query";
+			break;
+		case SS_WAIT_EXEC_RESULT:
+			return_val = "receiving query result";
+			break;
+		case SS_HANDSHAKE_SEND:
+			return_val = "handshake (sending)";
+			break;
+		case SS_HANDSHAKE_RECV:
+			return_val = "handshake (receiving)";
+			break;
+		case SS_VOTING:
+			return_val = "voting";
+			break;
+		case SS_SEND_VOTE:
+			return_val = "sending vote";
+			break;
+		case SS_WAIT_VERDICT:
+			return_val = "wait-for-verdict";
+			break;
+		case SS_IDLE:
+			return_val = "idle";
+			break;
+		case SS_SEND_WAL:
+			return_val = "WAL-sending";
+			break;
+		case SS_RECV_FEEDBACK:
+			return_val = "WAL-feedback-receiving";
+			break;
 	}
-	return offs;
+
+	return return_val;
 }
 
-bool
-WriteSocket(pgsocket sock, void const* buf, size_t size)
+/* Returns a human-readable string corresponding to the WKSockWaitKind
+ *
+ * The string should not be freed. */
+char*
+FormatWKSockWaitKind(WKSockWaitKind wait_kind)
 {
-	char* src = (char*)buf;
+	char* return_val;
 
-	while (size != 0)
+	switch (wait_kind)
 	{
-		ssize_t rc = send(sock, src, size, 0);
-		if (rc < 0)
-		{
-			if (errno == EINTR)
-				continue;
-			elog(WARNING, "Socket write failed: %m");
-			return false;
-		}
-		else if (rc == 0)
-		{
-			elog(WARNING, "Connection was closed by peer");
-			return false;
-		}
-		size -= rc;
-		src += rc;
+		case WANTS_NO_WAIT:
+			return_val = "<no events>";
+			break;
+		case WANTS_SOCK_READ:
+			return_val = "<read event>";
+			break;
+		case WANTS_SOCK_WRITE:
+			return_val = "<write event>";
+			break;
+		case WANTS_SOCK_EITHER:
+			return_val = "<read or write event>";
+			break;
 	}
-	return true;
+
+	return return_val;
+}
+
+/* Returns a human-readable string corresponding to the event set
+ *
+ * If the events do not correspond to something set as the `events` field of a `WaitEvent`, the
+ * returned string may be meaingless.
+ *
+ * The string should not be freed. It should also not be expected to remain the same between
+ * function calls. */
+char*
+FormatEvents(uint32 events)
+{
+	static char return_str[8];
+
+	/* Helper variable to check if there's extra bits */
+	uint32 all_flags = WL_LATCH_SET
+		| WL_SOCKET_READABLE
+		| WL_SOCKET_WRITEABLE
+		| WL_TIMEOUT
+		| WL_POSTMASTER_DEATH
+		| WL_EXIT_ON_PM_DEATH
+		| WL_SOCKET_CONNECTED;
+
+	/* The formatting here isn't supposed to be *particularly* useful -- it's just to give an
+	 * sense of what events have been triggered without needing to remember your powers of two. */
+
+	return_str[0] = (events & WL_LATCH_SET       ) ? 'L' : '_';
+	return_str[1] = (events & WL_SOCKET_READABLE ) ? 'R' : '_';
+	return_str[2] = (events & WL_SOCKET_WRITEABLE) ? 'W' : '_';
+	return_str[3] = (events & WL_TIMEOUT         ) ? 'T' : '_';
+	return_str[4] = (events & WL_POSTMASTER_DEATH) ? 'D' : '_';
+	return_str[5] = (events & WL_EXIT_ON_PM_DEATH) ? 'E' : '_';
+	return_str[5] = (events & WL_SOCKET_CONNECTED) ? 'C' : '_';
+
+	if (events & (~all_flags))
+	{
+		elog(WARNING, "Event formatting found unexpected component %d",
+				events & (~all_flags));
+		return_str[6] = '*';
+		return_str[7] = '\0';
+	}
+	else
+		return_str[6] = '\0';
+
+	return (char *) &return_str;
 }
 
 /*
