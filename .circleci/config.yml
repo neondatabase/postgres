@@ -1,0 +1,32 @@
+version: 2.1
+
+jobs:
+
+  # Build zenithdb/compute-node:latest image and push it to Docker hub
+  docker_image:
+    docker:
+      - image: cimg/base:2021.04
+    working_directory: ~/repo
+    steps:
+      - checkout:
+          path: ~/repo
+      - setup_remote_docker:
+          docker_layer_caching: true
+      - run:
+          name: Build and push Docker image
+          command: |
+            echo $DOCKER_PWD | docker login -u $DOCKER_LOGIN --password-stdin
+            docker build -t zenithdb/compute-node:latest . && docker push zenithdb/compute-node:latest
+
+workflows:
+  version: 2
+  compute_node:
+    jobs:
+      # Build and push image only for commits to `main`.
+      - docker_image:
+          # Context gives an ability to login
+          context: 'Docker Hub'
+          filters:
+            branches:
+              only:
+                - main
