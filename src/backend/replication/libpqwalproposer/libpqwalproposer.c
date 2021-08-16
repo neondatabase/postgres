@@ -284,23 +284,22 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 static PGAsyncWriteResult
 libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size)
 {
-	int result;
-
 	/* The docs for PQputcopyData list the return values as:
 	 *   1 if the data was queued,
 	 *   0 if it was not queued because of full buffers, or
 	 *  -1 if an error occured
 	 */
-	switch (result = PQputCopyData(conn->pg_conn, buf, size))
+	int result = PQputCopyData(conn->pg_conn, buf, size);
+
+	/* We won't get a result of zero because walproposer always empties the
+	 * connection's buffers before sending more */
+	Assert(result != 0);
+
+	switch (result)
 	{
 		case 1:
 			/* good -- continue */
 			break;
-		case 0:
-			/* FIXME: can this ever happen? the structure of walproposer
-			 * should always empty the connection's buffers before trying
-			 * to send more, right? */
-			return PG_ASYNC_WRITE_WOULDBLOCK;
 		case -1:
 			return PG_ASYNC_WRITE_FAIL;
 		default:

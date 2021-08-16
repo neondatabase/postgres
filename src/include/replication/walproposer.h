@@ -58,9 +58,6 @@ typedef enum
 {
 	/* The write fully completed */
 	PG_ASYNC_WRITE_SUCCESS,
-	/* There wasn't space in the buffers to queue the data; wait until the
-	 * socket is write-ready and try again. */
-	PG_ASYNC_WRITE_WOULDBLOCK,
 	/* The write started, but you'll need to call PQflush some more times
 	 * to finish it off. We just tried, so it's best to wait until the
 	 * connection is read- or write-ready to try again.

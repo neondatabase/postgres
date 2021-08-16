@@ -1161,12 +1161,6 @@ ExecuteNextProtocolState:
 						wk->sockWaitState = WANTS_NO_WAIT;
 						break;
 
-					case PG_ASYNC_WRITE_WOULDBLOCK:
-						/* Wait until the socket is write-ready and try again */
-						wk->pollState     = SPOLL_RETRY;
-						wk->sockWaitState = WANTS_SOCK_WRITE;
-						break;
-
 					case PG_ASYNC_WRITE_TRY_FLUSH:
 						/* We need to call PQflush some number of additional times, with different
 						 * actions depending on whether the socket is readable or writable */
@@ -1261,11 +1255,6 @@ ExecuteNextProtocolState:
 						wk->state         = SS_WAIT_VERDICT;
 						wk->pollState     = SPOLL_NONE;
 						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case PG_ASYNC_WRITE_WOULDBLOCK:
-						/* Wait until the socket is write-ready and try again */
-						wk->pollState     = SPOLL_RETRY;
-						wk->sockWaitState = WANTS_SOCK_WRITE;
 						break;
 					case PG_ASYNC_WRITE_TRY_FLUSH:
 						/* We need to call PQflush some number of additional times, with different
@@ -1362,10 +1351,6 @@ ExecuteNextProtocolState:
 						wk->state         = SS_RECV_FEEDBACK;
 						wk->pollState     = SPOLL_NONE;
 						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case PG_ASYNC_WRITE_WOULDBLOCK:
-						wk->pollState = SPOLL_RETRY;
-						wk->sockWaitState = WANTS_SOCK_WRITE;
 						break;
 					case PG_ASYNC_WRITE_TRY_FLUSH:
 						wk->pollState     = SPOLL_WRITE_PQ_FLUSH;
