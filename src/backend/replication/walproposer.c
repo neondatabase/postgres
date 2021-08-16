@@ -879,7 +879,6 @@ AdvancePollState(int i, uint32 events)
 			/* If the polling corresponds to a "full" operation, we'll skip straight to that - we
 			 * don't actually need to poll here. */
 			case SPOLL_NONE:
-			case SPOLL_RETRY:
 				/* Equivalent to 'break', but more descriptive. */
 				goto ExecuteNextProtocolState;
 
@@ -1039,9 +1038,8 @@ AdvancePollState(int i, uint32 events)
 		}
 
 ExecuteNextProtocolState:
-		/* If we get here, walkeeper[i].pollState now corresponds to either SPOLL_NONE or
-		 * SPOLL_RETRY. In either case, we should execute the operation described by the high-level
-		 * state.
+		/* If we get here, walkeeper[i].pollState now corresponds to SPOLL_NONE. We should execute
+		 * the operation described by the high-level state.
 		 *
 		 * All of the cases in this switch statement are provided in the order that state
 		 * transitions happen, moving downwards. So `SS_CONNECTING` moves into
@@ -1335,15 +1333,11 @@ ExecuteNextProtocolState:
 			{
 				WalMessage* msg = wk->currMsg;
 
-				/* Don't repeat logs if we have to retry the actual send operation itself */
-				if (wk->pollState != SPOLL_RETRY)
-				{
-					elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
-						 msg->size - sizeof(AppendRequestHeader),
-						 LSN_FORMAT_ARGS(msg->req.commitLsn),
-						 LSN_FORMAT_ARGS(truncateLsn),
-						 wk->host, wk->port);
-				}
+				elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
+					 msg->size - sizeof(AppendRequestHeader),
+					 LSN_FORMAT_ARGS(msg->req.commitLsn),
+					 LSN_FORMAT_ARGS(truncateLsn),
+					 wk->host, wk->port);
 
 				switch (walprop_async_write(wk->conn, &msg->req, msg->size))
 				{

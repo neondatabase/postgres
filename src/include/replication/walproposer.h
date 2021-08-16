@@ -109,7 +109,6 @@ typedef enum
 	/*
 	 * Executing the sending half of the handshake. May be paired with:
 	 *   - SPOLL_WRITE_PQ_FLUSH if it hasn't finished sending,
-	 *   - SPOLL_RETRY          if buffers are full and we just need to try again,
 	 *   - SPOLL_NONE
 	 *
 	 * After sending, moves to SS_HANDSHAKE_RECV.
@@ -188,13 +187,6 @@ typedef enum
 	 * WalKeeperState is what *will* be executed, not what just was.
 	 */
 	SPOLL_NONE,
-	/*
-	 * We need to retry the operation once the socket permits it
-	 *
-	 * Expected WKSockWaitKind: Any of WANTS_SOCK_READ, WANTS_SOCK_WRITE,
-	 * WANTS_SOCK_EITHER -- operation dependent.
-	 */
-	SPOLL_RETRY,
 	/*
 	 * Marker for states that do not expect to be advanced by calls to AdvancePollState. Not to be
 	 * confused with SS_IDLE, which carries a different (but related) meaning.
