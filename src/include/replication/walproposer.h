@@ -1,6 +1,7 @@
 #ifndef __WALKEEPER_H__
 #define __WALKEEPER_H__
 
+#include "access/xlogdefs.h"
 #include "postgres.h"
 #include "port.h"
 #include "access/xlog_internal.h"
@@ -172,7 +173,7 @@ typedef enum
 } WalKeeperState;
 
 /* WAL safekeeper state - individual level
- * 
+ *
  * This type encompasses the type of polling necessary to move on to the
  * next `WalKeeperState` from the current. It's things like "we need to
  * call PQflush some more", or "retry the current operation".
@@ -251,54 +252,93 @@ typedef enum
 	WANTS_SOCK_EITHER,
 } WKSockWaitKind;
 
-/*
- * Unique node identifier used by Paxos
- */
-typedef struct NodeId
-{
-	uint64     term;
-	pg_uuid_t  uuid;
-} NodeId;
+/* Consensus logical timestamp. */
+typedef uint64 term_t;
 
 /*
- * Information about Postgres server broadcasted by WAL proposer to walkeeper
+ * Proposer -> Acceptor messaging.
  */
-typedef struct ServerInfo
+
+/* Initial Proposer -> Acceptor message */
+typedef struct ProposerGreeting
 {
-	uint32     protocolVersion;   /* proposer-walkeeper protocol version */
-	uint32     pgVersion;         /* Postgres server version */
-	NodeId     nodeId;
-	uint64     systemId;          /* Postgres system identifier */
-	uint8	   ztimelineid[16];   /* Zenith timeline id */
-	XLogRecPtr walEnd;
+	uint64	   tag;				  /* message tag */
+	uint32	   protocolVersion;	  /* proposer-walkeeper protocol version */
+	uint32	   pgVersion;
+	pg_uuid_t  proposerId;
+	uint64	   systemId;		  /* Postgres system identifier */
+	uint8	   ztimelineid[16];	  /* Zenith timeline id */
+	uint8	   ztenantid[16];
 	TimeLineID timeline;
-	int        walSegSize;
-	uint8      ztenantid[16];
-} ServerInfo;
+	uint32	   walSegSize;
+} ProposerGreeting;
 
 /*
- * Vote request sent from proposer to walkeepers
+ * Acceptor -> Proposer initial response: the highest term acceptor voted for.
  */
-typedef struct RequestVote
+typedef struct AcceptorGreeting
 {
-	NodeId     nodeId;
-	XLogRecPtr VCL;   /* volume commit LSN */
-	uint64     epoch; /* new epoch when walkeeper reaches VCL */
-} RequestVote;
+	uint64		tag;
+	term_t		term;
+} AcceptorGreeting;
 
 /*
- * Information of about storage node
+ * Proposer -> Acceptor vote request.
  */
-typedef struct WalKeeperInfo
+typedef struct VoteRequest
 {
-	uint32     magic;             /* magic for verifying content the control file */
-	uint32     formatVersion;     /* walkeeper format version */
-	uint64     epoch;             /* walkeeper's epoch */
-	ServerInfo server;
-	XLogRecPtr commitLsn;         /* part of WAL acknowledged by quorum */
-	XLogRecPtr flushLsn;          /* locally flushed part of WAL */
-	XLogRecPtr restartLsn;        /* minimal LSN which may be needed for recovery of some walkeeper: min(commitLsn) for all walkeepers */
-} WalKeeperInfo;
+	uint64		tag;
+	term_t		term;
+	pg_uuid_t   proposerId; /* for monitoring/debugging */
+} VoteRequest;
+
+/* Vote itself, sent from safekeeper to proposer */
+typedef struct VoteResponse {
+	uint64 tag;
+	term_t term; /* not really needed, just adds observability */
+	uint64 voteGiven;
+    /// Safekeeper's log position, to let proposer choose the most advanced one
+	term_t epoch;
+	XLogRecPtr flushLsn;
+	XLogRecPtr restartLsn;  /* minimal LSN which may be needed for recovery of some walkeeper */
+} VoteResponse;
+
+/*
+ * Header of request with WAL message sent from proposer to walkeeper.
+ */
+typedef struct AppendRequestHeader
+{
+	uint64 tag;
+	term_t term; /* term of the proposer */
+	/*
+	 * LSN since which current proposer appends WAL; determines epoch switch
+	 * point.
+	 */
+	XLogRecPtr vcl;
+	XLogRecPtr beginLsn;    /* start position of message in WAL */
+	XLogRecPtr endLsn;      /* end position of message in WAL */
+	XLogRecPtr commitLsn;   /* LSN committed by quorum of walkeepers */
+	XLogRecPtr restartLsn;  /* restart LSN position  (minimal LSN which may be needed by proposer to perform recovery) */
+	pg_uuid_t  proposerId; /* for monitoring/debugging */
+} AppendRequestHeader;
+
+/*
+ * All copy data message ('w') are linked in L1 send list and asynchronously sent to receivers.
+ * When message is sent to all receivers, it is removed from send list.
+ */
+struct WalMessage
+{
+	WalMessage* next;      /* L1 list of messages */
+	uint32 size;           /* message size */
+	uint32 ackMask;        /* mask of receivers acknowledged receiving of this message */
+	AppendRequestHeader req; /* request to walkeeper (message header) */
+
+	/* PHANTOM FIELD:
+	 *
+	 * All WalMessages are allocated with exactly (size - sizeof(WalKeeperRequest)) additional bytes
+	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
+	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
+};
 
 /*
  * Hot standby feedback received from replica
@@ -310,46 +350,21 @@ typedef struct HotStandbyFeedback
 	FullTransactionId catalog_xmin;
 } HotStandbyFeedback;
 
-
-/*
- * Request with WAL message sent from proposer to walkeeper.
- */
-typedef struct WalKeeperRequest
-{
-	NodeId     senderId;    /* Sender's node identifier (looks like we do not need it for TCP streaming connection) */
-	XLogRecPtr beginLsn;    /* start position of message in WAL */
-	XLogRecPtr endLsn;      /* end position of message in WAL */
-	XLogRecPtr restartLsn;  /* restart LSN position  (minimal LSN which may be needed by proposer to perform recovery) */
-	XLogRecPtr commitLsn;   /* LSN committed by quorum of walkeepers */
-} WalKeeperRequest;
-
-/*
- * All copy data message ('w') are linked in L1 send list and asynchronously sent to receivers.
- * When message is sent to all receivers, it is removed from send list.
- */
-struct WalMessage
-{
-	WalMessage* next;      /* L1 list of messages */
-	uint32 size;           /* message size */
-	uint32 ackMask;        /* mask of receivers acknowledged receiving of this message */
-	WalKeeperRequest req; /* request to walkeeper (message header) */
-
-	/* PHANTOM FIELD:
-	 *
-	 * All WalMessages are allocated with exactly (size - sizeof(WalKeeperRequest)) additional bytes
-	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
-	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
-};
-
 /*
  * Report walkeeper state to proposer
  */
-typedef struct WalKeeperResponse
+typedef struct AppendResponse
 {
-	uint64     epoch;
+	/*
+	 * Current term of the safekeeper; if it is higher than proposer's, the
+	 * compute is out of date.
+	 */
+	uint64 tag;
+	term_t     term;
+	term_t     epoch;
 	XLogRecPtr flushLsn;
 	HotStandbyFeedback hs;
-} WalKeeperResponse;
+} AppendResponse;
 
 
 /*
@@ -369,12 +384,12 @@ typedef struct WalKeeper
 	WalKeeperPollState pollState;     /* what kind of polling is necessary to advance `state` */
 	WKSockWaitKind     sockWaitState; /* what state are we expecting the socket to be in for
 									     the polling required? */
-	WalKeeperInfo      info;          /* walkeeper info */
-	WalKeeperResponse  feedback;      /* feedback to master */
+	AcceptorGreeting   greet;         /* acceptor greeting  */
+	VoteResponse	   voteResponse;  /* the vote */
+	AppendResponse  feedback;      /* feedback to master */
 } WalKeeper;
 
 
-int        CompareNodeId(NodeId* id1, NodeId* id2);
 int        CompareLsn(const void *a, const void *b);
 uint32     WaitKindAsEvents(WKSockWaitKind wait_kind);
 char*      FormatWalKeeperState(WalKeeperState state);
