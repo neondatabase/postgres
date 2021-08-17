@@ -1,3 +1,5 @@
+#include "postgres.h"
+
 #include "replication/walproposer.h"
 #include "libpq-fe.h"
 
