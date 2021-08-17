@@ -4,8 +4,11 @@
  *
  * Broadcast WAL stream to Zenith WAL acceptetors
  */
+#include "postgres.h"
+
 #include <signal.h>
 #include <unistd.h>
+#include "access/xlogdefs.h"
 #include "replication/walproposer.h"
 #include "storage/latch.h"
 #include "miscadmin.h"
@@ -39,12 +42,15 @@ static WalMessage*  msgQueueHead;
 static WalMessage*  msgQueueTail;
 static XLogRecPtr	lastSentLsn;	/* WAL has been appended to msg queue up to this point */
 static XLogRecPtr	lastSentVCLLsn;	/* VCL replies have been sent to walkeeper up to here */
-static ServerInfo   serverInfo;
+static ProposerGreeting   proposerGreeting;
 static WaitEventSet* waitEvents;
-static WalKeeperResponse lastFeedback;
+static AppendResponse lastFeedback;
 static XLogRecPtr   restartLsn; /* Last position received by all walkeepers. */
-static RequestVote  prop;       /* Vote request for walkeeper */
-static int          leader;     /* Most advanced walkeeper */
+static VoteRequest voteRequest; /* Vote request for walkeeper */
+static term_t       propTerm; /* term of the proposer */
+static XLogRecPtr   propVcl;    /* VCL of the proposer */
+static term_t		donorEpoch; /* Most advanced acceptor epoch */
+static int          donor;     /* Most advanced acceptor */
 static int          n_votes = 0;
 static int          n_connected = 0;
 static TimestampTz  last_reconnect_attempt;
@@ -187,6 +193,7 @@ ShutdownConnection(int i, bool remove_event)
 	walkeeper[i].state = SS_OFFLINE;
 	walkeeper[i].pollState = SPOLL_NONE;
 	walkeeper[i].sockWaitState = WANTS_NO_WAIT;
+	walkeeper[i].currMsg = NULL;
 
 	if (remove_event)
 		HackyRemoveWalProposerEvent(i);
@@ -281,8 +288,14 @@ GetAcknowledgedByQuorumWALPosition(void)
 	 */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		responses[i] = walkeeper[i].feedback.epoch == prop.epoch
-			? walkeeper[i].feedback.flushLsn : prop.VCL;
+		/*
+		 * Note that while we haven't pushed WAL up to VCL to the majority we
+		 * don't really know which LSN is reliably committed as reported
+		 * flush_lsn is physical end of wal, which can contain diverged
+		 * history (compared to donor).
+		 */
+		responses[i] = walkeeper[i].feedback.epoch == propTerm
+			? walkeeper[i].feedback.flushLsn : 0;
 	}
 	qsort(responses, n_walkeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -302,6 +315,7 @@ HandleWalKeeperResponse(void)
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
+		/* advance the replication slot */
 		ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
 	}
 	CombineHotStanbyFeedbacks(&hsFeedback);
@@ -326,7 +340,7 @@ HandleWalKeeperResponse(void)
 			Assert(restartLsn < msg->req.endLsn);
 			restartLsn = msg->req.endLsn;
 		}
-		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(WalKeeperRequest));
+		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
 	}
 	if (!msgQueueHead) /* queue is empty */
@@ -395,26 +409,24 @@ WalProposerMain(Datum main_arg)
 
 	GetXLogReplayRecPtr(&ThisTimeLineID);
 
-	/* Fill information about server */
-	serverInfo.timeline = ThisTimeLineID;
-	serverInfo.walEnd = GetFlushRecPtr();
-	serverInfo.walSegSize = wal_segment_size;
-	serverInfo.pgVersion = PG_VERSION_NUM;
+	/* Fill the greeting package */
+	proposerGreeting.tag = 'g';
+	proposerGreeting.protocolVersion = SK_PROTOCOL_VERSION;
+	proposerGreeting.pgVersion = PG_VERSION_NUM;
+	pg_strong_random(&proposerGreeting.proposerId, sizeof(proposerGreeting.proposerId));
+	proposerGreeting.systemId = GetSystemIdentifier();
 	if (!zenith_timeline_walproposer)
 		elog(FATAL, "zenith.zenith_timeline is not provided");
 	if (*zenith_timeline_walproposer != '\0' &&
-	 !HexDecodeString(serverInfo.ztimelineid, zenith_timeline_walproposer, 16))
+	 !HexDecodeString(proposerGreeting.ztimelineid, zenith_timeline_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_timeline, %s", zenith_timeline_walproposer);
-
 	if (!zenith_tenant_walproposer)
 		elog(FATAL, "zenith.zenith_tenant is not provided");
 	if (*zenith_tenant_walproposer != '\0' &&
-	 !HexDecodeString(serverInfo.ztenantid, zenith_tenant_walproposer, 16))
+	 !HexDecodeString(proposerGreeting.ztenantid, zenith_tenant_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
-
-	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
-	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
-	serverInfo.systemId = GetSystemIdentifier();
+	proposerGreeting.timeline = ThisTimeLineID;
+	proposerGreeting.walSegSize = wal_segment_size;
 
 	last_reconnect_attempt = GetCurrentTimestamp();
 
@@ -448,7 +460,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 	elog(LOG, "WAL proposer starts streaming at %X/%X",
 		 LSN_FORMAT_ARGS(startpos));
 	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
-	cmd.timeline = serverInfo.timeline;
+	cmd.timeline = proposerGreeting.timeline;
 	cmd.startpoint = startpos;
 	StartReplication(&cmd);
 }
@@ -461,15 +473,17 @@ SendMessageToNode(int i, WalMessage* msg)
 {
 	WalKeeper* wk = &walkeeper[i];
 
-	/* If there is no pending message then send new one */
-	if (wk->currMsg == NULL)
-	{
-		/* Skip already acknowledged messages */
-		while (msg != NULL && (msg->ackMask & (1 << i)) != 0)
-			msg = msg->next;
+	/* we shouldn't be already sending something */
+	Assert(wk->currMsg == NULL);
+	/*
+	 * Skip already acknowledged messages. Used during start to get to the
+	 * first not yet received message. Otherwise we always just send
+	 * 'msg'.
+	 */
+	while (msg != NULL && (msg->ackMask & (1 << i)) != 0)
+		msg = msg->next;
 
-		wk->currMsg = msg;
-	}
+	wk->currMsg = msg;
 
 	/* Only try to send the message if it's non-null */
 	if (wk->currMsg)
@@ -530,12 +544,15 @@ CreateMessage(XLogRecPtr startpos, char* data, int len)
 		msgQueueHead = msg;
 	msgQueueTail = msg;
 
-	msg->size = sizeof(WalKeeperRequest) + len;
+	msg->size = sizeof(AppendRequestHeader) + len;
 	msg->next = NULL;
 	msg->ackMask = 0;
+	msg->req.tag = 'a';
+	msg->req.term = propTerm;
+	msg->req.vcl = propVcl;
 	msg->req.beginLsn = startpos;
 	msg->req.endLsn = endpos;
-	msg->req.senderId = prop.nodeId;
+	msg->req.proposerId = proposerGreeting.proposerId;
 	memcpy(&msg->req+1, data + XLOG_HDR_SIZE, len);
 
 	Assert(msg->req.endLsn >= lastSentLsn);
@@ -574,64 +591,56 @@ CreateMessageVCLOnly(void)
 		msgQueueHead = msg;
 	msgQueueTail = msg;
 
-	msg->size = sizeof(WalKeeperRequest);
+	msg->size = sizeof(AppendRequestHeader);
 	msg->next = NULL;
 	msg->ackMask = 0;
+	msg->req.tag = 'a';
+	msg->req.term = propTerm;
+	msg->req.vcl = propVcl;
 	msg->req.beginLsn = lastSentLsn;
 	msg->req.endLsn = lastSentLsn;
-	msg->req.senderId = prop.nodeId;
+	msg->req.proposerId = proposerGreeting.proposerId;
 	/* restartLsn and commitLsn are set just before the message sent, in SendMessageToNode() */
 	return msg;
 }
 
 
 /*
- * Prepare vote request for election
+ * Called after majority of acceptors gave votes, it calculates the most
+ * advanced safekeeper (who will be the donor) and VCL -- LSN since which we'll
+ * write WAL in our term.
+ * Sets restartLsn along the way (though it is not of much use at this point).
  */
 static void
-StartElection(void)
+DetermineVCL(void)
 {
 	// FIXME: If the WAL acceptors have nothing, start from "the beginning of time"
-	XLogRecPtr initWALPos = serverInfo.walSegSize;
-	prop.VCL = restartLsn = initWALPos;
-	prop.nodeId = serverInfo.nodeId;
-	for (int i = 0; i < n_walkeepers; i++)
-	{
-		if (walkeeper[i].state == SS_VOTING)
-		{
-			prop.nodeId.term = Max(walkeeper[i].info.server.nodeId.term, prop.nodeId.term);
-			restartLsn = Max(walkeeper[i].info.restartLsn, restartLsn);
-			if (walkeeper[i].info.epoch > prop.epoch
-				|| (walkeeper[i].info.epoch == prop.epoch && walkeeper[i].info.flushLsn > prop.VCL))
+	propVcl = wal_segment_size;
+	donorEpoch = 0;
+	restartLsn = wal_segment_size;
 
-			{
-				prop.epoch = walkeeper[i].info.epoch;
-				prop.VCL = walkeeper[i].info.flushLsn;
-				leader = i;
-			}
-		}
-	}
-	/* Only walkeepers from most recent epoch can report it's FlushLsn to master */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if (walkeeper[i].state == SS_VOTING)
+		if (walkeeper[i].state == SS_IDLE)
 		{
-			if (walkeeper[i].info.epoch == prop.epoch)
+			if (walkeeper[i].voteResponse.epoch > donorEpoch ||
+				(walkeeper[i].voteResponse.epoch == donorEpoch &&
+				 walkeeper[i].voteResponse.flushLsn > propVcl))
 			{
-				walkeeper[i].feedback.flushLsn = walkeeper[i].info.flushLsn;
+				donorEpoch = walkeeper[i].voteResponse.epoch;
+				propVcl = walkeeper[i].voteResponse.flushLsn;
+				donor = i;
 			}
-			else
-			{
-				elog(WARNING, "WalKeeper %s:%s belongs to old epoch " INT64_FORMAT " while current epoch is " INT64_FORMAT,
-					walkeeper[i].host,
-					walkeeper[i].port,
-					walkeeper[i].info.epoch,
-					prop.epoch);
-			}
+			restartLsn = Max(walkeeper[i].voteResponse.restartLsn, restartLsn);
 		}
 	}
-	prop.nodeId.term += 1;
-	prop.epoch += 1;
+
+	elog(LOG, "got votes from majority (%d) of nodes, VCL %X/%X, donor %s:%s, restart_lsn %X/%X",
+		 quorum,
+		 LSN_FORMAT_ARGS(propVcl),
+		 walkeeper[donor].host, walkeeper[donor].port,
+		 LSN_FORMAT_ARGS(restartLsn)
+		);
 }
 
 /*
@@ -675,7 +684,7 @@ ReconnectWalKeepers(void)
  * Receive WAL from most advanced WAL keeper
  */
 static bool
-WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRecPtr endpos)
+WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRecPtr endpos)
 {
 	char conninfo[MAXCONNINFO];
 	char *err;
@@ -683,18 +692,18 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 	WalRcvStreamOptions options;
 
 	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s'",
-			walkeeper[leader].host, walkeeper[leader].port, zenith_timeline_walproposer);
+			walkeeper[donor].host, walkeeper[donor].port, zenith_timeline_walproposer);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
 	{
 		ereport(WARNING,
 				(errmsg("could not connect to WAL acceptor %s:%s: %s",
-						walkeeper[leader].host, walkeeper[leader].port,
+						walkeeper[donor].host, walkeeper[donor].port,
 						err)));
 		return false;
 	}
 	elog(LOG, "Start recovery from %s:%s starting from %X/%08X till %X/%08X timeline %d",
-		 walkeeper[leader].host, walkeeper[leader].port,
+		 walkeeper[donor].host, walkeeper[donor].port,
 		 (uint32)(startpos>>32), (uint32)startpos, (uint32)(endpos >> 32), (uint32)endpos,
 		 timeline);
 
@@ -736,7 +745,7 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 		{
 			for (WalMessage* msg = msgQueueHead; msg != NULL; msg = msg->next)
 			{
-				if (msg->req.endLsn <= walkeeper[i].info.flushLsn)
+				if (msg->req.endLsn <= walkeeper[i].voteResponse.flushLsn)
 				{
 					msg->ackMask |= 1 << i; /* message is already received by this walkeeper */
 				}
@@ -1142,7 +1151,7 @@ ExecuteNextProtocolState:
 				/* Note: This state corresponds to the process of sending the relevant information
 				 * along. The moment we finish sending, we use SS_HANDSHAKE_RECV to complete the
 				 * handshake. */
-				switch (walprop_async_write(wk->conn, &serverInfo, sizeof(serverInfo)))
+				switch (walprop_async_write(wk->conn, &proposerGreeting, sizeof(proposerGreeting)))
 				{
 					case PG_ASYNC_WRITE_SUCCESS:
 						/* If the write immediately succeeds, we can move on to the next state. */
@@ -1183,23 +1192,19 @@ ExecuteNextProtocolState:
 			case SS_HANDSHAKE_RECV:
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
-				if (!ReadPGAsyncIntoValue(i, &wk->info, sizeof(wk->info)))
+				if (!ReadPGAsyncIntoValue(i, &wk->greet, sizeof(wk->greet)))
 					return;
 
-				/* Check protocol version */
-				if (wk->info.server.protocolVersion != SK_PROTOCOL_VERSION)
-				{
-					elog(WARNING, "WalKeeper has incompatible protocol version %d vs. %d",
-							wk->info.server.protocolVersion, SK_PROTOCOL_VERSION);
-					ResetConnection(i);
-					return;
-				}
-
-				/* Protocol is all good, move to voting */
 				wk->state     = SS_VOTING;
 				wk->pollState = SPOLL_IDLE;
 				wk->feedback.flushLsn = restartLsn;
 				wk->feedback.hs.ts = 0;
+
+				/*
+				 * We want our term to be highest and unique, so choose max
+				 * and +1 once we have majority.
+				 */
+				propTerm = Max(walkeeper[i].greet.term, propTerm);
 
 				/* Check if we have quorum. If there aren't enough walkeepers, wait and do nothing.
 				 * We'll eventually get a task when the election starts.
@@ -1208,9 +1213,17 @@ ExecuteNextProtocolState:
 				if (++n_connected >= quorum)
 				{
 					if (n_connected == quorum)
-						StartElection();
+					{
+						propTerm++;
+						/* prepare voting message */
+						voteRequest = (VoteRequest) {
+							.tag = 'v',
+							.term = propTerm
+						};
+						memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
+					}
 
-					/* Now send max-node-id to everyone participating in voting and wait their responses */
+					/* Now send voting request to the cohort and wait responses */
 					for (int j = 0; j < n_walkeepers; j++)
 					{
 						/* Remember: SS_VOTING indicates that the walkeeper is participating in
@@ -1240,7 +1253,7 @@ ExecuteNextProtocolState:
 
 			/* We have quorum for voting, send our vote request */
 			case SS_SEND_VOTE:
-				switch (walprop_async_write(wk->conn, &prop, sizeof(prop)))
+				switch (walprop_async_write(wk->conn, &voteRequest, sizeof(voteRequest)))
 				{
 					case PG_ASYNC_WRITE_SUCCESS:
 						/* If the write immediately succeeds, we can move on to the next state. */
@@ -1278,16 +1291,24 @@ ExecuteNextProtocolState:
 			case SS_WAIT_VERDICT:
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
-				if (!ReadPGAsyncIntoValue(i, &wk->info.server.nodeId, sizeof(wk->info.server.nodeId)))
+				if (!ReadPGAsyncIntoValue(i, &wk->voteResponse, sizeof(wk->voteResponse)))
 					return;
 
-				/* If server accept our candidate, then it returns it in response */
-				if (CompareNodeId(&wk->info.server.nodeId, &prop.nodeId) != 0)
+
+				/*
+				 * In case of acceptor rejecting our vote, bail out, but only if
+				 * either it already lives in strictly higher term (concurrent
+				 * compute spotted) or we are not elected yet and thus need the
+				 * vote.
+				 */
+				if ((!wk->voteResponse.voteGiven) &&
+					(wk->voteResponse.term > propTerm || n_votes < quorum))
 				{
-					elog(FATAL, "WalKeeper %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
+					elog(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 						wk->host, wk->port,
-						wk->info.server.nodeId.term, prop.nodeId.term);
+						wk->voteResponse.term, propTerm);
 				}
+				Assert(wk->voteResponse.term == propTerm);
 
 				/* Handshake completed, do we have quorum? */
 				wk->state         = SS_IDLE;
@@ -1296,21 +1317,18 @@ ExecuteNextProtocolState:
 
 				if (++n_votes == quorum)
 				{
-					elog(LOG, "Successfully established connection with %d nodes, VCL %X/%X",
-						 quorum,
-						 (uint32) (prop.VCL >> 32), (uint32) (prop.VCL)
-						);
+					DetermineVCL();
 
 					/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
-					if (restartLsn < prop.VCL)
+					if (restartLsn < propVcl)
 					{
-						elog(LOG, "Start recovery because restart LSN=%X/%X is not equal to VCL=%X/%X",
-							 LSN_FORMAT_ARGS(restartLsn), LSN_FORMAT_ARGS(prop.VCL));
+						elog(LOG, "start recovery because restart LSN=%X/%X is not equal to VCL=%X/%X",
+							 LSN_FORMAT_ARGS(restartLsn), LSN_FORMAT_ARGS(propVcl));
 						/* Perform recovery */
-						if (!WalProposerRecovery(leader, serverInfo.timeline, restartLsn, prop.VCL))
+						if (!WalProposerRecovery(donor, proposerGreeting.timeline, restartLsn, propVcl))
 							elog(FATAL, "Failed to recover state");
 					}
-					WalProposerStartStreaming(prop.VCL);
+					WalProposerStartStreaming(propVcl);
 					/* Should not return here */
 				}
 				else
@@ -1331,7 +1349,7 @@ ExecuteNextProtocolState:
 				if (wk->pollState != SPOLL_RETRY)
 				{
 					elog(LOG, "Sending message with len %ld VCL=%X/%X restart LSN=%X/%X to %s:%s",
-						 msg->size - sizeof(WalKeeperRequest),
+						 msg->size - sizeof(AppendRequestHeader),
 						 LSN_FORMAT_ARGS(msg->req.commitLsn),
 						 LSN_FORMAT_ARGS(restartLsn),
 						 wk->host, wk->port);
@@ -1464,7 +1482,7 @@ ReadPGAsyncIntoValue(int i, void* value, size_t value_size)
 			"Unexpected walkeeper %s:%s read length from %s state. Expected %ld, found %d",
 			wk->host, wk->port,
 			FormatWalKeeperState(wk->state),
-			sizeof(wk->info.server.nodeId), buf_size);
+			value_size, buf_size);
 	}
 
 	/* Copy the resulting info into place */
