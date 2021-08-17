@@ -1,19 +1,11 @@
+#include "postgres.h"
+
 #include "replication/walproposer.h"
 #include "common/logging.h"
 #include "common/ip.h"
 #include "../interfaces/libpq/libpq-fe.h"
 #include <netinet/tcp.h>
 #include <unistd.h>
-
-int CompareNodeId(NodeId* id1, NodeId* id2)
-{
-	return
-		(id1->term < id2->term)
-		? -1
-		: (id1->term > id2->term)
-		   ? 1
-   		   : memcmp(&id1->uuid, &id1->uuid, sizeof(pg_uuid_t));
-}
 
 int
 CompareLsn(const void *a, const void *b)
@@ -30,7 +22,7 @@ CompareLsn(const void *a, const void *b)
 }
 
 /* Converts a `WKSockWaitKind` into the bit flags that would match it
- * 
+ *
  * Note: For `wait_kind = WANTS_NO_WAIT`, this will return a value of zero,
  * which does not match any events. Attempting to wait on no events will
  * always timeout, so it's best to double-check the value being provided to
@@ -231,4 +223,3 @@ HexDecodeString(uint8 *result, char *input, int nbytes)
 
 	return true;
 }
-
