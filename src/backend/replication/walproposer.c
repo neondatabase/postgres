@@ -1176,7 +1176,7 @@ AsyncRead(int i, void* value, size_t value_size)
 
 		/* If we need more input, wait until the socket is read-ready and try
 		 * again. */
-		case PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN:
+		case PG_ASYNC_READ_TRY_AGAIN:
 			UpdateEventSet(wk, WL_SOCKET_READABLE);
 			return false;
 

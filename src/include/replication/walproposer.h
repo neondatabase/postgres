@@ -48,7 +48,7 @@ typedef enum
 	PG_ASYNC_READ_SUCCESS,
 	/* The read is ongoing. Wait until the connection is read-ready, then try
 	 * again. */
-	PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN,
+	PG_ASYNC_READ_TRY_AGAIN,
 	/* Reading failed. Check PQerrorMessage(conn) */
 	PG_ASYNC_READ_FAIL,
 } PGAsyncReadResult;

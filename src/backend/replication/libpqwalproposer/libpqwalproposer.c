@@ -275,7 +275,7 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 	switch (result = PQgetCopyData(conn->pg_conn, buf, true))
 	{
 		case 0:
-			return PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN;
+			return PG_ASYNC_READ_TRY_AGAIN;
 		case -1:
 			/* As mentioned above; this shouldn't happen */
 			elog(FATAL, "unexpected return -1 from PQgetCopyData");
