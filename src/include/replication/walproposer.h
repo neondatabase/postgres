@@ -70,176 +70,125 @@ typedef enum
 	PG_ASYNC_WRITE_FAIL,
 } PGAsyncWriteResult;
 
-/* WAL safekeeper state - high level */
+/*
+ * WAL safekeeper state
+ *
+ * Some states may be paired with additional modifiers (prefixed "SMOD"), which
+ * indicate the type of libpq-specific polling that may be necessary to proceed
+ * to that state. Polling types that would be single-use (like PQconnectPoll)
+ * are just executed from within the state itself.
+ *
+ * For each state that can be paired with a modifier, we list in the comment
+ * above it the modifier(s) it can be paired with.
+ */
 typedef enum
 {
+	/* --- Modifiers --- */
+
+	SMOD_NEEDS_FLUSH = 64, /* In order to finish moving to this state, we need to flush */
+	SMOD_NEEDS_CONSUMEINPUT = 128, /* To perform the read for this state, we need to consume input */
+
+	/* Marker for all possible modifiers - used as: state = state & (~SMOD_ALL) to remove modifiers */
+	SMOD_ALL = 128 + 64,
+
+	/* --- Regular states --- */
+
 	/*
 	 * Does not have an active connection and will stay that way until
-	 * further notice. May be paired with:
-	 *   - SPOLL_NONE
+	 * further notice.
 	 *
-	 * Moves to SS_CONNECTING only by calls to ResetConnection.
+	 * Moves to SS_CONNECTING_WRITE by calls to ResetConnection.
 	 */
-	SS_OFFLINE,
+	SS_OFFLINE = 0,
+
 	/*
-	 * Currently in the process of connecting. May be paired with:
-	 *   - SPOLL_CONNECT
+	 * Connecting states. "_READ" waits for the socket to be available for
+	 * reading, "_WRITE" waits for writing. There's no difference in the code
+	 * they execute when polled, but we have this distinction in order to
+	 * recreate the event set in HackyRemoveWalProposerEvent.
 	 *
 	 * After the connection is made, moves to SS_EXEC_STARTWALPUSH.
 	 */
-	SS_CONNECTING,
+	SS_CONNECTING_READ,
+	SS_CONNECTING_WRITE,
+
 	/*
-	 * Sending the "START_WAL_PUSH" message as an empty query to the walkeeper. May be paired with:
-	 *   - SPOLL_NONE
-	 *   - SPOLL_WRITE_PQ_FLUSH
+	 * Sending the "START_WAL_PUSH" message as an empty query to the walkeeper.
+	 * May be paired with:
+	 *   - SMOD_NEEDS_FLUSH
 	 *
 	 * After the query sends, moves to SS_WAIT_EXEC_RESULT.
 	 */
 	SS_EXEC_STARTWALPUSH,
 	/*
-	 * Waiting for the result of the "START_WAL_PUSH" command. May be paired with:
-	 *   - SPOLL_PQ_CONSUME_AND_RETRY
-	 *
-	 * We only pair with PQconsumeInput because we *need* to wait until the socket is open for
-	 * reading to try again.
+	 * Waiting for the result of the "START_WAL_PUSH" command. May be paired
+	 * with:
+	 *   - SMOD_NEEDS_CONSUMEINPUT
 	 *
 	 * After we get a successful result, moves to SS_HANDSHAKE_SEND.
 	 */
 	SS_WAIT_EXEC_RESULT,
+
 	/*
 	 * Executing the sending half of the handshake. May be paired with:
-	 *   - SPOLL_WRITE_PQ_FLUSH if it hasn't finished sending,
-	 *   - SPOLL_NONE
+	 *   - SMOD_NEEDS_FLUSH
 	 *
 	 * After sending, moves to SS_HANDSHAKE_RECV.
 	 */
 	SS_HANDSHAKE_SEND,
 	/*
 	 * Executing the receiving half of the handshake. May be paired with:
-	 *   - SPOLL_PQ_CONSUME_AND_RETRY if we need more input
-	 *   - SPOLL_NONE
+	 *   - SMOD_NEEDS_CONSUMEINPUT
 	 *
 	 * After receiving, moves to SS_VOTING.
 	 */
 	SS_HANDSHAKE_RECV,
+
 	/*
-	 * Currently participating in voting, but a quorum hasn't yet been reached. Idle state. May be
-	 * paired with:
-	 *   - SPOLL_IDLE
+	 * Currently participating in voting, but a quorum hasn't yet been reached.
+	 * This is an idle state - we do not expect AdvancePollState to be called.
 	 *
-	 * Moved externally to SS_SEND_VOTE or SS_WAIT_VERDICT by execution of SS_HANDSHAKE_RECV.
+	 * Moved externally to SS_SEND_VOTE or SS_WAIT_VERDICT by execution of
+	 * SS_HANDSHAKE_RECV.
 	 */
 	SS_VOTING,
 	/*
-	 * Currently sending the assigned vote
+	 * Currently sending the assigned vote. 
 	 */
 	SS_SEND_VOTE,
 	/*
-	 * Sent voting information, waiting to receive confirmation from the node. May be paired with:
-	 *   - SPOLL_WRITE_PQ_FLUSH
+	 * Sent voting information, waiting to receive confirmation from the node.
+	 * May be paired with:
+	 *   - SMOD_NEEDS_FLUSH
 	 *
 	 * After receiving, moves to SS_IDLE.
 	 */
 	SS_WAIT_VERDICT,
+
 	/*
-	 * Waiting for quorum to send WAL. Idle state. May be paired with:
-	 *  - SPOLL_IDLE
+	 * Waiting for quorum to send WAL. Idle state. If the socket becomes
+	 * read-ready, the connection has been closed.
 	 *
 	 * Moves to SS_SEND_WAL only by calls to SendMessageToNode.
 	 */
 	SS_IDLE,
 	/*
-	 * Currently sending the message at currMsg. This state is only ever reached through calls to
-	 * SendMessageToNode. May be paired with:
-	 *   - SPOLL_WRITE_PQ_FLUSH
-	 *   - SPOLL_NONE
+	 * Currently sending the message at currMsg. This state is only ever reached
+	 * through calls to SendMessageToNode. May be paired with:
+	 *   - SMOD_NEEDS_FLUSH
 	 *
 	 * After sending, moves to SS_RECV_FEEDBACK.
 	 */
 	SS_SEND_WAL,
 	/*
 	 * Currently reading feedback from sending the WAL. May be paired with:
-	 *   - SPOLL_PQ_CONSUME_AND_RETRY
-	 *   - SPOLL_NONE
+	 *   - SMOD_NEEDS_CONSUMEINPUT
 	 *
 	 * After reading, moves to (SS_SEND_WAL or SS_IDLE) by calls to
 	 * SendMessageToNode.
 	 */
 	SS_RECV_FEEDBACK,
 } WalKeeperState;
-
-/* WAL safekeeper state - individual level
- *
- * This type encompasses the type of polling necessary to move on to the
- * next `WalKeeperState` from the current. It's things like "we need to
- * call PQflush some more", or "retry the current operation".
- */
-typedef enum
-{
-	/*
-	 * The current state is the one we want to be in; we just haven't run
-	 * the code for it. It should be processed with AdvancePollState to
-	 * start to advance to the next state.
-	 *
-	 * Expected WKSockWaitKind: WANTS_NO_WAIT.
-	 *
-	 * Note! This polling state is different from the others: its attached
-	 * WalKeeperState is what *will* be executed, not what just was.
-	 */
-	SPOLL_NONE,
-	/*
-	 * Marker for states that do not expect to be advanced by calls to AdvancePollState. Not to be
-	 * confused with SS_IDLE, which carries a different (but related) meaning.
-	 *
-	 * For this polling state, we interpret any read-readiness on the socket as an indication that
-	 * the connection has closed normally.
-	 *
-	 * Expected WKSockWaitKind: WANTS_SOCK_READ
-	 */
-	SPOLL_IDLE,
-	/*
-	 * We need to repeat calls to PQconnectPoll. This is only available for
-	 * SS_CONNECTING
-	 *
-	 * Expected WKSockWaitKind: WANTS_SOCK_READ or WANTS_SOCK_WRITE
-	 */
-	SPOLL_CONNECT,
-	/* Poll with PQflush, finishing up a call to WritePGAsync. Always
-	 * combined with writing states, like SS_HANDSHAKE_SEND or SS_SEND_WAL.
-	 *
-	 * Expected WKSockWaitKind: WANTS_SOCK_EITHER
-	 */
-	SPOLL_WRITE_PQ_FLUSH,
-	/*
-	 * Get input with PQconsumeInput and try the operation again. This is
-	 * always combined with reading states -- like SS_HANDSHAKE_RECV or
-	 * SS_WAIT_VERDICT, and the operation repetition helps to reduce the
-	 * amount of repeated logic.
-	 *
-	 * Expected WKSockWaitKind: WANTS_SOCK_READ
-	 */
-	SPOLL_PQ_CONSUME_AND_RETRY,
-} WalKeeperPollState;
-
-/* The state of the socket that we're waiting on. This is used to
- * double-check for polling that the socket we're being handed is correct.
- *
- * Used in the sockWaitState field of WalKeeper, in combination with the
- * WalKeeperPollState.
- *
- * Each polling state above lists the set of values that they accept. */
-typedef enum
-{
-	/* No waiting is required for the poll state */
-	WANTS_NO_WAIT,
-	/* Polling should resume only once the socket is ready for reading */
-	WANTS_SOCK_READ,
-	/* Polling should resume only once the socket is ready for writing */
-	WANTS_SOCK_WRITE,
-	/* Polling should resume once the socket is ready for reading or
-	 * writing */
-	WANTS_SOCK_EITHER,
-} WKSockWaitKind;
 
 /* Consensus logical timestamp. */
 typedef uint64 term_t;
@@ -374,9 +323,6 @@ typedef struct WalKeeper
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
 	WalKeeperState     state;         /* walkeeper state machine state */
-	WalKeeperPollState pollState;     /* what kind of polling is necessary to advance `state` */
-	WKSockWaitKind     sockWaitState; /* what state are we expecting the socket to be in for
-									     the polling required? */
 	AcceptorGreeting   greet;         /* acceptor greeting  */
 	VoteResponse	   voteResponse;  /* the vote */
 	AppendResponse  feedback;      /* feedback to master */
@@ -384,9 +330,10 @@ typedef struct WalKeeper
 
 
 int        CompareLsn(const void *a, const void *b);
-uint32     WaitKindAsEvents(WKSockWaitKind wait_kind);
 char*      FormatWalKeeperState(WalKeeperState state);
-char*      FormatWKSockWaitKind(WKSockWaitKind wait_kind);
+void       AssertEventsOkForState(uint32 events, WalKeeper* wk);
+uint32     WalKeeperStateDesiredEvents(WalKeeperState state);
+bool       StateShouldImmediatelyExecute(WalKeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
 void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
@@ -496,9 +443,9 @@ typedef void (*walprop_finish_fn) (WalProposerConn* conn);
  * protocol with the walkeepers, so it should not be used as-is for any
  * other purpose.
  *
- * Note: If possible, using <ReadPGAsyncIntoValue> is generally preferred,
- * because it performs a bit of extra checking work that's always required
- * and is normally somewhat verbose.
+ * Note: If possible, using <AsyncRead> is generally preferred, because it
+ * performs a bit of extra checking work that's always required and is normally
+ * somewhat verbose.
  */
 typedef PGAsyncReadResult (*walprop_async_read_fn) (WalProposerConn* conn,
 													char** buf,

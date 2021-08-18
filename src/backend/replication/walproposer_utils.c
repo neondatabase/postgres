@@ -21,36 +21,6 @@ CompareLsn(const void *a, const void *b)
 		return 1;
 }
 
-/* Converts a `WKSockWaitKind` into the bit flags that would match it
- *
- * Note: For `wait_kind = WANTS_NO_WAIT`, this will return a value of zero,
- * which does not match any events. Attempting to wait on no events will
- * always timeout, so it's best to double-check the value being provided to
- * this function where necessary. */
-uint32
-WaitKindAsEvents(WKSockWaitKind wait_kind)
-{
-	uint32 return_val;
-
-	switch (wait_kind)
-	{
-		case WANTS_NO_WAIT:
-			return_val = WL_NO_EVENTS;
-			break;
-		case WANTS_SOCK_READ:
-			return_val = WL_SOCKET_READABLE;
-			break;
-		case WANTS_SOCK_WRITE:
-			return_val = WL_SOCKET_WRITEABLE;
-			break;
-		case WANTS_SOCK_EITHER:
-			return_val = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
-			break;
-	}
-
-	return return_val;
-}
-
 /* Returns a human-readable string corresonding to the WalKeeperState
  *
  * The string should not be freed.
@@ -66,14 +36,16 @@ WaitKindAsEvents(WKSockWaitKind wait_kind)
 char*
 FormatWalKeeperState(WalKeeperState state)
 {
-	char* return_val;
+	char* return_val = NULL;
 
-	switch (state)
+	/* Only look at the "base" state - without any modifiers */
+	switch (state & (~SMOD_ALL))
 	{
 		case SS_OFFLINE:
 			return_val = "offline";
 			break;
-		case SS_CONNECTING:
+		case SS_CONNECTING_READ:
+		case SS_CONNECTING_WRITE:
 			return_val = "connecting";
 			break;
 		case SS_EXEC_STARTWALPUSH:
@@ -108,34 +80,80 @@ FormatWalKeeperState(WalKeeperState state)
 			break;
 	}
 
+	Assert(return_val != NULL);
+
 	return return_val;
 }
 
-/* Returns a human-readable string corresponding to the WKSockWaitKind
- *
- * The string should not be freed. */
-char*
-FormatWKSockWaitKind(WKSockWaitKind wait_kind)
+/* Asserts that the provided events are expected for given WAL keeper's state */
+void
+AssertEventsOkForState(uint32 events, WalKeeper* wk)
 {
-	char* return_val;
+	uint32 expected = WalKeeperStateDesiredEvents(wk->state);
 
-	switch (wait_kind)
+	/* The events are in-line with what we're expecting, under two conditions:
+	 *   (a) if we aren't expecting anything, `events` has no read- or
+	 *       write-ready component.
+	 *   (b) if we are expecting something, there's overlap
+	 *       (i.e. `events & expected != 0`)
+	 */
+	bool events_ok_for_state; /* long name so the `Assert` is more clear later */
+
+	if (expected == WL_NO_EVENTS)
+		events_ok_for_state = ((events & (WL_SOCKET_READABLE|WL_SOCKET_WRITEABLE)) == 0);
+	else
+		events_ok_for_state = ((events & expected) != 0);
+
+	if (!events_ok_for_state)
 	{
-		case WANTS_NO_WAIT:
-			return_val = "<no events>";
-			break;
-		case WANTS_SOCK_READ:
-			return_val = "<read event>";
-			break;
-		case WANTS_SOCK_WRITE:
-			return_val = "<write event>";
-			break;
-		case WANTS_SOCK_EITHER:
-			return_val = "<read or write event>";
-			break;
+		/* To give a descriptive message in the case of failure, we use elog and
+		 * then an assertion that's guaranteed to fail. */
+		elog(WARNING, "events %s mismatched for walkeeper %s:%s in state [%s]",
+			 FormatEvents(events), wk->host, wk->port, FormatWalKeeperState(wk->state));
+		Assert(events_ok_for_state);
+	}
+}
+
+/* Returns the set of events a WAL keeper in this state should be waiting on
+ *
+ * This will return WL_NO_EVENTS (= 0) for some events. */
+uint32
+WalKeeperStateDesiredEvents(WalKeeperState state)
+{
+	if (state & SMOD_NEEDS_FLUSH)
+		/* Flushing waits for read- or write-ready */
+		return WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
+	else if (state & SMOD_NEEDS_CONSUMEINPUT)
+		return WL_SOCKET_READABLE;
+
+	/* If the state doesn't have a modifier, we can check the base state */
+	switch (state & (~SMOD_ALL))
+	{
+		/* Connecting states say what they want in the name */
+		case SS_CONNECTING_READ:
+			return WL_SOCKET_READABLE;
+		case SS_CONNECTING_WRITE:
+			return WL_SOCKET_WRITEABLE;
+
+		/* Idle states wait for read-ready events */
+		case SS_VOTING:
+		case SS_IDLE:
+			return WL_SOCKET_READABLE;
 	}
 
-	return return_val;
+	/* Everything else (excluding SS_OFFLINE) waits on the modifiers when they
+	 * need to wait, so right now they aren't waiting on anything */
+	return WL_NO_EVENTS;
+}
+
+/* Returns whether the WAL keeper state corresponds to something that should be
+ * immediately executed -- i.e. it is not idle, and is not currently waiting. */
+bool
+StateShouldImmediatelyExecute(WalKeeperState state)
+{
+	/* This is actually pretty simple to determine. */
+	return WalKeeperStateDesiredEvents(state) == WL_NO_EVENTS
+		&& state != SS_OFFLINE;
 }
 
 /* Returns a human-readable string corresponding to the event set

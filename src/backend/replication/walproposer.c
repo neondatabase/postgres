@@ -54,11 +54,11 @@ static int          donor;     /* Most advanced acceptor */
 static int          n_votes = 0;
 static int          n_connected = 0;
 static TimestampTz  last_reconnect_attempt;
-static uint32       request_poll_immediate; /* bitset of walkeepers requesting AdvancePollState */
 
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
-static bool ReadPGAsyncIntoValue(int i, void* value, size_t value_size);
+static bool AsyncRead(int i, void* value, size_t value_size);
+static bool AsyncWrite(int i, void* msg, size_t msg_size, WalKeeperState success_state);
 static void HackyRemoveWalProposerEvent(int to_remove);
 
 /*
@@ -104,39 +104,18 @@ InitEventSet(void)
 }
 
 /*
- * Updates the stored wait event for the walkeeper, given its current sockWaitState
+ * Updates the events we're waiting on for the WAL keeper, setting it to the
+ * provided `events`
  *
- * remove_if_nothing specifies whether to remove the event if the new waiting set is empty. In
- * certain cases, we have remove_if_nothing = false because it's known that the walkeeper state will
- * be updated immediately after if it's not waiting for any events.
- *
- * In general, setting remove_if_nothing = false is just an optimization; setting it to true will
- * almost always be correct. Please leave a comment arguing for the validity of this optimization if
- * you use it.
+ * This function expects that there is already an event for the WAL keeper.
  */
 static void
-UpdateEventSet(int i, bool remove_if_nothing)
+UpdateEventSet(WalKeeper* wk, uint32 events)
 {
-	uint32 events;
-	WalKeeper* wk = &walkeeper[i];
+	/* eventPos = -1 when we don't have an event */
+	Assert(wk->eventPos != -1);
 
-	/*
-	 * If there isn't an applicable way to update the event, we just don't bother. This function is
-	 * sometimes called when the walkeeper isn't waiting for anything, and so the best thing to do
-	 * is just nothing.
-	 */
-	if (wk->sockWaitState != WANTS_NO_WAIT)
-	{
-		events = WaitKindAsEvents(wk->sockWaitState);
-
-		/* If we don't already have an event, add one! */
-		if (wk->eventPos == -1)
-			wk->eventPos = AddWaitEventToSet(waitEvents, events, walprop_socket(wk->conn), NULL, wk);
-		else
-			ModifyWaitEvent(waitEvents, wk->eventPos, events, NULL);
-	}
-	else if (remove_if_nothing && wk->eventPos != 1)
-		HackyRemoveWalProposerEvent(i);
+	ModifyWaitEvent(waitEvents, wk->eventPos, events, NULL);
 }
 
 /* Hack: provides a way to remove the event corresponding to an individual walproposer from the set.
@@ -155,54 +134,43 @@ HackyRemoveWalProposerEvent(int to_remove)
 	InitEventSet();
 
 	/* loop through the existing walkeepers. If they aren't the one we're removing, and if they have
-	 * a socket we can use, re-add the applicable events.
-	 *
-	 * We're expecting that there's no other walkeepers with `.sockWaitState = WANTS_NO_WAIT`,
-	 * because any state without waiting should should have been handled immediately. */
+	 * a socket we can use, re-add the applicable events. */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		walkeeper[i].eventPos = -1;
+		uint32 desired_events = WL_NO_EVENTS;
+		WalKeeper* wk = &walkeeper[i];
+
+		wk->eventPos = -1;
 
 		if (i == to_remove)
 			continue;
 
-		if (walkeeper[i].conn)
+		/* If this WAL keeper isn't offline, add an event for it! */
+		if ((desired_events = WalKeeperStateDesiredEvents(wk->state)))
 		{
-			UpdateEventSet(i, false);
-
-			if (walkeeper[i].sockWaitState == WANTS_NO_WAIT)
-			{
-				elog(FATAL, "Unexpected walkeeper %s:%s in %s state waiting for nothing",
-					 walkeeper[i].host, walkeeper[i].port, FormatWalKeeperState(walkeeper[i].state));
-			}
-			else
-			{
-				UpdateEventSet(i, false); /* Will either add an event or do nothing */
-			}
+			wk->eventPos = AddWaitEventToSet(waitEvents, desired_events, walprop_socket(wk->conn), NULL, wk);
 		}
 	}
 }
 
 /* Shuts down and cleans up the connection for a walkeeper. Sets its state to SS_OFFLINE */
 static void
-ShutdownConnection(int i, bool remove_event)
+ShutdownConnection(int i)
 {
 	if (walkeeper[i].conn)
 		walprop_finish(walkeeper[i].conn);
 	walkeeper[i].conn = NULL;
 	walkeeper[i].state = SS_OFFLINE;
-	walkeeper[i].pollState = SPOLL_NONE;
-	walkeeper[i].sockWaitState = WANTS_NO_WAIT;
 	walkeeper[i].currMsg = NULL;
 
-	if (remove_event)
-		HackyRemoveWalProposerEvent(i);
+	HackyRemoveWalProposerEvent(i);
 }
 
 /*
- * This function is called to establish new connection or to reestablish connection in case
- * of connection failure.
- * Close current connection if any and try to initiate new one
+ * This function is called to establish new connection or to reestablish
+ * connection in case of connection failure.
+ *
+ * On success, sets the state to SS_CONNECTING_WRITE.
  */
 static void
 ResetConnection(int i)
@@ -214,7 +182,7 @@ ResetConnection(int i)
 	{
 		elog(WARNING, "Connection with node %s:%s in %s state failed",
 			wk->host, wk->port, FormatWalKeeperState(wk->state));
-		ShutdownConnection(i, true);
+		ShutdownConnection(i);
 	}
 
 	/* Try to establish new connection
@@ -267,9 +235,7 @@ ResetConnection(int i)
 	 */
 	elog(LOG, "Connecting with node %s:%s", wk->host, wk->port);
 
-	wk->state = SS_CONNECTING;
-	wk->pollState = SPOLL_CONNECT;
-	wk->sockWaitState = WANTS_SOCK_WRITE;
+	wk->state = SS_CONNECTING_WRITE;
 
 	sock = walprop_socket(wk->conn);
 	wk->eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, sock, NULL, wk);
@@ -492,19 +458,15 @@ SendMessageToNode(int i, WalMessage* msg)
 		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
 
 		/* Once we've selected and set up our message, actually start sending it. */
-		wk->state         = SS_SEND_WAL;
-		wk->pollState     = SPOLL_NONE;
-		wk->sockWaitState = WANTS_NO_WAIT;
+		wk->state = SS_SEND_WAL;
 		/* Don't ned to update the event set; that's done by AdvancePollState */
 
 		AdvancePollState(i, WL_NO_EVENTS);
 	}
 	else
 	{
-		wk->state         = SS_IDLE;
-		wk->pollState     = SPOLL_IDLE;
-		wk->sockWaitState = WANTS_SOCK_READ;
-		UpdateEventSet(i, true);
+		wk->state = SS_IDLE;
+		UpdateEventSet(wk, WL_SOCKET_READABLE);
 	}
 }
 
@@ -761,45 +723,6 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	return true;
 }
 
-/* Requests the currently-running WalProposerPoll to advance the state of this walkeeper */
-static void
-RequestStateAdvanceNoPoll(int i)
-{
-	/* We only have to change the value here; it'll be detected in a call to
-	 * AdvancePollForAllRequested when that's made. */
-	request_poll_immediate |= (1 << i);
-}
-
-static void
-AdvancePollForAllRequested(void)
-{
-	uint32 poll_set = request_poll_immediate;
-
-	/*
-	 * We have this in a loop because -- in theory -- polling the requested states could produce
-	 * more that are ready to be polled, though this *really* shouldn't occur in practice.
-	 */
-	while ((poll_set = request_poll_immediate))
-	{
-		/* "Take responsibility" for the poll set. We don't want any possibility of other calls to
-		 * AdvancePollForAllRequested duplicating an AdvancePollState. */
-		request_poll_immediate = 0;
-
-		/*
-		 * Loop through all nonzero bits and call AdvancePollState
-		 *
-		 * FIXME: This can probably be much more efficient, using something like __builtin__clz.
-		 * Maybe it doesn't matter though.
-		 */
-		for (int i = 0; i < n_walkeepers; i++)
-		{
-			/* If the ith bit is set, that state requested advancement */
-			if (poll_set & (1 << i))
-				AdvancePollState(i, WL_NO_EVENTS);
-		}
-	}
-}
-
 /*
  * Advance the WAL proposer state machine, waiting each time for events to occur
  */
@@ -819,22 +742,12 @@ WalProposerPoll(void)
 		wk = (WalKeeper*) event.user_data;
 		i = (int)(wk - walkeeper);
 
-		if (rc != 0)
-		{
-			/*
-			 * If the event contains something that one of our walkeeper states
-			 * was waiting for, we'll advance its state.
-			 */
-			if (event.events & (WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE))
-				AdvancePollState(i, event.events);
-
-			/*
-			 * It's possible for AdvancePollState to result in extra states
-			 * being ready to immediately advance to the next state (with
-			 * pollState = SPOLL_NONE). We deal with that here.
-			 */
-			AdvancePollForAllRequested();
-		}
+		/*
+		 * If the event contains something that one of our walkeeper states
+		 * was waiting for, we'll advance its state.
+		 */
+		if (rc != 0 && (event.events & (WL_SOCKET_READABLE|WL_SOCKET_WRITEABLE)))
+			AdvancePollState(i, event.events);
 
 		/* If the timeout expired, attempt to reconnect to any walkeepers that we dropped */
 		ReconnectWalKeepers();
@@ -852,68 +765,139 @@ WalProposerPoll(void)
 	}
 }
 
-/* Performs the logic for advancing the state machine of the 'i'th walkeeper, given that a certain
- * set of events has occured. */
+/* Performs the logic for advancing the state machine of the 'i'th walkeeper,
+ * given that a certain set of events has occured. */
 static void
 AdvancePollState(int i, uint32 events)
 {
 	WalKeeper* wk = &walkeeper[i];
 
-	/* Continue polling all the while we don't need to wait.
-	 *
-	 * At the bottom of this function is "while (walkeeper[i].sockWaitState == WANTS_NO_WAIT)" */
-	do {
-		uint32 expected_events = WaitKindAsEvents(wk->sockWaitState);
+	/* Keep advancing the state while either:
+	 *   (a) the event is still unprocessed (usually because it's the first
+	 *       iteration of the loop), or
+	 *   (b) the state normally waits but isn't (e.g. SS_SEND_WAL, without
+	 *       SMOD_NEEDS_FLUSH)
+	 */
+	while (events || StateShouldImmediatelyExecute(wk->state))
+	{
+		/* Sanity check. We assume further down that the operations don't block
+		 * because the socket is ready. */
+		AssertEventsOkForState(events, wk);
 
-		/* If we were expecting SOME event but nothing happened, panic. */
-		if ((expected_events & events) == 0 && expected_events)
+		/* -------- Shared libpq functionality -------- */
+
+		/* Shared functionality between states: if there's libpq-specific
+		 * polling we need to do, we can do it here. */
+		if (wk->state & SMOD_NEEDS_FLUSH)
 		{
-			elog(FATAL,
-				 "unexpected event for WalKeeper poll. Expected %s, found code %s (see: FormatEvents).",
-				 FormatWKSockWaitKind(wk->sockWaitState), FormatEvents(events));
+			int flush_result;
+
+			/* If the socket is ready for reading, we have to call PQconsumeInput
+			 * before attempting to flush */
+			if (events & WL_SOCKET_READABLE)
+			{
+				if (!walprop_consume_input(wk->conn))
+				{
+					elog(WARNING, "Failed to pre-flush read input for node %s:%s in state [%s]: %s",
+						 wk->host, wk->port, FormatWalKeeperState(wk->state),
+						 walprop_error_message(wk->conn));
+					ResetConnection(i);
+					return;
+				}
+			}
+
+			/* PQflush returns:
+			 *   0 if successful                    [we're good to move on]
+			 *   1 if unable to send everything yet [call PQflush again]
+			 *  -1 if it failed                     [emit an error] */
+			switch (flush_result = walprop_flush(wk->conn))
+			{
+				case 0:
+					/* Our new state is just the unmodified version of this one.
+					 * This is a special guarantee for SMOD_NEEDS_FLUSH */
+					wk->state &= ~SMOD_ALL;
+					break;
+				case 1:
+					/* Can't do anything yet, try again when the socket's ready */
+					return;
+				case -1:
+					elog(WARNING, "Failed to flush write to node %s:%s in %s state: %s",
+						 wk->host, wk->port, FormatWalKeeperState(wk->state),
+						 walprop_error_message(wk->conn));
+					ResetConnection(i);
+					return;
+				default:
+					elog(FATAL, "invalid return %d from PQflush", flush_result);
+			}
+
+			events = WL_NO_EVENTS;
+		}
+		else if (wk->state & SMOD_NEEDS_CONSUMEINPUT)
+		{
+			if (!walprop_consume_input(wk->conn))
+			{
+				elog(WARNING, "Failed to read input for node %s:%s in state %s: %s",
+					wk->host, wk->port, FormatWalKeeperState(wk->state),
+					walprop_error_message(wk->conn));
+				ResetConnection(i);
+				return;
+			}
+
+			/* On success, we can retry reading. SMOD_NEEDS_CONSUMEINPUT uses the
+			 * state that we're trying to read into, so "trying again" just leaves
+			 * the state the same */
+			wk->state &= ~SMOD_ALL;
+			events = WL_NO_EVENTS;
 		}
 
-		/* Now that we've checked the event is ok, we'll actually run the thing we're looking for */
-		switch (wk->pollState)
+		/* -------- Execute state logic -------- */
+
+		/* Knowing which event happened is no longer necessary. Erasing it now
+		 * ensures that any events we see on future loops are intentionally
+		 * placed there to trick the section of code above. */
+		events = WL_NO_EVENTS;
+
+		/* Switch on the "base" state, without modifiers */
+		switch (wk->state & (~SMOD_ALL))
 		{
-			/* If the polling corresponds to a "full" operation, we'll skip straight to that - we
-			 * don't actually need to poll here. */
-			case SPOLL_NONE:
-				/* Equivalent to 'break', but more descriptive. */
-				goto ExecuteNextProtocolState;
+			/* WAL keepers are only taken out of SS_OFFLINE by calls to
+			 * ResetConnection */
+			case SS_OFFLINE:
+				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is offline",
+					 wk->host, wk->port);
+				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
 
-			/* On idle polling states, we wait for the socket to open for reading. If this happens,
-			 * the connection has closed *normally*, so we're just done. */
-			case SPOLL_IDLE:
-				elog(LOG, "Walkeeper %s:%s closed connection from %s state",
-						wk->host, wk->port, FormatWalKeeperState(wk->state));
-				/* 'true' to remove existing event for this walkeeper */
-				ShutdownConnection(i, true);
-				return;
-
-			/* Call PQconnectPoll to finalize the connection */
-			case SPOLL_CONNECT:
-			{
+			/* Both connecting states run the same logic. The only difference is
+			 * the events they're expecting */
+			case SS_CONNECTING_READ:
+			case SS_CONNECTING_WRITE:
 				WalProposerConnectPollStatusType result = walprop_connect_poll(wk->conn);
-				pgsocket                         new_sock = walprop_socket(wk->conn);
+
+				/* The new set of events we'll wait on, after updating */
+				uint32 new_events = WL_NO_EVENTS;
 
 				switch (result)
 				{
 					case WP_CONN_POLLING_OK:
 						elog(LOG, "Connected with node %s:%s", wk->host, wk->port);
 
-						/* If we're fully connected, we're good! We can move on to the next state */
+						/* Once we're fully connected, we can move to the next state */
 						wk->state = SS_EXEC_STARTWALPUSH;
 
-						/* Update the socket -- it might have changed */
-						HackyRemoveWalProposerEvent(i);
+						/* We will *eventually* need the socket to be writable, but
+						 * not quite yet. */
+						new_events = WL_SOCKET_WRITEABLE;
+						break;
 
-						/* We need to just pick an event to wait on; this will be overriden
-						 * anyways later. */
-						wk->eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, new_sock, NULL, wk);
-
-						/* We're done, but some of the other result cases have cleanup left to do */
-						goto ExecuteNextProtocolState;
+					/* If we need to poll to finish connecting, continue doing that */
+					case WP_CONN_POLLING_READING:
+						wk->state = SS_CONNECTING_READ;
+						new_events = WL_SOCKET_READABLE;
+						break;
+					case WP_CONN_POLLING_WRITING:
+						wk->state = SS_CONNECTING_WRITE;
+						new_events = WL_SOCKET_WRITEABLE;
+						break;
 
 					case WP_CONN_POLLING_FAILED:
 						elog(WARNING, "Failed to connect to node '%s:%s': %s",
@@ -921,153 +905,20 @@ AdvancePollState(int i, uint32 events)
 						/* If connecting failed, we don't want to restart the connection because
 						 * that might run us into a loop. Instead, shut it down -- it'll naturally
 						 * restart at a slower interval on calls to ReconnectWalKeepers. */
-						ShutdownConnection(i, true);
+						ShutdownConnection(i);
 						return;
-
-					case WP_CONN_POLLING_READING:
-						wk->sockWaitState = WANTS_SOCK_READ;
-						break;
-
-					case WP_CONN_POLLING_WRITING:
-						wk->sockWaitState = WANTS_SOCK_WRITE;
-						break;
 				}
 
-				/* If we got here, we either have to wait for reading or
-				 * writing. The value of walkeeper[i].sockWaitState indicates
-				 * which one of these it is.
-				 *
-				 * We also have to update the socket here, even if the file
-				 * descriptor itself hasn't changed. It's possible for libpq to
-				 * close the socket and then open a new one, reusing the same
-				 * file descriptor. If this happens, epoll will have
-				 * automatically removed the socket, so we'll stop receiving
-				 * events for it unless we re-add the socket.
-				 *
-				 * To update the socket, we the event and add a new one back.
-				 */
+				/* Because PQconnectPoll can change the socket, we have to
+				 * un-register the old event and re-register an event on the new
+				 * socket. */
 				HackyRemoveWalProposerEvent(i);
-
-				wk->eventPos = AddWaitEventToSet(waitEvents, WaitKindAsEvents(wk->sockWaitState), new_sock, NULL, wk);
-
-				/* We still have polling to do, so we can't move on to the next state. */
-				return;
-			}
-
-			case SPOLL_WRITE_PQ_FLUSH:
-			{
-				int flush_result;
-
-				/* If the socket is ready for reading, we have to call PQconsumeInput before
-				 * attempting to flush. */
-				if (events & WL_SOCKET_READABLE)
-				{
-					/* PQconsumeInput returns 1 if ok, 0 if there was an error */
-					if (!walprop_consume_input(wk->conn))
-					{
-						elog(WARNING, "Failed to pre-flush read input for node %s:%s in state [%s]: %s",
-							 wk->host, wk->port, FormatWalKeeperState(wk->state),
-							 walprop_error_message(wk->conn));
-						ResetConnection(i);
-						return;
-					}
-				}
-
-				/* PQflush returns:
-				 *   0 if uccessful,
-				 *   1 if unable to send everything yet,
-				 *  -1 if it failed */
-				switch (flush_result = walprop_flush(wk->conn))
-				{
-					case 0:
-						/* On success, go to the next state. Our current state only indicates the
-						 * state that *started* the writing, so we need to use that to figure out
-						 * what to do next. */
-						switch (wk->state)
-						{
-							case SS_EXEC_STARTWALPUSH:
-								wk->state = SS_WAIT_EXEC_RESULT;
-								break;
-							case SS_HANDSHAKE_SEND:
-								wk->state = SS_HANDSHAKE_RECV;
-								break;
-							case SS_SEND_VOTE:
-								wk->state = SS_WAIT_VERDICT;
-								break;
-							case SS_SEND_WAL:
-								wk->state = SS_RECV_FEEDBACK;
-								break;
-							default:
-								elog(FATAL, "Unexpected writing state [%s] for node %s:%s",
-									FormatWalKeeperState(wk->state), wk->host, wk->port);
-						}
-
-						wk->pollState = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case 1:
-						/* Nothing more to do - we'll just have to wait until we can flush again */
-						return;
-					case -1:
-						elog(WARNING, "Failed to flush write to node %s:%s in %s state: %s",
-							 wk->host, wk->port, FormatWalKeeperState(wk->state),
-							 walprop_error_message(wk->conn));
-						ResetConnection(i);
-						break;
-					default:
-						elog(FATAL, "invalid return %d from PQflush", flush_result);
-				}
+				wk->eventPos = AddWaitEventToSet(waitEvents, new_events, walprop_socket(wk->conn), NULL, wk);
 				break;
-			}
 
-			case SPOLL_PQ_CONSUME_AND_RETRY:
-				/* PQconsumeInput returns 1 on success (though maybe nothing was read), and 0 on
-				 * failure. */
-				if (walprop_consume_input(wk->conn))
-					/* On success, retry the operation */
-					goto ExecuteNextProtocolState;
-				else
-				{
-					/* On failure, print the failure and move on */
-					elog(WARNING, "Failed to read input for node %s:%s in state %s: %s",
-						wk->host, wk->port, FormatWalKeeperState(wk->state),
-						walprop_error_message(wk->conn));
-					ResetConnection(i);
-					return;
-				}
-		}
-
-ExecuteNextProtocolState:
-		/* If we get here, walkeeper[i].pollState now corresponds to SPOLL_NONE. We should execute
-		 * the operation described by the high-level state.
-		 *
-		 * All of the cases in this switch statement are provided in the order that state
-		 * transitions happen, moving downwards. So `SS_CONNECTING` moves into
-		 * `SS_EXEC_STARTWALPUSH`, `SS_EXEC_STARTWALPUSH` moves into `SS_WAIT_EXEC_RESULT`, etc.
-		 *
-		 * If/when new states are added, they should abide by the same formatting.
-		 *
-		 * More information about the high-level flow between states is available in the comments
-		 * for WalKeeperState. */
-		switch (wk->state)
-		{
-			/* walkeepers aren't taken out of SS_OFFLINE by polling. */
-			case SS_OFFLINE:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is offline", wk->host, wk->port);
-				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
-
-			/* Connecting is handled by the SPOLL_CONNECT, which then puts us into
-			 * SS_EXEC_STARTWALPUSH. There's no singular state advancement to be made here. */
-			case SS_CONNECTING:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is connecting", wk->host, wk->port);
-				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
-
-			/* Send "START_WAL_PUSH" command to the walkeeper. After sending, wait for response with
-			 * SS_WAIT_EXEC_RESULT */
+			/* Send "START_WAL_PUSH" command to the walkeeper. After sending,
+			 * wait for response with SS_WAIT_EXEC_RESULT */
 			case SS_EXEC_STARTWALPUSH:
-			{
-				int flush_result;
-
 				if (!walprop_send_query(wk->conn, "START_WAL_PUSH"))
 				{
 					elog(WARNING, "Failed to send 'START_WAL_PUSH' query to walkeeper %s:%s: %s",
@@ -1076,53 +927,30 @@ ExecuteNextProtocolState:
 					return;
 				}
 
-				/* The query has been started (put into buffers), but hasn't been flushed yet. We
-				 * should do that now. If there's more flushing required, keep doing that until it's
-				 * done */
-				switch ((flush_result = walprop_flush(wk->conn)))
-				{
-					case 0:
-						/* success -- go to the next state */
-						wk->state = SS_WAIT_EXEC_RESULT;
-						wk->pollState = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case 1:
-						/* we'll have to flush again */
-						wk->pollState = SPOLL_WRITE_PQ_FLUSH;
-						wk->sockWaitState = WANTS_SOCK_EITHER;
-						break;
-					case -1:
-						elog(WARNING, "Failed to flush write to node %s:%s to exec command: %s",
-								wk->host, wk->port, walprop_error_message(wk->conn));
-						ResetConnection(i);
-						return;
-					default:
-						elog(FATAL, "invalid return %d from PQflush", flush_result);
-				}
-
-				/* If no waiting is required, we'll get to that shortly */
-				UpdateEventSet(i, false);
+				/* The query has been put into buffers but not flushed yet. We
+				 * can trigger a flush on the next iteration of this loop by
+				 * adding the SMOD_NEEDS_FLUSH modifier to the state. */
+				wk->state = SS_WAIT_EXEC_RESULT | SMOD_NEEDS_FLUSH;
+				UpdateEventSet(wk, WL_SOCKET_READABLE|WL_SOCKET_WRITEABLE);
+				/* We also need to pretend like the socket is write-ready to get
+				 * the control flow to behave nicely & flush for us. */
+				events = WL_SOCKET_WRITEABLE;
 				break;
-			}
 
-			/* Waiting for the result of the "START_WAL_PUSH" command. If successful, proceed to
-			 * SS_HANDSHAKE_SEND. If needs more, wait until we can read and retry. */
 			case SS_WAIT_EXEC_RESULT:
-				/* Call our wrapper around PQisBusy + PQgetResult to inspect the result */
 				switch (walprop_get_query_result(wk->conn))
 				{
 					/* Successful result, move on to starting the handshake */
 					case WP_EXEC_SUCCESS_COPYBOTH:
-						wk->state         = SS_HANDSHAKE_SEND;
-						wk->pollState     = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
+						/* Because this state is immediately executable, we'll
+						 * start this on the next iteration of the loop */
+						wk->state = SS_HANDSHAKE_SEND;
 						break;
 
-					/* We need more calls to PQconsumeInput to completely receive this result */
+					/* Need more calls to PQconsumeInput - repeat this! */
 					case WP_EXEC_NEEDS_INPUT:
-						wk->pollState     = SPOLL_PQ_CONSUME_AND_RETRY;
-						wk->sockWaitState = WANTS_SOCK_READ;
+						wk->state |= SMOD_NEEDS_CONSUMEINPUT;
+						UpdateEventSet(wk, WL_SOCKET_READABLE);
 						break;
 
 					case WP_EXEC_FAILED:
@@ -1139,57 +967,31 @@ ExecuteNextProtocolState:
 						ResetConnection(i);
 						break;
 				}
-
-				/* If the wait state is empty, don't remove the event -- we have more work to do */
-				UpdateEventSet(i, false);
-
 				break;
 
-			/* Start handshake: first of all send information about server */
+			/* Start handshake: first of all send information about the WAL
+			 * keeper. After sending, we wait on SS_HANDSHAKE_RECV for a
+			 * response to finish the handshake. */
 			case SS_HANDSHAKE_SEND:
-				/* Note: This state corresponds to the process of sending the relevant information
-				 * along. The moment we finish sending, we use SS_HANDSHAKE_RECV to complete the
-				 * handshake. */
-				switch (walprop_async_write(wk->conn, &proposerGreeting, sizeof(proposerGreeting)))
-				{
-					case PG_ASYNC_WRITE_SUCCESS:
-						/* If the write immediately succeeds, we can move on to the next state. */
-						wk->state         = SS_HANDSHAKE_RECV;
-						wk->pollState     = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
+				/* On failure, logging & resetting the connection is handled. We
+				 * just need to handle the control flow. */
+				if (!AsyncWrite(i, &proposerGreeting, sizeof(proposerGreeting), SS_HANDSHAKE_RECV))
+					return;
 
-					case PG_ASYNC_WRITE_TRY_FLUSH:
-						/* We need to call PQflush some number of additional times, with different
-						 * actions depending on whether the socket is readable or writable */
-						wk->pollState     = SPOLL_WRITE_PQ_FLUSH;
-						wk->sockWaitState = WANTS_SOCK_EITHER;
-						break;
-
-					case PG_ASYNC_WRITE_FAIL:
-						/* On failure, print the error and reset the connection */
-						elog(WARNING, "Handshake with node %s:%s failed to start: %s",
-								wk->host, wk->port, walprop_error_message(wk->conn));
-						ResetConnection(i);
-						return;
-				}
-
-				/* Update the event set for this walkeeper, depending on what it's been changed to
-				 *
-				 * We set remove_if_nothing = false because we'll immediately execute
-				 * SS_HANDSHAKE_RECV on the next iteration of the outer loop. */
-				UpdateEventSet(i, false);
 				break;
 
-			/* Finish handshake comms: receive information about the walkeeper */
+			/* Finish handshake comms: receive information about the WAL keeper */
 			case SS_HANDSHAKE_RECV:
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
-				if (!ReadPGAsyncIntoValue(i, &wk->greet, sizeof(wk->greet)))
+				if (!AsyncRead(i, &wk->greet, sizeof(wk->greet)))
 					return;
 
-				wk->state     = SS_VOTING;
-				wk->pollState = SPOLL_IDLE;
+				/* Protocol is all good, move to voting. */
+				wk->state = SS_VOTING;
+				/* voting is an idle state; wait for read-ready in case the
+				 * connection closes */
+				UpdateEventSet(wk, WL_SOCKET_READABLE);
 				wk->feedback.flushLsn = truncateLsn;
 				wk->feedback.hs.ts = 0;
 
@@ -1225,13 +1027,8 @@ ExecuteNextProtocolState:
 						if (walkeeper[j].state == SS_VOTING)
 						{
 							walkeeper[j].state = SS_SEND_VOTE;
-							walkeeper[j].pollState = SPOLL_NONE;
-							walkeeper[j].sockWaitState = WANTS_NO_WAIT;
-
-							/* If this isn't the current walkeeper, defer handling this state until
-							 * later. We'll mark it for individual work in WalProposerPoll. */
-							if (j != i)
-								RequestStateAdvanceNoPoll(j);
+							/* Immediately send info */
+							AdvancePollState(j, WL_NO_EVENTS);
 						}
 					}
 				}
@@ -1241,47 +1038,26 @@ ExecuteNextProtocolState:
 			 * execution of SS_HANDSHAKE_RECV to see how nodes are transferred from SS_VOTING to
 			 * SS_SEND_VOTE. */
 			case SS_VOTING:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is voting", wk->host, wk->port);
+				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is voting",
+					 wk->host, wk->port);
 				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
 
 			/* We have quorum for voting, send our vote request */
 			case SS_SEND_VOTE:
-				switch (walprop_async_write(wk->conn, &voteRequest, sizeof(voteRequest)))
-				{
-					case PG_ASYNC_WRITE_SUCCESS:
-						/* If the write immediately succeeds, we can move on to the next state. */
-						wk->state         = SS_WAIT_VERDICT;
-						wk->pollState     = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case PG_ASYNC_WRITE_TRY_FLUSH:
-						/* We need to call PQflush some number of additional times, with different
-						 * actions depending on whether the socket is readable or writable */
-						wk->pollState     = SPOLL_WRITE_PQ_FLUSH;
-						wk->sockWaitState = WANTS_SOCK_EITHER;
-						break;
-					case PG_ASYNC_WRITE_FAIL:
-						/* Report the failure and reset the connection; there isn't much
-						 * more we can do. */
-						elog(WARNING, "Failed to send vote request to node %s:%s: %s",
-								wk->host, wk->port,
-								walprop_error_message(wk->conn));
-						ResetConnection(i);
-						return;
-				}
+				/* On failure, logging & resetting is handled */
+				if (!AsyncWrite(i, &voteRequest, sizeof(voteRequest), SS_WAIT_VERDICT))
+					return;
 
-				/* Don't remove from the event set if there's nothing we're waiting for; we'll get
-				 * it on the next iteration of the loop */
-				UpdateEventSet(i, false);
+				/* If successful, continue on to SS_WAIT_VERDICT (in the next
+				 * iteration of the loop) */
 				break;
 
 			/* Start reading the walkeeper response for our candidate */
 			case SS_WAIT_VERDICT:
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
-				if (!ReadPGAsyncIntoValue(i, &wk->voteResponse, sizeof(wk->voteResponse)))
+				if (!AsyncRead(i, &wk->voteResponse, sizeof(wk->voteResponse)))
 					return;
-
 
 				/*
 				 * In case of acceptor rejecting our vote, bail out, but only if
@@ -1299,9 +1075,8 @@ ExecuteNextProtocolState:
 				Assert(wk->voteResponse.term == propTerm);
 
 				/* Handshake completed, do we have quorum? */
-				wk->state         = SS_IDLE;
-				wk->pollState     = SPOLL_IDLE;
-				wk->sockWaitState = WANTS_NO_WAIT;
+				wk->state = SS_IDLE;
+				UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for read-ready */
 
 				if (++n_votes == quorum)
 				{
@@ -1327,10 +1102,15 @@ ExecuteNextProtocolState:
 
 				break;
 
-			/* Start to send the message at wk->currMsg. Triggered only by calls to
+			/* Idle state for sending WAL. Moved out only by calls to
 			 * SendMessageToNode */
+			case SS_IDLE:
+				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is idle", wk->host, wk->port);
+				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
+
+			/* Start to send the message at wk->currMsg. Triggered only by calls
+			 * to SendMessageToNode */
 			case SS_SEND_WAL:
-			{
 				WalMessage* msg = wk->currMsg;
 
 				elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
@@ -1339,47 +1119,30 @@ ExecuteNextProtocolState:
 					 LSN_FORMAT_ARGS(truncateLsn),
 					 wk->host, wk->port);
 
-				switch (walprop_async_write(wk->conn, &msg->req, msg->size))
-				{
-					case PG_ASYNC_WRITE_SUCCESS:
-						wk->state         = SS_RECV_FEEDBACK;
-						wk->pollState     = SPOLL_NONE;
-						wk->sockWaitState = WANTS_NO_WAIT;
-						break;
-					case PG_ASYNC_WRITE_TRY_FLUSH:
-						wk->pollState     = SPOLL_WRITE_PQ_FLUSH;
-						wk->sockWaitState = WANTS_SOCK_EITHER;
-						break;
-					case PG_ASYNC_WRITE_FAIL:
-						elog(WARNING, "Failed to send WAL to node %s:%s: %s",
-							 wk->host, wk->port, walprop_error_message(wk->conn));
-				}
+				/* We write with msg->size here because the body of the message
+				 * is stored after the end of the WalMessage struct, in the
+				 * allocation for each msg */
+				if (!AsyncWrite(i, &msg->req, msg->size, SS_RECV_FEEDBACK))
+					return;
 
-				/* Don't remove if if sockWaitState == WANTS_NO_WAIT, because we'll immediately move
-				 * on to SS_RECV_FEEDBACK if that's the case. */
-				UpdateEventSet(i, false);
 				break;
-			}
 
 			/* Start to receive the feedback from a message sent via SS_SEND_WAL */
 			case SS_RECV_FEEDBACK:
-			{
 				WalMessage* next;
 				XLogRecPtr  minQuorumLsn;
 				WalMessage* commitLsnUpdateMsg;
 
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
-				if (!ReadPGAsyncIntoValue(i, &wk->feedback, sizeof(wk->feedback)))
+				if (!AsyncRead(i, &wk->feedback, sizeof(wk->feedback)))
 					return;
 
 				next = wk->currMsg->next;
 				Assert(wk->feedback.flushLsn == wk->currMsg->req.endLsn);
 				wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms receiving of this message */
 
-				wk->state         = SS_IDLE;
-				wk->pollState     = SPOLL_IDLE;
-				wk->sockWaitState = WANTS_NO_WAIT;
+				wk->state = SS_IDLE;
 				/* Don't update the event set; that's handled by SendMessageToNode if necessary */
 
 				wk->currMsg = NULL;
@@ -1402,27 +1165,19 @@ ExecuteNextProtocolState:
 					lastSentCommitLsn = minQuorumLsn;
 				}
 				break;
-			}
-
-			/* Truly an idle state - there isn't any typ of advancement expected here. */
-			case SS_IDLE:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is idle", wk->host, wk->port);
-				break; /* actually unreachable; makes the compiler happier */
 		}
-
-		/* On subsequent iterations of the loop, there's no additonal events to process */
-		events = WL_NO_EVENTS;
-	} while (walkeeper[i].sockWaitState == WANTS_NO_WAIT && walkeeper[i].pollState != SPOLL_IDLE);
+	}
 }
 
 /*
- * Reads a CopyData block into a value, returning whether the read was successful
+ * Reads a CopyData block from the 'i'th WAL keeper's postgres connection,
+ * returning whether the read was successful.
  *
- * If the read was not immediately successful (either polling is required, or it actually failed),
- * then the state is set appropriately on the walkeeper.
+ * If the read needs more polling, the appropriate modifier is added to the
+ * state. If it fully failed, a warning is emitted and the connection is reset.
  */
-bool
-ReadPGAsyncIntoValue(int i, void* value, size_t value_size)
+static bool
+AsyncRead(int i, void* value, size_t value_size)
 {
 	WalKeeper* wk = &walkeeper[i];
 	char *buf = NULL;
@@ -1435,13 +1190,8 @@ ReadPGAsyncIntoValue(int i, void* value, size_t value_size)
 			break;
 
 		case PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN:
-			wk->pollState = SPOLL_PQ_CONSUME_AND_RETRY;
-
-			if (wk->sockWaitState != WANTS_SOCK_READ)
-			{
-				wk->sockWaitState = WANTS_SOCK_READ;
-				UpdateEventSet(i, true);
-			}
+			wk->state |= SMOD_NEEDS_CONSUMEINPUT;
+			UpdateEventSet(wk, WL_SOCKET_READABLE);
 			return false;
 
 		case PG_ASYNC_READ_FAIL:
@@ -1456,7 +1206,7 @@ ReadPGAsyncIntoValue(int i, void* value, size_t value_size)
 	/*
 	 * If we get here, the read was ok, but we still need to check it was the right amount
 	 */
-	if (buf_size != value_size)
+	if ((size_t) buf_size != value_size)
 	{
 		elog(FATAL,
 			"Unexpected walkeeper %s:%s read length from %s state. Expected %ld, found %d",
@@ -1468,6 +1218,44 @@ ReadPGAsyncIntoValue(int i, void* value, size_t value_size)
 	/* Copy the resulting info into place */
 	memcpy(value, buf, buf_size);
 	return true;
+}
+
+/*
+ * Starts a write into the 'i'th WAL keeper's postgres connection, moving to the
+ * success state only when the write succeeds
+ *
+ * Returns false only if the write immediately fails. Upon failure, a warning is
+ * emitted and the connection is reset.
+ */
+static bool
+AsyncWrite(int i, void* msg, size_t msg_size, WalKeeperState success_state)
+{
+	WalKeeper* wk = &walkeeper[i];
+	bool result;
+
+	switch (walprop_async_write(wk->conn, msg, msg_size))
+	{
+		case PG_ASYNC_WRITE_SUCCESS:
+			wk->state = success_state;
+			result = true;
+			break;
+		case PG_ASYNC_WRITE_TRY_FLUSH:
+			/* We still need to call PQflush some more to finish the job, but
+			 * we'll still go to success_state when we're done. */
+			wk->state = success_state | SMOD_NEEDS_FLUSH;
+			UpdateEventSet(wk, WL_SOCKET_WRITEABLE|WL_SOCKET_READABLE);
+			result = true;
+			break;
+		case PG_ASYNC_WRITE_FAIL:
+			elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
+				 wk->host, wk->port, FormatWalKeeperState(wk->state),
+				 walprop_error_message(wk->conn));
+			ResetConnection(i);
+			result = false;
+			break;
+	}
+
+	return result;
 }
 
 /*
