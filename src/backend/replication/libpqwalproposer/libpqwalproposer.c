@@ -160,6 +160,10 @@ libpqprop_get_query_result(WalProposerConn* conn)
 	/* Marker variable if we need to log an unexpected success result */
 	char* unexpected_success = NULL;
 
+	/* Consume any input that we might be missing */
+	if (!PQconsumeInput(conn->pg_conn))
+		return WP_EXEC_FAILED;
+
 	if (PQisBusy(conn->pg_conn))
 		return WP_EXEC_NEEDS_INPUT;
 
@@ -253,6 +257,10 @@ static PGAsyncReadResult
 libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 {
 	int result;
+
+	/* Call PQconsumeInput so that we have the data we need */
+	if (!PQconsumeInput(conn->pg_conn))
+		return PG_ASYNC_READ_FAIL;
 
 	/* The docs for PQgetCopyData list the return values as:
 	 *      0 if the copy is still in progress, but no "complete row" is

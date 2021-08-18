@@ -787,7 +787,8 @@ AdvancePollState(int i, uint32 events)
 		/* -------- Shared libpq functionality -------- */
 
 		/* Shared functionality between states: if there's libpq-specific
-		 * polling we need to do, we can do it here. */
+		 * polling we need to do, based on the state modifier, we can do it
+		 * here. */
 		if (wk->state & SMOD_NEEDS_FLUSH)
 		{
 			int flush_result;
@@ -830,23 +831,6 @@ AdvancePollState(int i, uint32 events)
 					elog(FATAL, "invalid return %d from PQflush", flush_result);
 			}
 
-			events = WL_NO_EVENTS;
-		}
-		else if (wk->state & SMOD_NEEDS_CONSUMEINPUT)
-		{
-			if (!walprop_consume_input(wk->conn))
-			{
-				elog(WARNING, "Failed to read input for node %s:%s in state %s: %s",
-					wk->host, wk->port, FormatWalKeeperState(wk->state),
-					walprop_error_message(wk->conn));
-				ResetConnection(i);
-				return;
-			}
-
-			/* On success, we can retry reading. SMOD_NEEDS_CONSUMEINPUT uses the
-			 * state that we're trying to read into, so "trying again" just leaves
-			 * the state the same */
-			wk->state &= ~SMOD_ALL;
 			events = WL_NO_EVENTS;
 		}
 
@@ -947,9 +931,9 @@ AdvancePollState(int i, uint32 events)
 						wk->state = SS_HANDSHAKE_SEND;
 						break;
 
-					/* Need more calls to PQconsumeInput - repeat this! */
+					/* Needs repeated calls to finish. Wait until the socket is
+					 * readable */
 					case WP_EXEC_NEEDS_INPUT:
-						wk->state |= SMOD_NEEDS_CONSUMEINPUT;
 						UpdateEventSet(wk, WL_SOCKET_READABLE);
 						break;
 
@@ -1173,8 +1157,9 @@ AdvancePollState(int i, uint32 events)
  * Reads a CopyData block from the 'i'th WAL keeper's postgres connection,
  * returning whether the read was successful.
  *
- * If the read needs more polling, the appropriate modifier is added to the
- * state. If it fully failed, a warning is emitted and the connection is reset.
+ * If the read needs more polling, we return 'false' and keep the state
+ * unmodified, waiting until it becomes read-ready to try again. If it fully
+ * failed, a warning is emitted and the connection is reset.
  */
 static bool
 AsyncRead(int i, void* value, size_t value_size)
@@ -1189,8 +1174,9 @@ AsyncRead(int i, void* value, size_t value_size)
 		case PG_ASYNC_READ_SUCCESS:
 			break;
 
+		/* If we need more input, wait until the socket is read-ready and try
+		 * again. */
 		case PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN:
-			wk->state |= SMOD_NEEDS_CONSUMEINPUT;
 			UpdateEventSet(wk, WL_SOCKET_READABLE);
 			return false;
 

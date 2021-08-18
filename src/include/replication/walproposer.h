@@ -46,8 +46,8 @@ typedef enum
 {
 	/* The full read was successful. buf now points to the data */
 	PG_ASYNC_READ_SUCCESS,
-	/* The read is ongoing. Wait until the connection is read-ready, then
-	 * call PQconsumeInput and try again. */
+	/* The read is ongoing. Wait until the connection is read-ready, then try
+	 * again. */
 	PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN,
 	/* Reading failed. Check PQerrorMessage(conn) */
 	PG_ASYNC_READ_FAIL,
@@ -85,11 +85,11 @@ typedef enum
 {
 	/* --- Modifiers --- */
 
+	/* Currently, there's only one modifier :) */
 	SMOD_NEEDS_FLUSH = 64, /* In order to finish moving to this state, we need to flush */
-	SMOD_NEEDS_CONSUMEINPUT = 128, /* To perform the read for this state, we need to consume input */
 
 	/* Marker for all possible modifiers - used as: state = state & (~SMOD_ALL) to remove modifiers */
-	SMOD_ALL = 128 + 64,
+	SMOD_ALL = 64,
 
 	/* --- Regular states --- */
 
@@ -121,9 +121,7 @@ typedef enum
 	 */
 	SS_EXEC_STARTWALPUSH,
 	/*
-	 * Waiting for the result of the "START_WAL_PUSH" command. May be paired
-	 * with:
-	 *   - SMOD_NEEDS_CONSUMEINPUT
+	 * Waiting for the result of the "START_WAL_PUSH" command.
 	 *
 	 * After we get a successful result, moves to SS_HANDSHAKE_SEND.
 	 */
@@ -137,8 +135,7 @@ typedef enum
 	 */
 	SS_HANDSHAKE_SEND,
 	/*
-	 * Executing the receiving half of the handshake. May be paired with:
-	 *   - SMOD_NEEDS_CONSUMEINPUT
+	 * Executing the receiving half of the handshake.
 	 *
 	 * After receiving, moves to SS_VOTING.
 	 */
@@ -181,8 +178,7 @@ typedef enum
 	 */
 	SS_SEND_WAL,
 	/*
-	 * Currently reading feedback from sending the WAL. May be paired with:
-	 *   - SMOD_NEEDS_CONSUMEINPUT
+	 * Currently reading feedback from sending the WAL.
 	 *
 	 * After reading, moves to (SS_SEND_WAL or SS_IDLE) by calls to
 	 * SendMessageToNode.
@@ -378,8 +374,8 @@ typedef enum
 	 *
 	 * Do not expect PQerrorMessage to be appropriately set. */
 	WP_EXEC_UNEXPECTED_SUCCESS,
-	/* No result available at this time. Wait until read-ready, call PQconsumeInput, then try again.
-	 * Internally, this is returned when PQisBusy indicates that PQgetResult would block. */
+	/* No result available at this time. Wait until read-ready, then call again. Internally, this is
+	 * returned when PQisBusy indicates that PQgetResult would block. */
 	WP_EXEC_NEEDS_INPUT,
 	/* Catch-all failure. Check PQerrorMessage. */
 	WP_EXEC_FAILED,
@@ -415,7 +411,7 @@ typedef WalProposerConnectPollStatusType (*walprop_connect_poll_fn) (WalProposer
 /* Re-exported PQsendQuery */
 typedef bool (*walprop_send_query_fn) (WalProposerConn* conn, char* query);
 
-/* Wrapper around PQisBusy + PQgetResult */
+/* Wrapper around PQconsumeInput + PQisBusy + PQgetResult */
 typedef WalProposerExecStatusType (*walprop_get_query_result_fn) (WalProposerConn* conn);
 
 /* Re-exported PQsetnonblocking */

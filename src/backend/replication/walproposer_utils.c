@@ -123,8 +123,6 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 	if (state & SMOD_NEEDS_FLUSH)
 		/* Flushing waits for read- or write-ready */
 		return WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
-	else if (state & SMOD_NEEDS_CONSUMEINPUT)
-		return WL_SOCKET_READABLE;
 
 	/* If the state doesn't have a modifier, we can check the base state */
 	switch (state & (~SMOD_ALL))
@@ -135,14 +133,25 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 		case SS_CONNECTING_WRITE:
 			return WL_SOCKET_WRITEABLE;
 
-		/* Idle states wait for read-ready events */
+		/* A number of states require the socket to be read-ready to continue.
+		 *
+		 * SS_WAIT_EXEC_RESULT uses walprop_get_query_result. */
+		case SS_WAIT_EXEC_RESULT:
+		/* And the rest use walprop_async_read (indirectly, through AsyncRead) */
+		case SS_HANDSHAKE_RECV:
+		case SS_WAIT_VERDICT:
+		case SS_RECV_FEEDBACK:
+			return WL_SOCKET_READABLE;
+
+		/* Idle states use read-readiness as a sign that the connection has been
+		 * disconnected. */
 		case SS_VOTING:
 		case SS_IDLE:
 			return WL_SOCKET_READABLE;
 	}
 
-	/* Everything else (excluding SS_OFFLINE) waits on the modifiers when they
-	 * need to wait, so right now they aren't waiting on anything */
+	/* Everything else (excluding SS_OFFLINE) uses modifiers when they need to
+	 * wait, so right now they aren't waiting on anything */
 	return WL_NO_EVENTS;
 }
 
