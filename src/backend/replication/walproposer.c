@@ -2,7 +2,36 @@
  *
  * walproposer.c
  *
- * Broadcast WAL stream to Zenith WAL acceptetors
+ * Proposer/leader part of the total order broadcast protocol between postgres
+ * and WAL safekeepers.
+ *
+ * We have two ways of launching WalProposer:
+ *
+ *   1. As a background worker which will run physical WalSender with
+ *      am_wal_proposer flag set to true. WalSender in turn would handle WAL
+ *      reading part and call WalProposer when ready to scatter WAL.
+ *
+ *   2. As a standalone utility by running `postgres --sync-safekeepers`. That
+ *      is needed to create LSN from which it is safe to start postgres. More
+ *      specifically it addresses following problems:
+ *
+ *      a) Chicken-or-the-egg problem: compute postgres needs data directory
+ *         with non-rel files that are downloaded from pageserver by calling
+ *         basebackup@LSN. This LSN is not arbitrary, it must include all
+ *         previously committed transactions and defined through consensus
+ *         voting, which happens... in walproposer, a part of compute node.
+ *
+ *      b) Just warranting such LSN is not enough, we must also actually commit
+ *         it and make sure there is a safekeeper who knows this LSN is
+ *         committed so WAL before it can be streamed to pageserver -- otherwise
+ *         basebackup will hang waiting for WAL. Advancing commit_lsn without
+ *         playing consensus game is impossible, so speculative 'let's just poll
+ *         safekeepers, learn start LSN of future epoch and run basebackup'
+ *         won't work.
+ *
+ *      TODO: check that LSN on safekeepers after start is the same as it was
+ *            after `postgres --sync-safekeepers`.
+ *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
@@ -18,6 +47,7 @@
 #include "replication/walreceiver.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
+#include "postmaster/postmaster.h"
 #include "storage/pmsignal.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -28,7 +58,6 @@
 char* wal_acceptors_list;
 int   wal_acceptor_reconnect_timeout;
 bool  am_wal_proposer;
-
 
 /* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
 WalProposerFunctionsType* WalProposerFunctions = NULL;
@@ -45,7 +74,11 @@ static XLogRecPtr	lastSentCommitLsn;	/* last commitLsn broadcast to walkeepers *
 static ProposerGreeting   proposerGreeting;
 static WaitEventSet* waitEvents;
 static AppendResponse lastFeedback;
-static XLogRecPtr   truncateLsn; /* Last position received by all walkeepers. */
+/*
+ *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
+ *  + 1 of last chunk streamed to everyone)
+ */
+static XLogRecPtr   truncateLsn;
 static VoteRequest voteRequest; /* Vote request for walkeeper */
 static term_t       propTerm; /* term of the proposer */
 static XLogRecPtr   propEpochStartLsn;    /* epoch start lsn of the proposer */
@@ -55,6 +88,9 @@ static int          n_votes = 0;
 static int          n_connected = 0;
 static TimestampTz  last_reconnect_attempt;
 
+/* Set to true only in standalone run of `postgres --sync-safekeepers` (see comment on top) */
+static bool         syncSafekeepers;
+
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
 static bool AsyncRead(int i, void* value, size_t value_size);
@@ -62,6 +98,9 @@ static bool BlockingWrite(int i, void* msg, size_t msg_size, WalKeeperState succ
 static bool AsyncWrite(int i, void* msg, size_t msg_size, WalKeeperState flush_state, WalKeeperState success_state);
 static bool AsyncFlush(int i, bool socket_read_ready, WalKeeperState success_state);
 static void HackyRemoveWalProposerEvent(int to_remove);
+static WalMessage* CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static void BroadcastMessage(WalMessage* msg);
+
 
 /*
  * Combine hot standby feedbacks from all walkeepers.
@@ -277,23 +316,27 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn;
+	int i;
+	int n_synced;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
 		/* advance the replication slot */
-		ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
+		if (!syncSafekeepers)
+			ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
 	}
 	CombineHotStanbyFeedbacks(&hsFeedback);
 	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
 	{
 		lastFeedback.hs = hsFeedback;
-		ProcessStandbyHSFeedback(hsFeedback.ts,
-								 XidFromFullTransactionId(hsFeedback.xmin),
-								 EpochFromFullTransactionId(hsFeedback.xmin),
-								 XidFromFullTransactionId(hsFeedback.catalog_xmin),
-								 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
+		if (!syncSafekeepers)
+			ProcessStandbyHSFeedback(hsFeedback.ts,
+									 XidFromFullTransactionId(hsFeedback.xmin),
+									 EpochFromFullTransactionId(hsFeedback.xmin),
+									 XidFromFullTransactionId(hsFeedback.catalog_xmin),
+									 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
 	}
 
 
@@ -312,25 +355,51 @@ HandleWalKeeperResponse(void)
 	}
 	if (!msgQueueHead) /* queue is empty */
 		msgQueueTail = NULL;
+
+	/*
+	 * Generally sync is done when majority switched the epoch so we committed
+	 * epochStartLsn and made the majority aware of it, ensuring they are ready
+	 * to give all WAL to pageserver. It would mean whichever majority is alive,
+	 * there will be at least one safekeeper who is able to stream WAL to
+	 * pageserver to make basebackup possible. However, since at the moment we
+	 * don't have any good mechanism of defining the healthy and most advanced
+	 * safekeeper who should push the wal into pageserver and basically the
+	 * random one gets connected, to prevent hanging basebackup (due to
+	 * pageserver connecting to not-synced-walkeeper) we currently wait for all
+	 * seemingly alive walkeepers to get synced.
+	 */
+	if (syncSafekeepers)
+	{
+		for (int i = 0; i < n_walkeepers; i++)
+		{
+			WalKeeper *wk = &walkeeper[i];
+			bool synced = wk->feedback.commitLsn >= propEpochStartLsn;
+
+			/* alive safekeeper which is not synced yet; wait for it */
+			if (wk->state != SS_OFFLINE && !synced)
+				return;
+			if (synced)
+				n_synced++;
+		}
+		if (n_synced >= quorum)
+		{
+			/* All walkeepers synced! */
+			fprintf(stdout, "%X/%X\n", LSN_FORMAT_ARGS(propEpochStartLsn));
+			exit(0);
+		}
+	}
 }
 
 char *zenith_timeline_walproposer = NULL;
 char *zenith_tenant_walproposer = NULL;
 
-/*
- * WAL proposer bgworeker entry point
- */
-void
-WalProposerMain(Datum main_arg)
+
+static void
+WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 {
 	char* host;
 	char* sep;
 	char* port;
-
-	/* Establish signal handlers. */
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
-	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGTERM, die);
 
 	/* Load the libpq-specific functions */
 	load_file("libpqwalproposer", false);
@@ -340,10 +409,7 @@ WalProposerMain(Datum main_arg)
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-
 	load_file("zenith", false);
-
-	BackgroundWorkerUnblockSignals();
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -374,14 +440,12 @@ WalProposerMain(Datum main_arg)
 	}
 	quorum = n_walkeepers/2 + 1;
 
-	GetXLogReplayRecPtr(&ThisTimeLineID);
-
 	/* Fill the greeting package */
 	proposerGreeting.tag = 'g';
 	proposerGreeting.protocolVersion = SK_PROTOCOL_VERSION;
 	proposerGreeting.pgVersion = PG_VERSION_NUM;
 	pg_strong_random(&proposerGreeting.proposerId, sizeof(proposerGreeting.proposerId));
-	proposerGreeting.systemId = GetSystemIdentifier();
+	proposerGreeting.systemId = systemId;
 	if (!zenith_timeline_walproposer)
 		elog(FATAL, "zenith.zenith_timeline is not provided");
 	if (*zenith_timeline_walproposer != '\0' &&
@@ -395,13 +459,52 @@ WalProposerMain(Datum main_arg)
 	proposerGreeting.timeline = ThisTimeLineID;
 	proposerGreeting.walSegSize = wal_segment_size;
 
+	InitEventSet();
+}
+
+static void
+WalProposerLoop(void)
+{
+	while (true)
+		WalProposerPoll();
+}
+
+static void
+WalProposerStart(void)
+{
+
+	/* Initiate connections to all walkeeper nodes */
+	for (int i = 0; i < n_walkeepers; i++)
+	{
+		ResetConnection(i);
+	}
+
+	WalProposerLoop();
+}
+
+/*
+ * WAL proposer bgworeker entry point
+ */
+void
+WalProposerMain(Datum main_arg)
+{
+	/* Establish signal handlers. */
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
+	pqsignal(SIGTERM, die);
+
+	BackgroundWorkerUnblockSignals();
+
+	GetXLogReplayRecPtr(&ThisTimeLineID);
+
+	WalProposerInit(GetFlushRecPtr(), GetSystemIdentifier());
+
 	last_reconnect_attempt = GetCurrentTimestamp();
 
 	application_name = (char *) "walproposer"; /* for synchronous_standby_names */
 	am_wal_proposer = true;
 	am_walsender = true;
 	InitWalSender();
-	InitEventSet();
 
 	/* Create replication slot for WAL proposer if not exists */
 	if (SearchNamedReplicationSlot(WAL_PROPOSER_SLOT_NAME, false) == NULL)
@@ -410,14 +513,54 @@ WalProposerMain(Datum main_arg)
 		ReplicationSlotRelease();
 	}
 
-	/* Initiate connections to all walkeeper nodes */
-	for (int i = 0; i < n_walkeepers; i++)
-	{
-		ResetConnection(i);
-	}
+	WalProposerStart();
+}
 
-	while (true)
-		WalProposerPoll();
+void
+WalProposerSync(int argc, char *argv[])
+{
+	syncSafekeepers = true;
+
+	InitStandaloneProcess(argv[0]);
+
+	SetProcessingMode(InitProcessing);
+
+	/*
+	 * Set default values for command-line options.
+	 */
+	InitializeGUCOptions();
+
+	/* Acquire configuration parameters */
+	if (!SelectConfigFiles(NULL, progname))
+		exit(1);
+
+	/*
+	 * Imitate we are early in bootstrap loading shared_preload_libraries;
+	 * zenith extension sets PGC_POSTMASTER gucs requiring this.
+	 */
+	process_shared_preload_libraries_in_progress = true;
+
+	/*
+	 * Initialize postmaster_alive_fds as WaitEventSet checks them.
+	 *
+	 * Copied from InitPostmasterDeathWatchHandle()
+	 */
+	if (pipe(postmaster_alive_fds) < 0)
+		ereport(FATAL,
+				(errcode_for_file_access(),
+				 errmsg_internal("could not create pipe to monitor postmaster death: %m")));
+	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH], F_SETFL, O_NONBLOCK) == -1)
+		ereport(FATAL,
+				(errcode_for_socket_access(),
+				 errmsg_internal("could not set postmaster death monitoring pipe to nonblocking mode: %m")));
+
+	WalProposerInit(0, 0);
+
+	process_shared_preload_libraries_in_progress = false;
+
+	BackgroundWorkerUnblockSignals();
+
+	WalProposerStart();
 }
 
 static void
@@ -458,8 +601,22 @@ SendMessageToNode(int i, WalMessage* msg)
 	/* Only try to send the message if it's non-null */
 	if (wk->currMsg)
 	{
-		wk->currMsg->req.truncateLsn = truncateLsn;
 		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
+		/*
+		 * truncateLsn is advanced immediately once chunk is broadcast to all
+		 * safekeepers, and commitLsn generally can't be advanced based on
+		 * feedback from safekeeper who is still in the previous epoch (similar
+		 * to 'leader can't commit entries from previous term' in Raft), so the
+		 * first might surprisingly get higher than the latter.
+		 *
+		 * Another reason for this will be switch to proper acks from
+		 * safekeepers: they must point to end of last valid record, not just
+		 * end of last received chunk.
+		 *
+		 * Free safekeeper from such surprises by holding back truncateLsn in
+		 * these cases.
+		 */
+		wk->currMsg->req.truncateLsn = Min(truncateLsn, wk->currMsg->req.commitLsn);
 
 		/* Once we've selected and set up our message, actually start sending it. */
 		wk->state = SS_SEND_WAL;
@@ -539,16 +696,10 @@ WalProposerBroadcast(XLogRecPtr startpos, char* data, int len)
  * know that commit lsn has advanced.
  */
 static WalMessage*
-CreateMessageCommitLsnOnly(void)
+CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 {
 	/* Create new message and append it to message queue */
 	WalMessage*	msg;
-
-	if (lastSentLsn == 0)
-	{
-		/* FIXME: We haven't sent anything yet. Not sure what to do then.. */
-		return NULL;
-	}
 
 	msg = (WalMessage*)malloc(sizeof(WalMessage));
 	if (msgQueueTail != NULL)
@@ -563,8 +714,18 @@ CreateMessageCommitLsnOnly(void)
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
 	msg->req.epochStartLsn = propEpochStartLsn;
-	msg->req.beginLsn = lastSentLsn;
-	msg->req.endLsn = lastSentLsn;
+	/*
+     * This serves two purposes:
+	 * 1) After all msgs from previous epochs are pushed we queue empty
+     *    WalMessage with lsn set to epochStartLsn which commands to switch the
+     *    epoch, which allows to do the switch without creating new epoch
+     *    records (we especially want to avoid such in --sync mode).
+	 *    Walproposer can advance commit_lsn only after the switch, so this lsn
+	 *    (reported back) also is the first possible advancement point.
+	 * 2) Maintain common invariant of queue entries sorted by LSN.
+	 */
+	msg->req.beginLsn = lsn;
+	msg->req.endLsn = lsn;
 	msg->req.proposerId = proposerGreeting.proposerId;
 	/* truncateLsn and commitLsn are set just before the message sent, in SendMessageToNode() */
 	return msg;
@@ -602,8 +763,9 @@ DetermineEpochStartLsn(void)
 		}
 	}
 
-	elog(LOG, "got votes from majority (%d) of nodes, epochStartLsn %X/%X, donor %s:%s, restart_lsn %X/%X",
+	elog(LOG, "got votes from majority (%d) of nodes, term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s, restart_lsn %X/%X",
 		 quorum,
+		 propTerm,
 		 LSN_FORMAT_ARGS(propEpochStartLsn),
 		 walkeeper[donor].host, walkeeper[donor].port,
 		 LSN_FORMAT_ARGS(truncateLsn)
@@ -682,20 +844,34 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	if (walrcv_startstreaming(wrconn, &options))
 	{
 		XLogRecPtr rec_start_lsn;
-		XLogRecPtr rec_end_lsn;
+		XLogRecPtr rec_end_lsn = 0;
 		int len;
 		char *buf;
 		pgsocket wait_fd = PGINVALID_SOCKET;
-		while ((len = walrcv_receive(wrconn, &buf, &wait_fd)) > 0)
+		while ((len = walrcv_receive(wrconn, &buf, &wait_fd)) >= 0)
 		{
-			Assert(buf[0] == 'w');
-			memcpy(&rec_start_lsn, &buf[XLOG_HDR_START_POS], sizeof rec_start_lsn);
-			rec_start_lsn = pg_ntoh64(rec_start_lsn);
-			rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
-			(void)CreateMessage(rec_start_lsn, buf, len);
-			if (rec_end_lsn >= endpos)
-				break;
+			if (len == 0)
+			{
+				(void) WaitLatchOrSocket(
+					MyLatch, WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE, wait_fd,
+					-1, WAIT_EVENT_WAL_RECEIVER_MAIN);
+			}
+			else
+			{
+				Assert(buf[0] == 'w');
+				memcpy(&rec_start_lsn, &buf[XLOG_HDR_START_POS],
+					   sizeof rec_start_lsn);
+				rec_start_lsn = pg_ntoh64(rec_start_lsn);
+				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
+				(void) CreateMessage(rec_start_lsn, buf, len);
+				elog(DEBUG1, "Recover message %X/%X length %d",
+					 LSN_FORMAT_ARGS(rec_start_lsn), len);
+				if (rec_end_lsn >= endpos)
+					break;
+			}
 		}
+		elog(DEBUG1, "end of replication stream at %X/%X: %m",
+			 LSN_FORMAT_ARGS(rec_end_lsn));
 		walrcv_disconnect(wrconn);
 	}
 	else
@@ -1032,6 +1208,20 @@ AdvancePollState(int i, uint32 events)
 						/* Perform recovery */
 						if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
 							elog(FATAL, "Failed to recover state");
+						/* this message signifies epoch switch */
+						BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
+
+						if (syncSafekeepers)
+						{
+							/* Wait until all walkeepers are synced */
+							WalProposerLoop();
+						}
+					}
+					else if (syncSafekeepers)
+					{
+						/* Sync is not needed: just exit */
+						fprintf(stdout, "%X/%X\n", LSN_FORMAT_ARGS(propEpochStartLsn));
+						exit(0);
 					}
 					WalProposerStartStreaming(propEpochStartLsn);
 					/* Should not return here */
@@ -1081,7 +1271,6 @@ AdvancePollState(int i, uint32 events)
 			{
 				WalMessage* next;
 				XLogRecPtr  minQuorumLsn;
-				WalMessage* commitLsnUpdateMsg;
 
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
@@ -1089,7 +1278,6 @@ AdvancePollState(int i, uint32 events)
 					return;
 
 				next = wk->currMsg->next;
-				Assert(wk->feedback.flushLsn == wk->currMsg->req.endLsn);
 				wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms receiving of this message */
 
 				wk->currMsg = NULL;
@@ -1106,9 +1294,7 @@ AdvancePollState(int i, uint32 events)
 
 				if (minQuorumLsn > lastSentCommitLsn)
 				{
-					commitLsnUpdateMsg = CreateMessageCommitLsnOnly();
-					if (commitLsnUpdateMsg)
-						BroadcastMessage(commitLsnUpdateMsg);
+					BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
 					lastSentCommitLsn = minQuorumLsn;
 				}
 				break;
