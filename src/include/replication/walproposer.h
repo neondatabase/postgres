@@ -244,7 +244,7 @@ typedef struct AppendRequestHeader
 	XLogRecPtr commitLsn;   /* LSN committed by quorum of walkeepers */
 	/*
 	 *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
-	 *  + 1 of last record streamed to everyone)
+	 *  + 1 of last chunk streamed to everyone)
 	 */
     XLogRecPtr truncateLsn;
     pg_uuid_t  proposerId; /* for monitoring/debugging */
@@ -289,8 +289,11 @@ typedef struct AppendResponse
 	 */
 	uint64 tag;
 	term_t     term;
-	term_t     epoch;
+	term_t epoch;
 	XLogRecPtr flushLsn;
+	// Safekeeper reports back his awareness about which WAL is committed, as
+	// this is a criterion for walproposer --sync mode exit
+	XLogRecPtr commitLsn;
 	HotStandbyFeedback hs;
 } AppendResponse;
 
@@ -344,6 +347,8 @@ void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
 void       StartReplication(StartReplicationCmd *cmd);
+void       WalProposerSync(int argc, char *argv[]);
+
 
 /* libpqwalproposer hooks & helper type */
 
