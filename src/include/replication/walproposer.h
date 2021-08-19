@@ -73,33 +73,31 @@ typedef enum
 /*
  * WAL safekeeper state
  *
- * Some states may be paired with additional modifiers (prefixed "SMOD"), which
- * indicate the type of libpq-specific polling that may be necessary to proceed
- * to that state. Polling types that would be single-use (like PQconnectPoll)
- * are just executed from within the state itself.
+ * States are listed here in the order that they're executed - with the only
+ * exception occuring from the "send WAL" cycle, which loops as:
  *
- * For each state that can be paired with a modifier, we list in the comment
- * above it the modifier(s) it can be paired with.
+ *   SS_IDLE -> SS_SEND_WAL (+ flush) -> SS_RECV_FEEDBACK -> SS_IDLE/SS_SEND_WAL
+ *
+ * Most states, upon failure, will move back to SS_OFFLINE by calls to
+ * ResetConnection or ShutdownConnection.
+ *
+ * Also note: In places we say that a state "immediately" moves to another. This
+ * happens in states that only exist to execute program logic, so they run
+ * exactly once (when moved into), without waiting for any socket conditions.
+ *
+ * For example, when we set a WalKeeper's state to SS_SEND_VOTE, we immediately
+ * call AdvancePollState - during which the WalKeeper switches its state to
+ * SS_WAIT_VERDICT.
  */
 typedef enum
 {
-	/* --- Modifiers --- */
-
-	/* Currently, there's only one modifier :) */
-	SMOD_NEEDS_FLUSH = 64, /* In order to finish moving to this state, we need to flush */
-
-	/* Marker for all possible modifiers - used as: state = state & (~SMOD_ALL) to remove modifiers */
-	SMOD_ALL = 64,
-
-	/* --- Regular states --- */
-
 	/*
 	 * Does not have an active connection and will stay that way until
 	 * further notice.
 	 *
 	 * Moves to SS_CONNECTING_WRITE by calls to ResetConnection.
 	 */
-	SS_OFFLINE = 0,
+	SS_OFFLINE,
 
 	/*
 	 * Connecting states. "_READ" waits for the socket to be available for
@@ -109,15 +107,12 @@ typedef enum
 	 *
 	 * After the connection is made, moves to SS_EXEC_STARTWALPUSH.
 	 */
-	SS_CONNECTING_READ,
 	SS_CONNECTING_WRITE,
+	SS_CONNECTING_READ,
 
 	/*
 	 * Sending the "START_WAL_PUSH" message as an empty query to the walkeeper.
-	 * May be paired with:
-	 *   - SMOD_NEEDS_FLUSH
-	 *
-	 * After the query sends, moves to SS_WAIT_EXEC_RESULT.
+	 * Performs a blocking send, then immediately moves to SS_WAIT_EXEC_RESULT.
 	 */
 	SS_EXEC_STARTWALPUSH,
 	/*
@@ -128,16 +123,13 @@ typedef enum
 	SS_WAIT_EXEC_RESULT,
 
 	/*
-	 * Executing the sending half of the handshake. May be paired with:
-	 *   - SMOD_NEEDS_FLUSH
-	 *
-	 * After sending, moves to SS_HANDSHAKE_RECV.
+	 * Executing the sending half of the handshake. Performs the blocking send,
+	 * then immediately moves to SS_HANDSHAKE_RECV.
 	 */
 	SS_HANDSHAKE_SEND,
 	/*
-	 * Executing the receiving half of the handshake.
-	 *
-	 * After receiving, moves to SS_VOTING.
+	 * Executing the receiving half of the handshake. After receiving, moves to
+	 * SS_VOTING.
 	 */
 	SS_HANDSHAKE_RECV,
 
@@ -150,15 +142,13 @@ typedef enum
 	 */
 	SS_VOTING,
 	/*
-	 * Currently sending the assigned vote. 
+	 * Performs a blocking send of the assigned vote, then immediately moves to
+	 * SS_WAIT_VERDICT.
 	 */
 	SS_SEND_VOTE,
 	/*
-	 * Sent voting information, waiting to receive confirmation from the node.
-	 * May be paired with:
-	 *   - SMOD_NEEDS_FLUSH
-	 *
-	 * After receiving, moves to SS_IDLE.
+	 * Already sent voting information, waiting to receive confirmation from the
+	 * node. After receiving, moves to SS_IDLE.
 	 */
 	SS_WAIT_VERDICT,
 
@@ -170,13 +160,17 @@ typedef enum
 	 */
 	SS_IDLE,
 	/*
-	 * Currently sending the message at currMsg. This state is only ever reached
-	 * through calls to SendMessageToNode. May be paired with:
-	 *   - SMOD_NEEDS_FLUSH
+	 * Start sending the message at currMsg. This state is only ever reached
+	 * through calls to SendMessageToNode.
 	 *
-	 * After sending, moves to SS_RECV_FEEDBACK.
+	 * Sending needs to flush; immediately moves to SS_SEND_WAL_FLUSH.
 	 */
 	SS_SEND_WAL,
+	/*
+	 * Flush the WAL message, repeated until successful. On success, moves to
+	 * SS_RECV_FEEDBACK.
+	 */
+	SS_SEND_WAL_FLUSH,
 	/*
 	 * Currently reading feedback from sending the WAL.
 	 *
@@ -313,7 +307,14 @@ typedef struct WalKeeper
 	char const*        host;
 	char const*        port;
 	char               conninfo[MAXCONNINFO]; /* connection info for connecting/reconnecting */
-	WalProposerConn*   conn;          /* postgres protocol connection to the walreceiver */
+
+	/*
+	 * postgres protocol connection to the WAL acceptor
+	 *
+	 * Equals NULL only when state = SS_OFFLINE. Nonblocking is set once we
+	 * reach SS_SEND_WAL; not before.
+	 */
+	WalProposerConn*   conn;
 
 	WalMessage*        currMsg;       /* message been send to the receiver */
 
@@ -408,23 +409,17 @@ typedef WalProposerConn* (*walprop_connect_start_fn) (char* conninfo);
 /* Re-exported PQconectPoll */
 typedef WalProposerConnectPollStatusType (*walprop_connect_poll_fn) (WalProposerConn* conn);
 
-/* Re-exported PQsendQuery */
+/* Blocking wrapper around PQsendQuery */
 typedef bool (*walprop_send_query_fn) (WalProposerConn* conn, char* query);
 
 /* Wrapper around PQconsumeInput + PQisBusy + PQgetResult */
 typedef WalProposerExecStatusType (*walprop_get_query_result_fn) (WalProposerConn* conn);
 
-/* Re-exported PQsetnonblocking */
-typedef int (*walprop_set_nonblocking_fn) (WalProposerConn* conn, int arg);
-
 /* Re-exported PQsocket */
 typedef pgsocket (*walprop_socket_fn) (WalProposerConn* conn);
 
-/* Re-exported PQflush */
-typedef int (*walprop_flush_fn) (WalProposerConn* conn);
-
-/* Re-exported PQconsumeInput */
-typedef int (*walprop_consume_input_fn) (WalProposerConn* conn);
+/* Wrapper around PQconsumeInput (if socket's read-ready) + PQflush */
+typedef int (*walprop_flush_fn) (WalProposerConn* conn, bool socket_read_ready);
 
 /* Re-exported PQfinish */
 typedef void (*walprop_finish_fn) (WalProposerConn* conn);
@@ -458,6 +453,13 @@ typedef PGAsyncWriteResult (*walprop_async_write_fn) (WalProposerConn* conn,
 													  void const* buf,
 													  size_t size);
 
+/*
+ * Blocking equivalent to walprop_async_write_fn
+ *
+ * Returns 'true' if successful, 'false' on failure.
+ */
+typedef bool (*walprop_blocking_write_fn) (WalProposerConn* conn, void const* buf, size_t size);
+
 /* All libpqwalproposer exported functions collected together. */
 typedef struct WalProposerFunctionsType
 {
@@ -467,13 +469,12 @@ typedef struct WalProposerFunctionsType
 	walprop_connect_poll_fn		walprop_connect_poll;
 	walprop_send_query_fn		walprop_send_query;
 	walprop_get_query_result_fn	walprop_get_query_result;
-	walprop_set_nonblocking_fn  walprop_set_nonblocking;
 	walprop_socket_fn			walprop_socket;
 	walprop_flush_fn			walprop_flush;
-	walprop_consume_input_fn	walprop_consume_input;
 	walprop_finish_fn			walprop_finish;
 	walprop_async_read_fn		walprop_async_read;
 	walprop_async_write_fn		walprop_async_write;
+	walprop_blocking_write_fn   walprop_blocking_write;
 } WalProposerFunctionsType;
 
 /* Allow the above functions to be "called" with normal syntax */
@@ -493,16 +494,16 @@ typedef struct WalProposerFunctionsType
 	WalProposerFunctions->walprop_set_nonblocking(conn, arg)
 #define walprop_socket(conn) \
 	WalProposerFunctions->walprop_socket(conn)
-#define walprop_flush(conn) \
-	WalProposerFunctions->walprop_flush(conn)
-#define walprop_consume_input(conn) \
-	WalProposerFunctions->walprop_consume_input(conn)
+#define walprop_flush(conn, consume_input) \
+	WalProposerFunctions->walprop_flush(conn, consume_input)
 #define walprop_finish(conn) \
 	WalProposerFunctions->walprop_finish(conn)
 #define walprop_async_read(conn, buf, amount) \
 	WalProposerFunctions->walprop_async_read(conn, buf, amount)
 #define walprop_async_write(conn, buf, size) \
 	WalProposerFunctions->walprop_async_write(conn, buf, size)
+#define walprop_blocking_write(conn, buf, size) \
+	WalProposerFunctions->walprop_blocking_write(conn, buf, size)
 
 /*
  * The runtime location of the libpqwalproposer functions.

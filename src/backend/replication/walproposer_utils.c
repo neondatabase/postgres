@@ -38,8 +38,7 @@ FormatWalKeeperState(WalKeeperState state)
 {
 	char* return_val = NULL;
 
-	/* Only look at the "base" state - without any modifiers */
-	switch (state & (~SMOD_ALL))
+	switch (state)
 	{
 		case SS_OFFLINE:
 			return_val = "offline";
@@ -74,6 +73,9 @@ FormatWalKeeperState(WalKeeperState state)
 			break;
 		case SS_SEND_WAL:
 			return_val = "WAL-sending";
+			break;
+		case SS_SEND_WAL_FLUSH:
+			return_val = "WAL-sending (flushing)";
 			break;
 		case SS_RECV_FEEDBACK:
 			return_val = "WAL-feedback-receiving";
@@ -120,39 +122,53 @@ AssertEventsOkForState(uint32 events, WalKeeper* wk)
 uint32
 WalKeeperStateDesiredEvents(WalKeeperState state)
 {
-	if (state & SMOD_NEEDS_FLUSH)
-		/* Flushing waits for read- or write-ready */
-		return WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
+	uint32 result;
 
 	/* If the state doesn't have a modifier, we can check the base state */
-	switch (state & (~SMOD_ALL))
+	switch (state)
 	{
 		/* Connecting states say what they want in the name */
 		case SS_CONNECTING_READ:
-			return WL_SOCKET_READABLE;
+			result = WL_SOCKET_READABLE;
+			break;
 		case SS_CONNECTING_WRITE:
-			return WL_SOCKET_WRITEABLE;
+			result = WL_SOCKET_WRITEABLE;
+			break;
 
-		/* A number of states require the socket to be read-ready to continue.
-		 *
-		 * SS_WAIT_EXEC_RESULT uses walprop_get_query_result. */
+		/* Reading states need the socket to be read-ready to continue */
 		case SS_WAIT_EXEC_RESULT:
-		/* And the rest use walprop_async_read (indirectly, through AsyncRead) */
 		case SS_HANDSHAKE_RECV:
 		case SS_WAIT_VERDICT:
 		case SS_RECV_FEEDBACK:
-			return WL_SOCKET_READABLE;
+			result = WL_SOCKET_READABLE;
+			break;
+
+		/* Most writing states don't require any socket conditions */
+		case SS_EXEC_STARTWALPUSH:
+		case SS_HANDSHAKE_SEND:
+		case SS_SEND_VOTE:
+		case SS_SEND_WAL:
+			result = WL_NO_EVENTS;
+			break;
+		/* but flushing does require read- or write-ready */
+		case SS_SEND_WAL_FLUSH:
+			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
+			break;
 
 		/* Idle states use read-readiness as a sign that the connection has been
 		 * disconnected. */
 		case SS_VOTING:
 		case SS_IDLE:
-			return WL_SOCKET_READABLE;
+			result = WL_SOCKET_READABLE;
+			break;
+
+		/* The offline state expects no events. */
+		case SS_OFFLINE:
+			result = WL_NO_EVENTS;
+			break;
 	}
 
-	/* Everything else (excluding SS_OFFLINE) uses modifiers when they need to
-	 * wait, so right now they aren't waiting on anything */
-	return WL_NO_EVENTS;
+	return result;
 }
 
 /* Returns whether the WAL keeper state corresponds to something that should be
