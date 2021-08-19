@@ -396,6 +396,8 @@ void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
 void       StartReplication(StartReplicationCmd *cmd);
+void       WalProposerSync(int argc, char *argv[]);
+
 
 /* libpqwalproposer hooks & helper type */
 

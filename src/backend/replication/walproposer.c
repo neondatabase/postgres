@@ -15,6 +15,7 @@
 #include "replication/walreceiver.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
+#include "postmaster/postmaster.h"
 #include "storage/pmsignal.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -25,7 +26,6 @@
 char* wal_acceptors_list;
 int   wal_acceptor_reconnect_timeout;
 bool  am_wal_proposer;
-
 
 /* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
 WalProposerFunctionsType* WalProposerFunctions = NULL;
@@ -49,11 +49,15 @@ static int          n_votes = 0;
 static int          n_connected = 0;
 static TimestampTz  last_reconnect_attempt;
 static uint32       request_poll_immediate; /* bitset of walkeepers requesting AdvancePollState */
+static bool         syncWalKeepers;
 
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
 static bool ReadPGAsyncIntoValue(int i, void* value, size_t value_size);
 static void HackyRemoveWalProposerEvent(int to_remove);
+static WalMessage* CreateMessageVCLOnly(void);
+static void BroadcastMessage(WalMessage* msg);
+
 
 /*
  * Combine hot standby feedbacks from all walkeepers.
@@ -302,17 +306,19 @@ HandleWalKeeperResponse(void)
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
-		ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
+		if (!syncWalKeepers)
+			ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
 	}
 	CombineHotStanbyFeedbacks(&hsFeedback);
 	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
 	{
 		lastFeedback.hs = hsFeedback;
-		ProcessStandbyHSFeedback(hsFeedback.ts,
-								 XidFromFullTransactionId(hsFeedback.xmin),
-								 EpochFromFullTransactionId(hsFeedback.xmin),
-								 XidFromFullTransactionId(hsFeedback.catalog_xmin),
-								 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
+		if (!syncWalKeepers)
+			ProcessStandbyHSFeedback(hsFeedback.ts,
+									 XidFromFullTransactionId(hsFeedback.xmin),
+									 EpochFromFullTransactionId(hsFeedback.xmin),
+									 XidFromFullTransactionId(hsFeedback.catalog_xmin),
+									 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
 	}
 
 
@@ -325,6 +331,13 @@ HandleWalKeeperResponse(void)
 		{
 			Assert(restartLsn < msg->req.endLsn);
 			restartLsn = msg->req.endLsn;
+			if (syncWalKeepers && restartLsn >= prop.VCL && msg->size == sizeof(WalKeeperRequest)) /* VCL-only message */
+			{
+				/* All walkeepers synced! */
+				if (prop.VCL != serverInfo.walSegSize)
+					fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
+				exit(0);
+			}
 		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(WalKeeperRequest));
 		free(msg);
@@ -336,20 +349,13 @@ HandleWalKeeperResponse(void)
 char *zenith_timeline_walproposer = NULL;
 char *zenith_tenant_walproposer = NULL;
 
-/*
- * WAL proposer bgworeker entry point
- */
-void
-WalProposerMain(Datum main_arg)
+
+static void
+WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 {
 	char* host;
 	char* sep;
 	char* port;
-
-	/* Establish signal handlers. */
-	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
-	pqsignal(SIGHUP, SignalHandlerForConfigReload);
-	pqsignal(SIGTERM, die);
 
 	/* Load the libpq-specific functions */
 	load_file("libpqwalproposer", false);
@@ -359,10 +365,7 @@ WalProposerMain(Datum main_arg)
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-
 	load_file("zenith", false);
-
-	BackgroundWorkerUnblockSignals();
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -393,11 +396,9 @@ WalProposerMain(Datum main_arg)
 	}
 	quorum = n_walkeepers/2 + 1;
 
-	GetXLogReplayRecPtr(&ThisTimeLineID);
-
 	/* Fill information about server */
 	serverInfo.timeline = ThisTimeLineID;
-	serverInfo.walEnd = GetFlushRecPtr();
+	serverInfo.walEnd = flushRecPtr;
 	serverInfo.walSegSize = wal_segment_size;
 	serverInfo.pgVersion = PG_VERSION_NUM;
 	if (!zenith_timeline_walproposer)
@@ -414,7 +415,47 @@ WalProposerMain(Datum main_arg)
 
 	serverInfo.protocolVersion = SK_PROTOCOL_VERSION;
 	pg_strong_random(&serverInfo.nodeId.uuid, sizeof(serverInfo.nodeId.uuid));
-	serverInfo.systemId = GetSystemIdentifier();
+	serverInfo.systemId = systemId;
+
+	InitEventSet();
+}
+
+static void
+WalProposerLoop(void)
+{
+	while (true)
+		WalProposerPoll();
+}
+
+static void
+WalProposerStart(void)
+{
+
+	/* Initiate connections to all walkeeper nodes */
+	for (int i = 0; i < n_walkeepers; i++)
+	{
+		ResetConnection(i);
+	}
+
+	WalProposerLoop();
+}
+
+/*
+ * WAL proposer bgworeker entry point
+ */
+void
+WalProposerMain(Datum main_arg)
+{
+	/* Establish signal handlers. */
+	pqsignal(SIGUSR1, procsignal_sigusr1_handler);
+	pqsignal(SIGHUP, SignalHandlerForConfigReload);
+	pqsignal(SIGTERM, die);
+
+	BackgroundWorkerUnblockSignals();
+
+	GetXLogReplayRecPtr(&ThisTimeLineID);
+
+	WalProposerInit(GetFlushRecPtr(), GetSystemIdentifier());
 
 	last_reconnect_attempt = GetCurrentTimestamp();
 
@@ -422,7 +463,6 @@ WalProposerMain(Datum main_arg)
 	am_wal_proposer = true;
 	am_walsender = true;
 	InitWalSender();
-	InitEventSet();
 
 	/* Create replication slot for WAL proposer if not exists */
 	if (SearchNamedReplicationSlot(WAL_PROPOSER_SLOT_NAME, false) == NULL)
@@ -431,14 +471,35 @@ WalProposerMain(Datum main_arg)
 		ReplicationSlotRelease();
 	}
 
-	/* Initiate connections to all walkeeper nodes */
-	for (int i = 0; i < n_walkeepers; i++)
-	{
-		ResetConnection(i);
-	}
+	WalProposerStart();
+}
 
-	while (true)
-		WalProposerPoll();
+void
+WalProposerSync(int argc, char *argv[])
+{
+	syncWalKeepers = true;
+
+	InitStandaloneProcess(argv[0]);
+
+	SetProcessingMode(InitProcessing);
+
+	/*
+	 * Set default values for command-line options.
+	 */
+	InitializeGUCOptions();
+
+	/* Acquire configuration parameters */
+	if (!SelectConfigFiles(NULL, progname))
+		exit(1);
+
+	process_shared_preload_libraries_in_progress = true;
+	postmaster_alive_fds[POSTMASTER_FD_WATCH] = 0; /* hack to enable waiting for postmaster death without postmaster present */
+	WalProposerInit(0, 0);
+	process_shared_preload_libraries_in_progress = false;
+
+	BackgroundWorkerUnblockSignals();
+
+	WalProposerStart();
 }
 
 static void
@@ -563,8 +624,7 @@ CreateMessageVCLOnly(void)
 
 	if (lastSentLsn == 0)
 	{
-		/* FIXME: We haven't sent anything yet. Not sure what to do then.. */
-		return NULL;
+		lastSentLsn = prop.VCL;
 	}
 
 	msg = (WalMessage*)malloc(sizeof(WalMessage));
@@ -746,6 +806,7 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 					break;
 				}
 			}
+			BroadcastMessage(CreateMessageVCLOnly());
 		}
 	}
 	return true;
@@ -1309,6 +1370,19 @@ ExecuteNextProtocolState:
 						/* Perform recovery */
 						if (!WalProposerRecovery(leader, serverInfo.timeline, restartLsn, prop.VCL))
 							elog(FATAL, "Failed to recover state");
+
+						if (syncWalKeepers)
+						{
+							/* Wait until all walkeepers are synced */
+							WalProposerLoop();
+						}
+					}
+					else if (syncWalKeepers)
+					{
+						/* Sync is not needed: just exit */
+						if (prop.VCL != serverInfo.walSegSize)
+							fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
+						exit(0);
 					}
 					WalProposerStartStreaming(prop.VCL);
 					/* Should not return here */
@@ -1368,7 +1442,6 @@ ExecuteNextProtocolState:
 			{
 				WalMessage* next;
 				XLogRecPtr  minQuorumLsn;
-				WalMessage* vclUpdateMsg;
 
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
@@ -1398,9 +1471,7 @@ ExecuteNextProtocolState:
 
 				if (minQuorumLsn > lastSentVCLLsn)
 				{
-					vclUpdateMsg = CreateMessageVCLOnly();
-					if (vclUpdateMsg)
-						BroadcastMessage(vclUpdateMsg);
+					BroadcastMessage(CreateMessageVCLOnly());
 					lastSentVCLLsn = minQuorumLsn;
 				}
 				break;

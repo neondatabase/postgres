@@ -35,6 +35,7 @@
 #include "common/username.h"
 #include "port/atomics.h"
 #include "postmaster/postmaster.h"
+#include "replication/walproposer.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/help_config.h"
@@ -209,6 +210,8 @@ main(int argc, char *argv[])
 		WalRedoMain(argc, argv,
 					 NULL,		/* no dbname */
 					 strdup(get_user_name_or_exit(progname)));	/* does not return */
+	else if (argc > 1 && strcmp(argv[1], "--sync-walkeepers") == 0)
+		WalProposerSync(argc, argv);
 	else
 		PostmasterMain(argc, argv); /* does not return */
 	abort();					/* should not get here */
