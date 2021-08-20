@@ -106,10 +106,12 @@ InitEventSet(void)
 }
 
 /*
- * Updates the events we're waiting on for the WAL keeper, setting it to the
- * provided `events`
+ * Updates the events we're already waiting on for the WAL keeper, setting it to
+ * the provided `events`
  *
- * This function expects that there is already an event for the WAL keeper.
+ * This function is called any time the WAL keeper's state switches to one where
+ * it has to wait to continue. This includes the full body of AdvancePollState
+ * and each call to AsyncRead/BlockingWrite/AsyncWrite/AsyncFlush.
  */
 static void
 UpdateEventSet(WalKeeper* wk, uint32 events)
@@ -432,6 +434,9 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 
 /*
  * Send message to the particular node
+ *
+ * Always updates the state and event set for the WAL keeper; setting either of
+ * these before calling would be redundant work.
  */
 static void
 SendMessageToNode(int i, WalMessage* msg)
@@ -810,8 +815,10 @@ AdvancePollState(int i, uint32 events)
 						/* Once we're fully connected, we can move to the next state */
 						wk->state = SS_EXEC_STARTWALPUSH;
 
-						/* We will *eventually* need the socket to be readable, but
-						 * not quite yet. */
+						/* Even though SS_EXEC_STARTWALPUSH doesn't wait on anything,
+						 * we do need to replace the current event, so we have to
+						 * just pick something. We'll eventually need the socket to
+						 * be readable, so we go with that. */
 						new_events = WL_SOCKET_READABLE;
 						break;
 
@@ -870,7 +877,8 @@ AdvancePollState(int i, uint32 events)
 					/* Needs repeated calls to finish. Wait until the socket is
 					 * readable */
 					case WP_EXEC_NEEDS_INPUT:
-						UpdateEventSet(wk, WL_SOCKET_READABLE);
+						/* SS_WAIT_EXEC_RESULT is always reached through an
+						 * event, so we don't need to update the event set */
 						break;
 
 					case WP_EXEC_FAILED:
@@ -885,7 +893,7 @@ AdvancePollState(int i, uint32 events)
 						elog(WARNING, "Received bad resonse from walkeeper %s:%s query execution",
 								wk->host, wk->port);
 						ResetConnection(i);
-						break;
+						return;
 				}
 				break;
 
@@ -909,8 +917,9 @@ AdvancePollState(int i, uint32 events)
 
 				/* Protocol is all good, move to voting. */
 				wk->state = SS_VOTING;
-				/* voting is an idle state; wait for read-ready in case the
-				 * connection closes */
+				/* Don't need to update the event set yet. Either we update the
+				 * event set to WL_SOCKET_READABLE *or* we change the state to
+				 * SS_SEND_VOTE in the loop below */
 				UpdateEventSet(wk, WL_SOCKET_READABLE);
 				wk->feedback.flushLsn = truncateLsn;
 				wk->feedback.hs.ts = 0;
@@ -925,7 +934,13 @@ AdvancePollState(int i, uint32 events)
 				 * We'll eventually get a task when the election starts.
 				 *
 				 * If we do have quorum, we can start an election */
-				if (++n_connected >= quorum)
+				if (++n_connected < quorum)
+				{
+					/* SS_VOTING is an idle state; read-ready indicates the
+					 * connection closed. */
+					UpdateEventSet(wk, WL_SOCKET_READABLE);
+				}
+				else
 				{
 					if (n_connected == quorum)
 					{
@@ -995,11 +1010,17 @@ AdvancePollState(int i, uint32 events)
 				Assert(wk->voteResponse.term == propTerm);
 
 				/* Handshake completed, do we have quorum? */
-				wk->state = SS_IDLE;
-				UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for read-ready */
 
-				if (++n_votes == quorum)
+				if (++n_votes != quorum)
 				{
+					/* We are already streaming WAL: send all pending messages to the attached walkeeper */
+					SendMessageToNode(i, msgQueueHead);
+				}
+				else
+				{
+					wk->state = SS_IDLE;
+					UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for read-ready */
+
 					DetermineEpochStartLsn();
 
 					/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
@@ -1013,11 +1034,6 @@ AdvancePollState(int i, uint32 events)
 					}
 					WalProposerStartStreaming(propEpochStartLsn);
 					/* Should not return here */
-				}
-				else
-				{
-					/* We are already streaming WAL: send all pending messages to the attached walkeeper */
-					SendMessageToNode(i, msgQueueHead);
 				}
 
 				break;
@@ -1072,12 +1088,9 @@ AdvancePollState(int i, uint32 events)
 				Assert(wk->feedback.flushLsn == wk->currMsg->req.endLsn);
 				wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms receiving of this message */
 
-				wk->state = SS_IDLE;
-				/* Don't update the event set; that's handled by SendMessageToNode if necessary */
-
 				wk->currMsg = NULL;
 				HandleWalKeeperResponse();
-				SendMessageToNode(i, next);
+				SendMessageToNode(i, next); /* Updates state & event set */
 
 				/*
 				 * Also send the new commit lsn to all the walkeepers.
@@ -1117,6 +1130,7 @@ AsyncRead(int i, void* value, size_t value_size)
 	WalKeeper* wk = &walkeeper[i];
 	char *buf = NULL;
 	int buf_size = -1;
+	uint32 events;
 
 	switch (walprop_async_read(wk->conn, &buf, &buf_size))
 	{
@@ -1153,6 +1167,12 @@ AsyncRead(int i, void* value, size_t value_size)
 
 	/* Copy the resulting info into place */
 	memcpy(value, buf, buf_size);
+
+	/* Update the events for the WalKeeper, if it's going to wait */
+	events = WalKeeperStateDesiredEvents(wk->state);
+	if (events)
+		UpdateEventSet(wk, events);
+
 	return true;
 }
 
@@ -1211,7 +1231,6 @@ AsyncWrite(int i, void* msg, size_t msg_size, WalKeeperState flush_state, WalKee
 			/* We still need to call PQflush some more to finish the job; go to
 			 * the appropriate state */
 			wk->state = flush_state;
-			UpdateEventSet(wk, WL_SOCKET_WRITEABLE|WL_SOCKET_READABLE);
 			break;
 		case PG_ASYNC_WRITE_FAIL:
 			elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
