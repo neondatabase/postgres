@@ -983,8 +983,7 @@ AdvancePollState(int i, uint32 events)
 				if (!BlockingWrite(i, &voteRequest, sizeof(voteRequest), SS_WAIT_VERDICT))
 					return;
 
-				/* If successful, continue on to SS_WAIT_VERDICT (in the next
-				 * iteration of the loop) */
+				/* If successful, wait for read-ready with SS_WAIT_VERDICT */
 				break;
 
 			/* Start reading the walkeeper response for our candidate */
