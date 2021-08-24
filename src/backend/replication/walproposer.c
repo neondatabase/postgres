@@ -2,7 +2,43 @@
  *
  * walproposer.c
  *
- * Broadcast WAL stream to Zenith WAL acceptetors
+ * Proposer/leader part of the total order broadcast protocol between
+ * postgres and WAL safekeepers.
+ *
+ * We have two ways of launching WalProposer:
+ *
+ *   1. As a background worker which will run physical WalSender with
+ *      am_wal_proposer flag set to true. WalSender in turn would handle
+ *      WAL reading part and call WalProposer when ready to scatter WAL.
+ *
+ *   2. As a standalone utility by running `postgres --sync-walkeepers`.
+ *      That is needed to create LSN from which it is safe to start
+ *      postgres. More specifically it addresses following problems:
+ *
+ *      a) During the normal work VCL (aka commit_lsn) at safekeeper can
+ *         lag behind VCL in postgres, so postgres may already had replied
+ *         to the client that some LSN is committed, but safekeepers are not
+ *         yet aware. We have recovery procedure here that can establish
+ *         proper new VCL and download missing WAL, but we can't easily replay
+ *         it in the background worker in already running postgres. So instead
+ *         we run `postgres --sync-walkeepers` to advance and align VCL on the
+ *         majority of safekeepers. Then we know that no such recovery is
+ *         needed during postgres start.
+ *
+ *      b) compute postgres needs data directory with non-rel files that are
+ *         downloaded from pageserver by calling basebackup@LSN. So, at first
+ *         we need to know that LSN and we can't ask pageserver about it as it
+ *         may still receive some WAL from safekeepers. And secondly pageserver
+ *         can be connected to a safekeeper with lagging VCL, so it will never
+ *         receive proper LSN that is going to be new VCL. So aligning VCL on
+ *         safekeepers also ensures that pageserver eventually receives LSN
+ *         that would be needed for basebackup.
+ *
+ *      TODO: check that LSN on safekeepers after start is the same as it was
+ *            after `postgres --sync-walkeepers`.
+ *      TODO: recovery cycle in bgworker mode isn't necessary since we
+ *            did that before start.
+ *-------------------------------------------------------------------------
  */
 #include <signal.h>
 #include <unistd.h>
@@ -49,6 +85,8 @@ static int          n_votes = 0;
 static int          n_connected = 0;
 static TimestampTz  last_reconnect_attempt;
 static uint32       request_poll_immediate; /* bitset of walkeepers requesting AdvancePollState */
+
+/* Set to true only in standalone run of `postgres --sync-walkeepers` (see comment on top) */
 static bool         syncWalKeepers;
 
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
