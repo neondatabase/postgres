@@ -297,6 +297,7 @@ typedef struct WalKeeperInfo
 	ServerInfo server;
 	XLogRecPtr commitLsn;         /* part of WAL acknowledged by quorum */
 	XLogRecPtr flushLsn;          /* locally flushed part of WAL */
+	XLogRecPtr safeLsn;           /* last flushed record LSN */
 	XLogRecPtr restartLsn;        /* minimal LSN which may be needed for recovery of some walkeeper: min(commitLsn) for all walkeepers */
 } WalKeeperInfo;
 
@@ -348,6 +349,7 @@ typedef struct WalKeeperResponse
 {
 	uint64     epoch;
 	XLogRecPtr flushLsn;
+	XLogRecPtr safeLsn;
 	HotStandbyFeedback hs;
 } WalKeeperResponse;
 

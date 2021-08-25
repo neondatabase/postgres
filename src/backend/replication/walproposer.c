@@ -312,10 +312,11 @@ ResetConnection(int i)
 }
 
 /*
- * Calculate WAL position acknowledged by quorum
+ * Calculate WAL flush position acknowledged by quorum:
+ * LSN flushed by quorum of safekeepers
  */
 static XLogRecPtr
-GetAcknowledgedByQuorumWALPosition(void)
+GetAcknowledgedByQuorumFlushLSN(void)
 {
 	XLogRecPtr responses[MAX_WALKEEPERS];
 	/*
@@ -334,13 +335,37 @@ GetAcknowledgedByQuorumWALPosition(void)
 	return responses[n_walkeepers - quorum];
 }
 
+/*
+ * Calculate safe WAL replay position acknowledged by quorum:
+ * last record LSN flushed by quorum of safekeepers
+ */
+static XLogRecPtr
+GetAcknowledgedByQuorumLastRecordLSN(void)
+{
+	XLogRecPtr responses[MAX_WALKEEPERS];
+	/*
+	 * Sort acknowledged LSNs
+	 */
+	for (int i = 0; i < n_walkeepers; i++)
+	{
+		responses[i] = walkeeper[i].feedback.epoch == prop.epoch
+			? walkeeper[i].feedback.safeLsn : prop.VCL;
+	}
+	qsort(responses, n_walkeepers, sizeof(XLogRecPtr), CompareLsn);
+
+	/*
+	 * Get the smallest LSN committed by quorum
+	 */
+	return responses[n_walkeepers - quorum];
+}
+
 static void
 HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn;
 
-	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+	minQuorumLsn = GetAcknowledgedByQuorumFlushLSN();
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
@@ -532,6 +557,7 @@ WalProposerSync(int argc, char *argv[])
 
 	process_shared_preload_libraries_in_progress = true;
 	postmaster_alive_fds[POSTMASTER_FD_WATCH] = 0; /* hack to enable waiting for postmaster death without postmaster present */
+	ThisTimeLineID = 1;
 	WalProposerInit(0, 0);
 	process_shared_preload_libraries_in_progress = false;
 
@@ -574,7 +600,7 @@ SendMessageToNode(int i, WalMessage* msg)
 	if (wk->currMsg)
 	{
 		wk->currMsg->req.restartLsn = restartLsn;
-		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
+		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumLastRecordLSN();
 
 		/* Once we've selected and set up our message, actually start sending it. */
 		wk->state         = SS_SEND_WAL;
@@ -700,11 +726,11 @@ StartElection(void)
 			prop.nodeId.term = Max(walkeeper[i].info.server.nodeId.term, prop.nodeId.term);
 			restartLsn = Max(walkeeper[i].info.restartLsn, restartLsn);
 			if (walkeeper[i].info.epoch > prop.epoch
-				|| (walkeeper[i].info.epoch == prop.epoch && walkeeper[i].info.flushLsn > prop.VCL))
+				|| (walkeeper[i].info.epoch == prop.epoch && walkeeper[i].info.safeLsn > prop.VCL))
 
 			{
 				prop.epoch = walkeeper[i].info.epoch;
-				prop.VCL = walkeeper[i].info.flushLsn;
+				prop.VCL = walkeeper[i].info.safeLsn;
 				leader = i;
 			}
 		}
@@ -717,6 +743,7 @@ StartElection(void)
 			if (walkeeper[i].info.epoch == prop.epoch)
 			{
 				walkeeper[i].feedback.flushLsn = walkeeper[i].info.flushLsn;
+				walkeeper[i].feedback.safeLsn = walkeeper[i].info.safeLsn;
 			}
 			else
 			{
@@ -1298,6 +1325,7 @@ ExecuteNextProtocolState:
 				wk->state     = SS_VOTING;
 				wk->pollState = SPOLL_IDLE;
 				wk->feedback.flushLsn = restartLsn;
+				wk->feedback.safeLsn = restartLsn;
 				wk->feedback.hs.ts = 0;
 
 				/* Check if we have quorum. If there aren't enough walkeepers, wait and do nothing.
@@ -1505,10 +1533,11 @@ ExecuteNextProtocolState:
 				 * FIXME: This is redundant for walkeepers that have other outbound messages
 				 * pending.
 				 */
-				minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+				minQuorumLsn = GetAcknowledgedByQuorumLastRecordLSN();
 
 				if (minQuorumLsn > lastSentVCLLsn)
 				{
+					elog(LOG, "Broadcast VCL only message %X/%X",  LSN_FORMAT_ARGS(minQuorumLsn));
 					BroadcastMessage(CreateMessageVCLOnly());
 					lastSentVCLLsn = minQuorumLsn;
 				}
