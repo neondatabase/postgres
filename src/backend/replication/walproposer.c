@@ -89,6 +89,8 @@ static uint32       request_poll_immediate; /* bitset of walkeepers requesting A
 /* Set to true only in standalone run of `postgres --sync-walkeepers` (see comment on top) */
 static bool         syncWalKeepers;
 
+static bool         disableVCLOnlyMessages;
+
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
 static bool ReadPGAsyncIntoValue(int i, void* value, size_t value_size);
@@ -312,11 +314,10 @@ ResetConnection(int i)
 }
 
 /*
- * Calculate WAL flush position acknowledged by quorum:
- * LSN flushed by quorum of safekeepers
+ * Calculate WAL position acknowledged by quorum
  */
 static XLogRecPtr
-GetAcknowledgedByQuorumFlushLSN(void)
+GetAcknowledgedByQuorumWALPosition(void)
 {
 	XLogRecPtr responses[MAX_WALKEEPERS];
 	/*
@@ -335,37 +336,13 @@ GetAcknowledgedByQuorumFlushLSN(void)
 	return responses[n_walkeepers - quorum];
 }
 
-/*
- * Calculate safe WAL replay position acknowledged by quorum:
- * last record LSN flushed by quorum of safekeepers
- */
-static XLogRecPtr
-GetAcknowledgedByQuorumLastRecordLSN(void)
-{
-	XLogRecPtr responses[MAX_WALKEEPERS];
-	/*
-	 * Sort acknowledged LSNs
-	 */
-	for (int i = 0; i < n_walkeepers; i++)
-	{
-		responses[i] = walkeeper[i].feedback.epoch == prop.epoch
-			? walkeeper[i].feedback.safeLsn : prop.VCL;
-	}
-	qsort(responses, n_walkeepers, sizeof(XLogRecPtr), CompareLsn);
-
-	/*
-	 * Get the smallest LSN committed by quorum
-	 */
-	return responses[n_walkeepers - quorum];
-}
-
 static void
 HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn;
 
-	minQuorumLsn = GetAcknowledgedByQuorumFlushLSN();
+	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
 	{
 		lastFeedback.flushLsn = minQuorumLsn;
@@ -394,13 +371,13 @@ HandleWalKeeperResponse(void)
 		{
 			Assert(restartLsn < msg->req.endLsn);
 			restartLsn = msg->req.endLsn;
-			if (syncWalKeepers && restartLsn >= prop.VCL && msg->size == sizeof(WalKeeperRequest)) /* VCL-only message */
-			{
-				/* All walkeepers synced! */
-				if (prop.VCL != serverInfo.walSegSize)
-					fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
-				exit(0);
-			}
+		}
+		if (syncWalKeepers && msg->req.endLsn >= prop.VCL && msg->size == sizeof(WalKeeperRequest)) /* VCL-only message */
+		{
+			/* All walkeepers synced! */
+			if (prop.VCL != serverInfo.walSegSize)
+				fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
+			exit(0);
 		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(WalKeeperRequest));
 		free(msg);
@@ -540,6 +517,7 @@ WalProposerMain(Datum main_arg)
 void
 WalProposerSync(int argc, char *argv[])
 {
+	int fd[2];
 	syncWalKeepers = true;
 
 	InitStandaloneProcess(argv[0]);
@@ -556,7 +534,9 @@ WalProposerSync(int argc, char *argv[])
 		exit(1);
 
 	process_shared_preload_libraries_in_progress = true;
-	postmaster_alive_fds[POSTMASTER_FD_WATCH] = 0; /* hack to enable waiting for postmaster death without postmaster present */
+
+	pipe(fd); /* contruct dummy pipe on which read descriptor we can wait forever */
+	postmaster_alive_fds[POSTMASTER_FD_WATCH] = fd[0]; /* hack to enable waiting for postmaster death without postmaster present */
 	ThisTimeLineID = 1;
 	WalProposerInit(0, 0);
 	process_shared_preload_libraries_in_progress = false;
@@ -572,6 +552,10 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 	StartReplicationCmd cmd;
 	elog(LOG, "WAL proposer starts streaming at %X/%X",
 		 LSN_FORMAT_ARGS(startpos));
+
+	/* Set safe value for last written LSN */
+	SetLastWrittenPageLSN(startpos);
+
 	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
 	cmd.timeline = serverInfo.timeline;
 	cmd.startpoint = startpos;
@@ -599,8 +583,8 @@ SendMessageToNode(int i, WalMessage* msg)
 	/* Only try to send the message if it's non-null */
 	if (wk->currMsg)
 	{
-		wk->currMsg->req.restartLsn = restartLsn;
-		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumLastRecordLSN();
+		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
+		wk->currMsg->req.restartLsn = Min(restartLsn, wk->currMsg->req.commitLsn);
 
 		/* Once we've selected and set up our message, actually start sending it. */
 		wk->state         = SS_SEND_WAL;
@@ -725,16 +709,20 @@ StartElection(void)
 		{
 			prop.nodeId.term = Max(walkeeper[i].info.server.nodeId.term, prop.nodeId.term);
 			restartLsn = Max(walkeeper[i].info.restartLsn, restartLsn);
+			elog(LOG, "walkeeper %d epoch is " INT64_FORMAT " flushLsn=%X/%X",
+				 i, walkeeper[i].info.epoch, LSN_FORMAT_ARGS(walkeeper[i].info.flushLsn));
 			if (walkeeper[i].info.epoch > prop.epoch
-				|| (walkeeper[i].info.epoch == prop.epoch && walkeeper[i].info.safeLsn > prop.VCL))
+				|| (walkeeper[i].info.epoch == prop.epoch && walkeeper[i].info.flushLsn > prop.VCL))
 
 			{
 				prop.epoch = walkeeper[i].info.epoch;
-				prop.VCL = walkeeper[i].info.safeLsn;
+				prop.VCL = walkeeper[i].info.flushLsn;
 				leader = i;
 			}
 		}
 	}
+	elog(LOG, "Election result: epoch=" INT64_FORMAT ", VCL=%X/%X",
+		 prop.VCL, LSN_FORMAT_ARGS(prop.VCL));
 	/* Only walkeepers from most recent epoch can report it's FlushLsn to master */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -743,7 +731,6 @@ StartElection(void)
 			if (walkeeper[i].info.epoch == prop.epoch)
 			{
 				walkeeper[i].feedback.flushLsn = walkeeper[i].info.flushLsn;
-				walkeeper[i].feedback.safeLsn = walkeeper[i].info.safeLsn;
 			}
 			else
 			{
@@ -831,20 +818,30 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 	if (walrcv_startstreaming(wrconn, &options))
 	{
 		XLogRecPtr rec_start_lsn;
-		XLogRecPtr rec_end_lsn;
+		XLogRecPtr rec_end_lsn = 0;
 		int len;
 		char *buf;
 		pgsocket wait_fd = PGINVALID_SOCKET;
-		while ((len = walrcv_receive(wrconn, &buf, &wait_fd)) > 0)
+		while ((len = walrcv_receive(wrconn, &buf, &wait_fd)) >= 0)
 		{
-			Assert(buf[0] == 'w');
-			memcpy(&rec_start_lsn, &buf[XLOG_HDR_START_POS], sizeof rec_start_lsn);
-			rec_start_lsn = pg_ntoh64(rec_start_lsn);
-			rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
-			(void)CreateMessage(rec_start_lsn, buf, len);
-			if (rec_end_lsn >= endpos)
-				break;
+			if (len == 0) {
+				(void)WaitLatchOrSocket(MyLatch,
+										WL_EXIT_ON_PM_DEATH | WL_SOCKET_READABLE,
+										wait_fd,
+										-1,
+										WAIT_EVENT_WAL_RECEIVER_MAIN);
+			} else {
+				Assert(buf[0] == 'w');
+				memcpy(&rec_start_lsn, &buf[XLOG_HDR_START_POS], sizeof rec_start_lsn);
+				rec_start_lsn = pg_ntoh64(rec_start_lsn);
+				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
+				(void)CreateMessage(rec_start_lsn, buf, len);
+				elog(DEBUG1, "Recover message %X/%X length %d", LSN_FORMAT_ARGS(rec_start_lsn), len);
+				if (rec_end_lsn >= endpos)
+					break;
+			}
 		}
+		elog(DEBUG1, "End of replication stream at %X/%X: %m", LSN_FORMAT_ARGS(rec_end_lsn));
 		walrcv_disconnect(wrconn);
 	}
 	else
@@ -855,6 +852,7 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 		return false;
 	}
 	/* Setup restart point for all walkeepers */
+	disableVCLOnlyMessages = true;
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		if (walkeeper[i].state == SS_IDLE)
@@ -871,9 +869,10 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 					break;
 				}
 			}
-			BroadcastMessage(CreateMessageVCLOnly());
 		}
 	}
+	disableVCLOnlyMessages = false;
+	BroadcastMessage(CreateMessageVCLOnly());
 	return true;
 }
 
@@ -1325,7 +1324,6 @@ ExecuteNextProtocolState:
 				wk->state     = SS_VOTING;
 				wk->pollState = SPOLL_IDLE;
 				wk->feedback.flushLsn = restartLsn;
-				wk->feedback.safeLsn = restartLsn;
 				wk->feedback.hs.ts = 0;
 
 				/* Check if we have quorum. If there aren't enough walkeepers, wait and do nothing.
@@ -1336,6 +1334,8 @@ ExecuteNextProtocolState:
 				{
 					if (n_connected == quorum)
 						StartElection();
+					else
+						elog(LOG, "Add new safekeeper %d, safe LSN=%X/%X", i,  LSN_FORMAT_ARGS(wk->info.flushLsn));
 
 					/* Now send max-node-id to everyone participating in voting and wait their responses */
 					for (int j = 0; j < n_walkeepers; j++)
@@ -1348,7 +1348,6 @@ ExecuteNextProtocolState:
 							walkeeper[j].state = SS_SEND_VOTE;
 							walkeeper[j].pollState = SPOLL_NONE;
 							walkeeper[j].sockWaitState = WANTS_NO_WAIT;
-
 							/* If this isn't the current walkeeper, defer handling this state until
 							 * later. We'll mark it for individual work in WalProposerPoll. */
 							if (j != i)
@@ -1470,7 +1469,8 @@ ExecuteNextProtocolState:
 				/* Don't repeat logs if we have to retry the actual send operation itself */
 				if (wk->pollState != SPOLL_RETRY)
 				{
-					elog(LOG, "Sending message with len %ld VCL=%X/%X restart LSN=%X/%X to %s:%s",
+					elog(DEBUG1, "Sending message at %X/%X with len %ld VCL=%X/%X restart LSN=%X/%X to %s:%s",
+						 LSN_FORMAT_ARGS(msg->req.beginLsn),
 						 msg->size - sizeof(WalKeeperRequest),
 						 LSN_FORMAT_ARGS(msg->req.commitLsn),
 						 LSN_FORMAT_ARGS(restartLsn),
@@ -1515,7 +1515,6 @@ ExecuteNextProtocolState:
 					return;
 
 				next = wk->currMsg->next;
-				Assert(wk->feedback.flushLsn == wk->currMsg->req.endLsn);
 				wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms receiving of this message */
 
 				wk->state         = SS_IDLE;
@@ -1527,19 +1526,21 @@ ExecuteNextProtocolState:
 				HandleWalKeeperResponse();
 				SendMessageToNode(i, next);
 
-				/*
-				 * Also send the new VCL to all the walkeepers.
-				 *
-				 * FIXME: This is redundant for walkeepers that have other outbound messages
-				 * pending.
-				 */
-				minQuorumLsn = GetAcknowledgedByQuorumLastRecordLSN();
-
-				if (minQuorumLsn > lastSentVCLLsn)
+				if (!disableVCLOnlyMessages)
 				{
-					elog(LOG, "Broadcast VCL only message %X/%X",  LSN_FORMAT_ARGS(minQuorumLsn));
-					BroadcastMessage(CreateMessageVCLOnly());
-					lastSentVCLLsn = minQuorumLsn;
+					/*
+					 * Also send the new VCL to all the walkeepers.
+					 *
+					 * FIXME: This is redundant for walkeepers that have other outbound messages
+					 * pending.
+					 */
+					minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+
+					if (minQuorumLsn > lastSentVCLLsn)
+					{
+						BroadcastMessage(CreateMessageVCLOnly());
+						lastSentVCLLsn = minQuorumLsn;
+					}
 				}
 				break;
 			}

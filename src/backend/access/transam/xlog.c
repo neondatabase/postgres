@@ -7889,6 +7889,7 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
+	XLogCtl->lastWrittenPageLSN = EndOfLog;
 
 	/*
 	 * Update full_page_writes in shared memory and write an XLOG_FPW_CHANGE

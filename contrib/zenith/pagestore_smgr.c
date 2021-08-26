@@ -409,6 +409,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
 	return lsn;
 }
 
+
 /*
  * Return LSN for requesting pages and number of blocks from page server
  */
@@ -433,13 +434,11 @@ zenith_get_request_lsn(bool nonrel)
 	}
 	else if (nonrel)
 	{
-		lsn = GetFlushRecPtr();
+		lsn = GetLastImportantRecPtr();
 		elog(DEBUG1, "zenith_get_request_lsn norel GetFlushRecPtr  %X/%X", (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
 	else
 	{
-		flushlsn = GetFlushRecPtr();
-
 		/*
 		 * Use the latest LSN that was evicted from the buffer cache. Any
 		 * pages modified by later WAL records must still in the buffer cache,
@@ -449,20 +448,10 @@ zenith_get_request_lsn(bool nonrel)
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
 
-		if (lsn == InvalidXLogRecPtr)
-		{
-			/*
-			 * We haven't evicted anything yet since the server was
-			 * started. Then just use the latest flushed LSN. That's always
-			 * safe, using the latest evicted LSN is really just an
-			 * optimization.
-			 */
-			lsn = flushlsn;
-			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X",
-				 (uint32) ((lsn) >> 32), (uint32) (lsn));
-		}
-		else
-			lsn = zm_adjust_lsn(lsn);
+		Assert(lsn != InvalidXLogRecPtr);
+		lsn = zm_adjust_lsn(lsn);
+		flushlsn = GetFlushRecPtr();
+
 
 		/*
 		 * Is it possible that the last-written LSN is ahead of last flush LSN? Probably not,
@@ -875,6 +864,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	XLogRecPtr request_lsn;
 
 	request_lsn = zenith_get_request_lsn(false);
+
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithNblocksRequest,
 		.page_key = {
