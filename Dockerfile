@@ -2,7 +2,7 @@
 # Image with pre-built tools
 #
 FROM zenithdb/compute-tools:latest AS compute-deps
-# Only to get ready apply_conf binary as a dep
+# Only to get ready zenith_ctl and apply_conf binaries as deps
 
 #
 # Image with Postgres build deps
@@ -43,32 +43,25 @@ WORKDIR /pg
 FROM debian:buster-slim
 
 # libreadline-dev is required to run psql
-RUN apt-get update && apt-get -yq install openssh-server libreadline-dev && \
-    # This will prepare everything needed by sshd
-    # like generation host keys with ssh-keygen -A
-    service ssh start
+RUN apt-get update && apt-get -yq install libreadline-dev
 
 # Add user postgres
 RUN mkdir /var/db && useradd -m -d /var/db/postgres postgres && \
     echo "postgres:test_console_pass" | chpasswd && \
     mkdir /var/db/postgres/compute && mkdir /var/db/postgres/specs && \
-    chown -R postgres:postgres /var/db/postgres/compute && \
-    chown -R postgres:postgres /var/db/postgres/specs && \
+    chown -R postgres:postgres /var/db/postgres && \
     chmod 0750 /var/db/postgres/compute
 
 # Copy ready Postgres binaries
-COPY --from=pg-build /pg/compute_build/postgres_bin /var/db/postgres/install
+COPY --from=pg-build /pg/compute_build/postgres_bin /usr/local
 
-# Copy apply_conf binary
+# Copy binaries from compute-tools
 COPY --from=compute-deps /usr/local/bin/apply_conf /usr/local/bin/apply_conf
+COPY --from=compute-deps /usr/local/bin/zenith_ctl /usr/local/bin/zenith_ctl
 
-# Copy postgres binaries to the common location
-RUN cp /var/db/postgres/install/bin/* /usr/local/bin/ && \
-    cp -r /var/db/postgres/install/share/* /usr/local/share/ && \
-    # Add postgres shared objects to the search path
-    echo '/var/db/postgres/install/lib' >> /etc/ld.so.conf && /sbin/ldconfig
+# Add postgres shared objects to the search path
+RUN echo '/usr/local/lib' >> /etc/ld.so.conf && /sbin/ldconfig
 
-# To be able to run sshd (seems to be default)
-# USER root
+USER postgres
 
-ENTRYPOINT ["/bin/sh"]
+ENTRYPOINT ["/usr/local/bin/zenith_ctl"]
