@@ -300,7 +300,7 @@ typedef struct VoteResponse {
     /// Safekeeper's log position, to let proposer choose the most advanced one
 	term_t epoch;
 	XLogRecPtr flushLsn;
-	XLogRecPtr restartLsn;  /* minimal LSN which may be needed for recovery of some walkeeper */
+	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some walkeeper */
 } VoteResponse;
 
 /*
@@ -311,15 +311,19 @@ typedef struct AppendRequestHeader
 	uint64 tag;
 	term_t term; /* term of the proposer */
 	/*
-	 * LSN since which current proposer appends WAL; determines epoch switch
-	 * point.
+	 * LSN since which current proposer appends WAL (begin_lsn of its first
+	 * record); determines epoch switch point.
 	 */
-	XLogRecPtr vcl;
+	XLogRecPtr epochStartLsn;
 	XLogRecPtr beginLsn;    /* start position of message in WAL */
 	XLogRecPtr endLsn;      /* end position of message in WAL */
 	XLogRecPtr commitLsn;   /* LSN committed by quorum of walkeepers */
-	XLogRecPtr restartLsn;  /* restart LSN position  (minimal LSN which may be needed by proposer to perform recovery) */
-	pg_uuid_t  proposerId; /* for monitoring/debugging */
+	/*
+	 *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
+	 *  + 1 of last record streamed to everyone)
+	 */
+    XLogRecPtr truncateLsn;
+    pg_uuid_t  proposerId; /* for monitoring/debugging */
 } AppendRequestHeader;
 
 /*
