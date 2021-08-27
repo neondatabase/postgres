@@ -6,10 +6,8 @@ jobs:
   docker_image:
     docker:
       - image: cimg/base:2021.04
-    working_directory: ~/repo
     steps:
-      - checkout:
-          path: ~/repo
+      - checkout
       - setup_remote_docker:
           docker_layer_caching: true
       - run:
@@ -25,7 +23,7 @@ workflows:
       # Build and push image only for commits to `main`.
       - docker_image:
           # Context gives an ability to login
-          context: 'Docker Hub'
+          context: Docker Hub
           filters:
             branches:
               only:
