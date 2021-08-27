@@ -41,14 +41,14 @@ static WalKeeper    walkeeper[MAX_WALKEEPERS];
 static WalMessage*  msgQueueHead;
 static WalMessage*  msgQueueTail;
 static XLogRecPtr	lastSentLsn;	/* WAL has been appended to msg queue up to this point */
-static XLogRecPtr	lastSentVCLLsn;	/* VCL replies have been sent to walkeeper up to here */
+static XLogRecPtr	lastSentCommitLsn;	/* last commitLsn broadcast to walkeepers */
 static ProposerGreeting   proposerGreeting;
 static WaitEventSet* waitEvents;
 static AppendResponse lastFeedback;
-static XLogRecPtr   restartLsn; /* Last position received by all walkeepers. */
+static XLogRecPtr   truncateLsn; /* Last position received by all walkeepers. */
 static VoteRequest voteRequest; /* Vote request for walkeeper */
 static term_t       propTerm; /* term of the proposer */
-static XLogRecPtr   propVcl;    /* VCL of the proposer */
+static XLogRecPtr   propEpochStartLsn;    /* epoch start lsn of the proposer */
 static term_t		donorEpoch; /* Most advanced acceptor epoch */
 static int          donor;     /* Most advanced acceptor */
 static int          n_votes = 0;
@@ -289,7 +289,7 @@ GetAcknowledgedByQuorumWALPosition(void)
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		/*
-		 * Note that while we haven't pushed WAL up to VCL to the majority we
+		 * Note that while we haven't pushed WAL up to epoch start lsn to the majority we
 		 * don't really know which LSN is reliably committed as reported
 		 * flush_lsn is physical end of wal, which can contain diverged
 		 * history (compared to donor).
@@ -335,10 +335,10 @@ HandleWalKeeperResponse(void)
 	{
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
-		if (restartLsn < msg->req.beginLsn)
+		if (truncateLsn < msg->req.beginLsn)
 		{
-			Assert(restartLsn < msg->req.endLsn);
-			restartLsn = msg->req.endLsn;
+			Assert(truncateLsn < msg->req.endLsn);
+			truncateLsn = msg->req.endLsn;
 		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
@@ -488,7 +488,7 @@ SendMessageToNode(int i, WalMessage* msg)
 	/* Only try to send the message if it's non-null */
 	if (wk->currMsg)
 	{
-		wk->currMsg->req.restartLsn = restartLsn;
+		wk->currMsg->req.truncateLsn = truncateLsn;
 		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
 
 		/* Once we've selected and set up our message, actually start sending it. */
@@ -549,7 +549,7 @@ CreateMessage(XLogRecPtr startpos, char* data, int len)
 	msg->ackMask = 0;
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
-	msg->req.vcl = propVcl;
+	msg->req.epochStartLsn = propEpochStartLsn;
 	msg->req.beginLsn = startpos;
 	msg->req.endLsn = endpos;
 	msg->req.proposerId = proposerGreeting.proposerId;
@@ -570,10 +570,10 @@ WalProposerBroadcast(XLogRecPtr startpos, char* data, int len)
 
 /*
  * Create WAL message with no data, just to let the walkeepers
- * know that the VCL has advanced.
+ * know that commit lsn has advanced.
  */
 static WalMessage*
-CreateMessageVCLOnly(void)
+CreateMessageCommitLsnOnly(void)
 {
 	/* Create new message and append it to message queue */
 	WalMessage*	msg;
@@ -596,28 +596,29 @@ CreateMessageVCLOnly(void)
 	msg->ackMask = 0;
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
-	msg->req.vcl = propVcl;
+	msg->req.epochStartLsn = propEpochStartLsn;
 	msg->req.beginLsn = lastSentLsn;
 	msg->req.endLsn = lastSentLsn;
 	msg->req.proposerId = proposerGreeting.proposerId;
-	/* restartLsn and commitLsn are set just before the message sent, in SendMessageToNode() */
+	/* truncateLsn and commitLsn are set just before the message sent, in SendMessageToNode() */
 	return msg;
 }
 
 
 /*
  * Called after majority of acceptors gave votes, it calculates the most
- * advanced safekeeper (who will be the donor) and VCL -- LSN since which we'll
- * write WAL in our term.
- * Sets restartLsn along the way (though it is not of much use at this point).
+ * advanced safekeeper (who will be the donor) and epochStartLsn -- LSN since
+ * which we'll write WAL in our term.
+ * Sets truncateLsn along the way (though it
+ * is not of much use at this point).
  */
 static void
-DetermineVCL(void)
+DetermineEpochStartLsn(void)
 {
 	// FIXME: If the WAL acceptors have nothing, start from "the beginning of time"
-	propVcl = wal_segment_size;
+	propEpochStartLsn = wal_segment_size;
 	donorEpoch = 0;
-	restartLsn = wal_segment_size;
+	truncateLsn = wal_segment_size;
 
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -625,21 +626,21 @@ DetermineVCL(void)
 		{
 			if (walkeeper[i].voteResponse.epoch > donorEpoch ||
 				(walkeeper[i].voteResponse.epoch == donorEpoch &&
-				 walkeeper[i].voteResponse.flushLsn > propVcl))
+				 walkeeper[i].voteResponse.flushLsn > propEpochStartLsn))
 			{
 				donorEpoch = walkeeper[i].voteResponse.epoch;
-				propVcl = walkeeper[i].voteResponse.flushLsn;
+				propEpochStartLsn = walkeeper[i].voteResponse.flushLsn;
 				donor = i;
 			}
-			restartLsn = Max(walkeeper[i].voteResponse.restartLsn, restartLsn);
+			truncateLsn = Max(walkeeper[i].voteResponse.truncateLsn, truncateLsn);
 		}
 	}
 
-	elog(LOG, "got votes from majority (%d) of nodes, VCL %X/%X, donor %s:%s, restart_lsn %X/%X",
+	elog(LOG, "got votes from majority (%d) of nodes, epochStartLsn %X/%X, donor %s:%s, restart_lsn %X/%X",
 		 quorum,
-		 LSN_FORMAT_ARGS(propVcl),
+		 LSN_FORMAT_ARGS(propEpochStartLsn),
 		 walkeeper[donor].host, walkeeper[donor].port,
-		 LSN_FORMAT_ARGS(restartLsn)
+		 LSN_FORMAT_ARGS(truncateLsn)
 		);
 }
 
@@ -1197,7 +1198,7 @@ ExecuteNextProtocolState:
 
 				wk->state     = SS_VOTING;
 				wk->pollState = SPOLL_IDLE;
-				wk->feedback.flushLsn = restartLsn;
+				wk->feedback.flushLsn = truncateLsn;
 				wk->feedback.hs.ts = 0;
 
 				/*
@@ -1317,18 +1318,18 @@ ExecuteNextProtocolState:
 
 				if (++n_votes == quorum)
 				{
-					DetermineVCL();
+					DetermineEpochStartLsn();
 
 					/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
-					if (restartLsn < propVcl)
+					if (truncateLsn < propEpochStartLsn)
 					{
-						elog(LOG, "start recovery because restart LSN=%X/%X is not equal to VCL=%X/%X",
-							 LSN_FORMAT_ARGS(restartLsn), LSN_FORMAT_ARGS(propVcl));
+						elog(LOG, "start recovery because restart LSN=%X/%X is not equal to epochStartLsn=%X/%X",
+							 LSN_FORMAT_ARGS(truncateLsn), LSN_FORMAT_ARGS(propEpochStartLsn));
 						/* Perform recovery */
-						if (!WalProposerRecovery(donor, proposerGreeting.timeline, restartLsn, propVcl))
+						if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
 							elog(FATAL, "Failed to recover state");
 					}
-					WalProposerStartStreaming(propVcl);
+					WalProposerStartStreaming(propEpochStartLsn);
 					/* Should not return here */
 				}
 				else
@@ -1348,10 +1349,10 @@ ExecuteNextProtocolState:
 				/* Don't repeat logs if we have to retry the actual send operation itself */
 				if (wk->pollState != SPOLL_RETRY)
 				{
-					elog(LOG, "Sending message with len %ld VCL=%X/%X restart LSN=%X/%X to %s:%s",
+					elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
 						 msg->size - sizeof(AppendRequestHeader),
 						 LSN_FORMAT_ARGS(msg->req.commitLsn),
-						 LSN_FORMAT_ARGS(restartLsn),
+						 LSN_FORMAT_ARGS(truncateLsn),
 						 wk->host, wk->port);
 				}
 
@@ -1386,7 +1387,7 @@ ExecuteNextProtocolState:
 			{
 				WalMessage* next;
 				XLogRecPtr  minQuorumLsn;
-				WalMessage* vclUpdateMsg;
+				WalMessage* commitLsnUpdateMsg;
 
 				/* If our reading doesn't immediately succeed, any necessary error handling or state
 				 * setting is taken care of. We can leave any other work until later. */
@@ -1407,19 +1408,19 @@ ExecuteNextProtocolState:
 				SendMessageToNode(i, next);
 
 				/*
-				 * Also send the new VCL to all the walkeepers.
+				 * Also send the new commit lsn to all the walkeepers.
 				 *
 				 * FIXME: This is redundant for walkeepers that have other outbound messages
 				 * pending.
 				 */
 				minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 
-				if (minQuorumLsn > lastSentVCLLsn)
+				if (minQuorumLsn > lastSentCommitLsn)
 				{
-					vclUpdateMsg = CreateMessageVCLOnly();
-					if (vclUpdateMsg)
-						BroadcastMessage(vclUpdateMsg);
-					lastSentVCLLsn = minQuorumLsn;
+					commitLsnUpdateMsg = CreateMessageCommitLsnOnly();
+					if (commitLsnUpdateMsg)
+						BroadcastMessage(commitLsnUpdateMsg);
+					lastSentCommitLsn = minQuorumLsn;
 				}
 				break;
 			}
