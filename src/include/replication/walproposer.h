@@ -22,11 +22,7 @@
  * In the spirit of WL_SOCKET_READABLE and others, this corresponds to no events having occured,
  * because all WL_* events are given flags equal to some (1 << i), starting from i = 0
  */
-#ifndef WL_NO_EVENTS
 #define WL_NO_EVENTS 0
-#else
-#error "WL_NO_EVENTS already defined"
-#endif
 
 extern char* wal_acceptors_list;
 extern int   wal_acceptor_reconnect_timeout;
