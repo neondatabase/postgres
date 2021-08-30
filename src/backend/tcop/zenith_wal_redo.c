@@ -133,7 +133,7 @@ enter_seccomp_mode(void)
 	mallopt(M_MMAP_MAX, 0);
 #endif
 
-	seccomp_load_rules(syscalls, lengthof(syscalls));
+	SECCOMP_LOAD_RULES(syscalls, lengthof(syscalls));
 }
 #endif
 
@@ -293,8 +293,14 @@ WalRedoMain(int argc, char *argv[],
 	/* We prefer opt-out to opt-in for greater security */
 	bool enable_seccomp = true;
 	for (int i = 1; i < argc; i++)
+	{
 		if (strcmp(argv[i], "--disable-seccomp") == 0)
 			enable_seccomp = false;
+
+		/* For strange cases like `--disable-seccomp --enable-seccomp` */
+		if (strcmp(argv[i], "--enable-seccomp") == 0)
+			enable_seccomp = true;
+	}
 
 	/*
 	 * We deliberately delay the transition to the seccomp mode
@@ -303,6 +309,13 @@ WalRedoMain(int argc, char *argv[],
 	 */
 	if (enable_seccomp)
 		enter_seccomp_mode();
+	else
+		elog(WARNING, "seccomp mode has been disabled!");
+#else
+	for (int i = 1; i < argc; i++)
+		if (strcmp(argv[i], "--enable-seccomp") == 0)
+			ereport(FATAL, (errcode(ERRCODE_SYSTEM_ERROR),
+							errmsg("seccomp is not available in this build!")));
 #endif
 
 	/*

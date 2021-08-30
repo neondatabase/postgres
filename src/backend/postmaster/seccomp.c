@@ -30,10 +30,12 @@
  *
  *      * Catch the denied syscalls with a signal handler using SCMP_ACT_TRAP.
  *        Provide a common signal handler with a static switch to override
- *        its behavior for the test case. This would undermine the whole
- *        purpose of such protection, so we'd have to go further and remap
- *        the memory backing the switch as readonly, then ban mprotect().
- *        Ugly and fragile, to say the least.
+ *        its behavior for the test case. The downside is that if an attacker
+ *        is able to change the switch, they could probably gain more time to
+ *        examine the running process and do something about the protection
+ *        (since there might be bugs in the linux kernel). We could go further
+ *        and remap the memory backing the switch as readonly, then ban
+ *        mprotect().
  *
  *      * Yet again, catch the denied syscalls using SCMP_ACT_TRAP.
  *        Provide 2 different signal handlers: one for a test case,
@@ -46,7 +48,8 @@
  *        of this solution is that we don't actually check that
  *        SCMP_ACT_KILL_PROCESS/SCMP_ACT_TRAP works.
  *
- *    Either approach seems to require two eBPF filter programs,
+ *    Either approach seems to require two eBPF filter programs
+ *    (sans the mprotect()-less variant of the first option),
  *    which is unfortunate: the man page tells this is uncommon.
  *    Maybe I (@funbringer) am missing something, though; I encourage
  *    any reader to get familiar with it and scrutinize my conclusions.
@@ -86,18 +89,20 @@
 #include "miscadmin.h"
 #include "postmaster/seccomp.h"
 
+#include <execinfo.h>
 #include <fcntl.h>
 #include <unistd.h>
 
-static void die(int code, const char *str);
+static void die(const char *str) pg_attribute_noreturn();
 
-static bool seccomp_test_sighandler_done = false;
+static volatile sig_atomic_t seccomp_test_sighandler_done = false;
 static void seccomp_test_sighandler(int signum, siginfo_t *info, void *cxt);
 static void seccomp_deny_sighandler(int signum, siginfo_t *info, void *cxt);
 
+static char seccomp_rules_origin[2048];
 static int do_seccomp_load_rules(PgSeccompRule *rules, int count, uint32 def_action);
 
-void seccomp_load_rules(PgSeccompRule *rules, int count)
+void seccomp_load_rules(PgSeccompRule *rules, int count, const char *origin)
 {
 #define raise_error(str) \
 	ereport(FATAL, (errcode(ERRCODE_SYSTEM_ERROR), errmsg("seccomp: " str)))
@@ -117,31 +122,53 @@ void seccomp_load_rules(PgSeccompRule *rules, int count)
 
 	/*
 	 * First, check that open of a well-known file works.
-	 * XXX: We use raw syscall() to call the very open().
+	 * XXX: we use syscall() to call a very specific syscall.
 	 */
 	fd = syscall(SCMP_SYS(open), "/dev/null", O_RDONLY, 0);
 	if (fd < 0 || seccomp_test_sighandler_done)
 		raise_error("failed to open a test file");
 	close((int)fd);
 
-	/* Set a trap on open() to test seccomp bpf */
+	/*
+	 * Set a trap on open() to test seccomp bpf.
+	 * XXX: this should be the same syscall as above and below.
+	 */
 	rule = PG_SCMP(open, SCMP_ACT_TRAP);
 	if (do_seccomp_load_rules(&rule, 1, SCMP_ACT_ALLOW) != 0)
 		raise_error("failed to load a test filter");
 
-	/* Finally, check that open() now raises SIGSYS */
+	/*
+	 * Finally, check that open() now raises SIGSYS.
+	 * XXX: we use syscall() to call a very specific syscall.
+	 */
 	(void)syscall(SCMP_SYS(open), "/dev/null", O_RDONLY, 0);
 	if (!seccomp_test_sighandler_done)
 		raise_error("SIGSYS handler doesn't seem to work");
 
-	/* Now that everything seems to work, install a proper handler */
+	/*
+	 * Now that everything seems to work, install a proper handler.
+	 *
+	 * Instead of silently crashing the process with
+	 * a fake SIGSYS caused by SCMP_ACT_KILL_PROCESS,
+	 * we'd like to receive a real SIGSYS to print the
+	 * message and *then* immediately exit.
+	 */
 	action.sa_sigaction = seccomp_deny_sighandler;
 	if (sigaction(SIGSYS, &action, NULL) != 0)
 		raise_error("failed to install a proper SIGSYS handler");
 
-	/* If this succeeds, any syscall not in the list will crash the process */
+	/* If this succeeds, any syscall not in the list will fire a SIGSYS */
 	if (do_seccomp_load_rules(rules, count, SCMP_ACT_TRAP) != 0)
 		raise_error("failed to enter seccomp mode");
+
+	/*
+	 * Copy the origin of those rules (e.g. function name)
+	 * to print it when a violation takes place.
+	 *
+	 * We deliberately don't bother with a "stack of origins"
+	 * to make things simpler, since that use case is unlikely.
+	 */
+	strncpy(seccomp_rules_origin, origin, strlen(origin));
 
 #undef raise_error
 }
@@ -181,14 +208,18 @@ cleanup:
 	return rc;
 }
 
-static void
-die(int code, const char *str)
+static inline void
+die(const char *str)
 {
-	/* Best effort write to stderr */
-	(void)write(fileno(stderr), str, strlen(str));
+	/*
+	 * Best effort write to stderr.
+	 * XXX: we use syscall() to call a very specific syscall
+	 * which is guaranteed to be allowed by the filter.
+	 */
+	(void)syscall(SCMP_SYS(write), fileno(stderr), str, strlen(str));
 
 	/* XXX: we don't want to run any atexit callbacks */
-	_exit(code);
+	_exit(1);
 }
 
 static void
@@ -198,15 +229,15 @@ seccomp_test_sighandler(int signum, siginfo_t *info, void *cxt pg_attribute_unus
 
 	/* Check that this signal handler is used only for a single test case */
 	if (seccomp_test_sighandler_done)
-		die(1, DIE_PREFIX "test handler should only be used for 1 test\n");
+		die(DIE_PREFIX "test handler should only be used for 1 test\n");
 	seccomp_test_sighandler_done = true;
 
 	if (signum != SIGSYS)
-		die(1, DIE_PREFIX "bad signal number\n");
+		die(DIE_PREFIX "bad signal number\n");
 
 	/* TODO: maybe somehow extract the hardcoded syscall number */
 	if (info->si_syscall != SCMP_SYS(open))
-		die(1, DIE_PREFIX "bad syscall number\n");
+		die(DIE_PREFIX "bad syscall number\n");
 
 #undef DIE_PREFIX
 }
@@ -219,18 +250,17 @@ seccomp_deny_sighandler(int signum, siginfo_t *info, void *cxt pg_attribute_unus
 	 * to resolve the syscall's name, since it calls strdup()
 	 * under the hood (wtf!).
 	 */
-	char buffer[128];
-	(void)snprintf(buffer, lengthof(buffer),
-			"---------------------------------------\n"
-			"seccomp: bad syscall %d\n"
-			"---------------------------------------\n",
-			info->si_syscall);
+	char buffer[4096];
+	(void)snprintf(
+			buffer, lengthof(buffer),
+			"-------------------------------------------------------------\n"
+			"Seccomp violation: failed to invoke syscall %1$d.\n"
+			"This syscall is not in the allowlist.\n"
+			"Use a tool (e.g. `ausyscall %1$d`) to get the syscall's name.\n"
+			"Origin: %2$s\n"
+			"-------------------------------------------------------------\n",
+			(int)info->si_syscall,
+			seccomp_rules_origin);
 
-	/*
-	 * Instead of silently crashing the process with
-	 * a fake SIGSYS caused by SCMP_ACT_KILL_PROCESS,
-	 * we'd like to receive a real SIGSYS to print the
-	 * message and *then* immediately exit.
-	 */
-	die(1, buffer);
+	die(buffer);
 }
