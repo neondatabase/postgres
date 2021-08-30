@@ -1228,7 +1228,8 @@ AsyncWrite(int i, void* msg, size_t msg_size, WalKeeperState flush_state, WalKee
 			break;
 		case PG_ASYNC_WRITE_TRY_FLUSH:
 			/* We still need to call PQflush some more to finish the job; go to
-			 * the appropriate state */
+			 * the appropriate state. Update the event set at the bottom of this
+			 * function */
 			wk->state = flush_state;
 			break;
 		case PG_ASYNC_WRITE_FAIL:
