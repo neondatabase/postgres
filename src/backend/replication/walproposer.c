@@ -802,6 +802,7 @@ AdvancePollState(int i, uint32 events)
 			 * the events they're expecting */
 			case SS_CONNECTING_READ:
 			case SS_CONNECTING_WRITE:
+			{
 				WalProposerConnectPollStatusType result = walprop_connect_poll(wk->conn);
 
 				/* The new set of events we'll wait on, after updating */
@@ -848,6 +849,7 @@ AdvancePollState(int i, uint32 events)
 				HackyRemoveWalProposerEvent(i);
 				wk->eventPos = AddWaitEventToSet(waitEvents, new_events, walprop_socket(wk->conn), NULL, wk);
 				break;
+			}
 
 			/* Send "START_WAL_PUSH" command to the walkeeper. After sending,
 			 * wait for response with SS_WAIT_EXEC_RESULT */
@@ -1046,6 +1048,7 @@ AdvancePollState(int i, uint32 events)
 			/* Start to send the message at wk->currMsg. Triggered only by calls
 			 * to SendMessageToNode */
 			case SS_SEND_WAL:
+			{
 				WalMessage* msg = wk->currMsg;
 
 				elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
@@ -1061,6 +1064,7 @@ AdvancePollState(int i, uint32 events)
 					return;
 
 				break;
+			}
 
 			/* Flush the WAL message we're sending from SS_SEND_WAL */
 			case SS_SEND_WAL_FLUSH:
@@ -1074,6 +1078,7 @@ AdvancePollState(int i, uint32 events)
 
 			/* Start to receive the feedback from a message sent via SS_SEND_WAL */
 			case SS_RECV_FEEDBACK:
+			{
 				WalMessage* next;
 				XLogRecPtr  minQuorumLsn;
 				WalMessage* commitLsnUpdateMsg;
@@ -1107,6 +1112,7 @@ AdvancePollState(int i, uint32 events)
 					lastSentCommitLsn = minQuorumLsn;
 				}
 				break;
+			}
 		}
 
 		/* We've already done something for these events - don't attempt more
