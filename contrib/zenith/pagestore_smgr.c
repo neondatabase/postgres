@@ -417,7 +417,6 @@ static XLogRecPtr
 zenith_get_request_lsn(bool nonrel)
 {
 	XLogRecPtr lsn;
-	XLogRecPtr flushlsn;
 
 	if (RecoveryInProgress())
 	{
@@ -434,12 +433,12 @@ zenith_get_request_lsn(bool nonrel)
 	}
 	else if (nonrel)
 	{
-		lsn = GetFlushRecPtr();
-		elog(DEBUG1, "zenith_get_request_lsn norel GetFlushRecPtr  %X/%X", (uint32) ((lsn) >> 32), (uint32) (lsn));
+		lsn = GetLastImportantRecPtr();
+		elog(DEBUG1, "zenith_get_request_lsn norel GetLastImportantRecPtr  %X/%X", (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
 	else
 	{
-		flushlsn = GetFlushRecPtr();
+		XLogRecPtr flushlsn;
 
 		/*
 		 * Use the latest LSN that was evicted from the buffer cache. Any
@@ -447,29 +446,18 @@ zenith_get_request_lsn(bool nonrel)
 		 * so our request cannot concern those.
 		 */
 		lsn = GetLastWrittenPageLSN();
+		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
 
-		if (lsn == InvalidXLogRecPtr)
-		{
-			/*
-			 * We haven't evicted anything yet since the server was
-			 * started. Then just use the latest flushed LSN. That's always
-			 * safe, using the latest evicted LSN is really just an
-			 * optimization.
-			 */
-			lsn = flushlsn;
-			elog(DEBUG1, "zenith_get_request_lsn GetFlushRecPtr lsn %X/%X",
-				 (uint32) ((lsn) >> 32), (uint32) (lsn));
-		}
-		else
-			lsn = zm_adjust_lsn(lsn);
+		lsn = zm_adjust_lsn(lsn);
 
 		/*
 		 * Is it possible that the last-written LSN is ahead of last flush LSN? Probably not,
 		 * we shouldn't evict a page from the buffer cache before all its modifications have
 		 * been safely flushed. That's the "WAL before data" rule. But better safe than sorry.
 		 */
+		flushlsn = GetFlushRecPtr();
 		if (lsn > flushlsn)
 		{
 			elog(LOG, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
