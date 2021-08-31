@@ -7960,6 +7960,7 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
+	XLogCtl->lastWrittenPageLSN = EndOfLog;
 
 	LocalSetXLogInsertAllowed();
 
