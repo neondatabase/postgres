@@ -11,6 +11,7 @@ void _PG_init(void);
 struct WalProposerConn
 {
 	PGconn* pg_conn;
+	bool    is_nonblocking; /* whether the connection is non-blocking */
 };
 
 /* Prototypes for exported functions */
@@ -20,13 +21,12 @@ static WalProposerConn*					libpqprop_connect_start(char* conninfo);
 static WalProposerConnectPollStatusType	libpqprop_connect_poll(WalProposerConn* conn);
 static bool								libpqprop_send_query(WalProposerConn* conn, char* query);
 static WalProposerExecStatusType		libpqprop_get_query_result(WalProposerConn* conn);
-static int								libpqprop_set_nonblocking(WalProposerConn* conn, int arg);
 static pgsocket							libpqprop_socket(WalProposerConn* conn);
-static int								libpqprop_flush(WalProposerConn* conn);
-static int								libpqprop_consume_input(WalProposerConn* conn);
+static int								libpqprop_flush(WalProposerConn* conn, bool socket_read_ready);
 static void								libpqprop_finish(WalProposerConn* conn);
 static PGAsyncReadResult				libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount);
 static PGAsyncWriteResult				libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size);
+static bool                             libpqprop_blocking_write(WalProposerConn* conn, void const* buf, size_t size);
 
 static WalProposerFunctionsType PQWalProposerFunctions = {
 	libpqprop_error_message,
@@ -35,13 +35,12 @@ static WalProposerFunctionsType PQWalProposerFunctions = {
 	libpqprop_connect_poll,
 	libpqprop_send_query,
 	libpqprop_get_query_result,
-	libpqprop_set_nonblocking,
 	libpqprop_socket,
 	libpqprop_flush,
-	libpqprop_consume_input,
 	libpqprop_finish,
 	libpqprop_async_read,
 	libpqprop_async_write,
+	libpqprop_blocking_write,
 };
 
 /* Module initialization */
@@ -51,6 +50,22 @@ _PG_init(void)
 	if (WalProposerFunctions != NULL)
 		elog(ERROR, "libpqwalproposer already loaded");
 	WalProposerFunctions = &PQWalProposerFunctions;
+}
+
+/* Helper function */
+static bool
+ensure_nonblocking_status(WalProposerConn* conn, bool is_nonblocking)
+{
+	/* If we're already correctly blocking or nonblocking, all good */
+	if (is_nonblocking == conn->is_nonblocking)
+		return true;
+
+	/* Otherwise, set it appropriately */
+	if (PQsetnonblocking(conn->pg_conn, is_nonblocking) == -1)
+		return false;
+
+	conn->is_nonblocking = is_nonblocking;
+	return true;
 }
 
 /* Exported function definitions */
@@ -96,6 +111,7 @@ libpqprop_connect_start(char* conninfo)
 	 */
 	conn = palloc(sizeof(WalProposerConn));
 	conn->pg_conn = pg_conn;
+	conn->is_nonblocking = false; /* connections always start in blocking mode */
 	return conn;
 }
 
@@ -133,22 +149,16 @@ libpqprop_connect_poll(WalProposerConn* conn)
 static bool
 libpqprop_send_query(WalProposerConn* conn, char* query)
 {
-	int  result;
-	bool return_val;
+	/* We need to be in blocking mode for sending the query to run without
+	 * requiring a call to PQflush */
+	if (!ensure_nonblocking_status(conn, false))
+		return false;
 
-	switch ((result = PQsendQuery(conn->pg_conn, query)))
-	{
-		case 0:
-			return_val = false;
-			break;
-		case 1:
-			return_val = true;
-			break;
-		default:
-			elog(FATAL, "unexpected return %d from PQsendQuery", result);
-	}
+	/* PQsendQuery returns 1 on success, 0 on failure */
+	if (!PQsendQuery(conn->pg_conn, query))
+		return false;
 
-	return return_val;
+	return true;
 }
 
 static WalProposerExecStatusType
@@ -159,6 +169,10 @@ libpqprop_get_query_result(WalProposerConn* conn)
 
 	/* Marker variable if we need to log an unexpected success result */
 	char* unexpected_success = NULL;
+
+	/* Consume any input that we might be missing */
+	if (!PQconsumeInput(conn->pg_conn))
+		return WP_EXEC_FAILED;
 
 	if (PQisBusy(conn->pg_conn))
 		return WP_EXEC_NEEDS_INPUT;
@@ -218,12 +232,6 @@ libpqprop_get_query_result(WalProposerConn* conn)
 	return return_val;
 }
 
-static int
-libpqprop_set_nonblocking(WalProposerConn* conn, int arg)
-{
-	return PQsetnonblocking(conn->pg_conn, arg);
-}
-
 static pgsocket
 libpqprop_socket(WalProposerConn* conn)
 {
@@ -231,15 +239,14 @@ libpqprop_socket(WalProposerConn* conn)
 }
 
 static int
-libpqprop_flush(WalProposerConn* conn)
+libpqprop_flush(WalProposerConn* conn, bool socket_read_ready)
 {
-	return (PQflush(conn->pg_conn));
-}
+	/* If the socket is read-ready, we have to call PQconsumeInput before
+	 * calling PQflush (according to libpq docs) */
+	if (socket_read_ready && !PQconsumeInput(conn->pg_conn))
+		return -1; /* return failure if PQconsumeInput fails */
 
-static int
-libpqprop_consume_input(WalProposerConn* conn)
-{
-	return (PQconsumeInput(conn->pg_conn));
+	return (PQflush(conn->pg_conn));
 }
 
 static void
@@ -254,6 +261,10 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 {
 	int result;
 
+	/* Call PQconsumeInput so that we have the data we need */
+	if (!PQconsumeInput(conn->pg_conn))
+		return PG_ASYNC_READ_FAIL;
+
 	/* The docs for PQgetCopyData list the return values as:
 	 *      0 if the copy is still in progress, but no "complete row" is
 	 *        available
@@ -267,7 +278,7 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 	switch (result = PQgetCopyData(conn->pg_conn, buf, true))
 	{
 		case 0:
-			return PG_ASYNC_READ_CONSUME_AND_TRY_AGAIN;
+			return PG_ASYNC_READ_TRY_AGAIN;
 		case -1:
 			/* As mentioned above; this shouldn't happen */
 			elog(FATAL, "unexpected return -1 from PQgetCopyData");
@@ -286,21 +297,26 @@ libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size)
 {
 	int result;
 
+	/* If we aren't in non-blocking mode, switch to it. */
+	if (!ensure_nonblocking_status(conn, true))
+		return PG_ASYNC_WRITE_FAIL;
+
 	/* The docs for PQputcopyData list the return values as:
 	 *   1 if the data was queued,
 	 *   0 if it was not queued because of full buffers, or
 	 *  -1 if an error occured
 	 */
-	switch (result = PQputCopyData(conn->pg_conn, buf, size))
+	result = PQputCopyData(conn->pg_conn, buf, size);
+
+	/* We won't get a result of zero because walproposer always empties the
+	 * connection's buffers before sending more */
+	Assert(result != 0);
+
+	switch (result)
 	{
 		case 1:
 			/* good -- continue */
 			break;
-		case 0:
-			/* FIXME: can this ever happen? the structure of walproposer
-			 * should always empty the connection's buffers before trying
-			 * to send more, right? */
-			return PG_ASYNC_WRITE_WOULDBLOCK;
 		case -1:
 			return PG_ASYNC_WRITE_FAIL;
 		default:
@@ -326,4 +342,29 @@ libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size)
 		default:
 			elog(FATAL, "invalid return %d from PQflush", result);
 	}
+}
+
+static bool
+libpqprop_blocking_write(WalProposerConn* conn, void const* buf, size_t size)
+{
+	int result;
+
+	/* If we are in non-blocking mode, switch out of it. */
+	if (!ensure_nonblocking_status(conn, false))
+		return false;
+
+	/* Ths function is very similar to libpqprop_async_write. For more
+	 * information, refer to the comments there */
+	if ((result = PQputCopyData(conn->pg_conn, buf, size)) == -1)
+		return false;
+
+	Assert(result == 1);
+
+	/* Because the connection is non-blocking, flushing returns 0 or -1 */
+
+	if ((result = PQflush(conn->pg_conn)) == -1)
+		return false;
+
+	Assert(result == 0);
+	return true;
 }
