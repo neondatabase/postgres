@@ -196,8 +196,8 @@ ResetConnection(int i)
 	if (wk->conninfo[0] == '\0')
 	{
 		sprintf((char*) &wk->conninfo,
-				"host=%s port=%s dbname=replication options='-c ztimelineid=%s'",
-				wk->host, wk->port, zenith_timeline_walproposer);
+				"host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+				wk->host, wk->port, zenith_timeline_walproposer, zenith_tenant_walproposer);
 	}
 
 	wk->conn = walprop_connect_start((char*) &wk->conninfo);
@@ -658,8 +658,8 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	WalReceiverConn *wrconn;
 	WalRcvStreamOptions options;
 
-	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s'",
-			walkeeper[donor].host, walkeeper[donor].port, zenith_timeline_walproposer);
+	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+			walkeeper[donor].host, walkeeper[donor].port, zenith_timeline_walproposer, zenith_tenant_walproposer);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
 	{
