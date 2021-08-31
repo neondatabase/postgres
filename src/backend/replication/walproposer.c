@@ -88,8 +88,7 @@ static uint32       request_poll_immediate; /* bitset of walkeepers requesting A
 
 /* Set to true only in standalone run of `postgres --sync-walkeepers` (see comment on top) */
 static bool         syncWalKeepers;
-
-static bool         disableVCLOnlyMessages;
+static bool         recoveryCompleted;
 
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
@@ -326,7 +325,7 @@ GetAcknowledgedByQuorumWALPosition(void)
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		responses[i] = walkeeper[i].feedback.epoch == prop.epoch
-			? walkeeper[i].feedback.flushLsn : prop.VCL;
+			? walkeeper[i].feedback.flushLsn : 0;
 	}
 	qsort(responses, n_walkeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -367,23 +366,36 @@ HandleWalKeeperResponse(void)
 	{
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
+		if (!msgQueueHead) /* queue is empty */
+			msgQueueTail = NULL;
 		if (restartLsn < msg->req.beginLsn)
 		{
 			Assert(restartLsn < msg->req.endLsn);
 			restartLsn = msg->req.endLsn;
 		}
-		if (syncWalKeepers && msg->req.endLsn >= prop.VCL && msg->size == sizeof(WalKeeperRequest)) /* VCL-only message */
+		if (syncWalKeepers)
 		{
-			/* All walkeepers synced! */
-			if (prop.VCL != serverInfo.walSegSize)
-				fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
-			exit(0);
+			if (msgQueueHead == NULL)
+			{
+				/* queue is empty */
+				if (recoveryCompleted)
+				{
+					/* All walkeepers synced! */
+					if (prop.VCL != serverInfo.walSegSize)
+						fprintf(stdout, "%X/%X", LSN_FORMAT_ARGS(prop.VCL));
+					exit(0);
+				}
+				else
+				{
+					/* all recovery messages are sent, now broadcast VCL and we are done */
+					recoveryCompleted = GetAcknowledgedByQuorumWALPosition() == prop.VCL;
+					BroadcastMessage(CreateMessageVCLOnly());
+				}
+			}
 		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(WalKeeperRequest));
 		free(msg);
 	}
-	if (!msgQueueHead) /* queue is empty */
-		msgQueueTail = NULL;
 }
 
 char *zenith_timeline_walproposer = NULL;
@@ -434,7 +446,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	{
 		elog(FATAL, "WalKeepers addresses are not specified");
 	}
-	quorum = n_walkeepers/2 + 1;
+	quorum = syncWalKeepers ? n_walkeepers : n_walkeepers/2 + 1;
 
 	/* Fill information about server */
 	serverInfo.timeline = ThisTimeLineID;
@@ -585,7 +597,6 @@ SendMessageToNode(int i, WalMessage* msg)
 	{
 		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
 		wk->currMsg->req.restartLsn = Min(restartLsn, wk->currMsg->req.commitLsn);
-
 		/* Once we've selected and set up our message, actually start sending it. */
 		wk->state         = SS_SEND_WAL;
 		wk->pollState     = SPOLL_NONE;
@@ -722,7 +733,7 @@ StartElection(void)
 		}
 	}
 	elog(LOG, "Election result: epoch=" INT64_FORMAT ", VCL=%X/%X",
-		 prop.VCL, LSN_FORMAT_ARGS(prop.VCL));
+		 prop.epoch, LSN_FORMAT_ARGS(prop.VCL));
 	/* Only walkeepers from most recent epoch can report it's FlushLsn to master */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -852,7 +863,6 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 		return false;
 	}
 	/* Setup restart point for all walkeepers */
-	disableVCLOnlyMessages = true;
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		if (walkeeper[i].state == SS_IDLE)
@@ -871,8 +881,8 @@ WalProposerRecovery(int leader, TimeLineID timeline, XLogRecPtr startpos, XLogRe
 			}
 		}
 	}
-	disableVCLOnlyMessages = false;
-	BroadcastMessage(CreateMessageVCLOnly());
+	if (syncWalKeepers)
+		HandleWalKeeperResponse(); /* force queue cleanup */
 	return true;
 }
 
@@ -1523,24 +1533,27 @@ ExecuteNextProtocolState:
 				/* Don't update the event set; that's handled by SendMessageToNode if necessary */
 
 				wk->currMsg = NULL;
-				HandleWalKeeperResponse();
-				SendMessageToNode(i, next);
-
-				if (!disableVCLOnlyMessages)
+				if (syncWalKeepers)
 				{
-					/*
-					 * Also send the new VCL to all the walkeepers.
-					 *
-					 * FIXME: This is redundant for walkeepers that have other outbound messages
-					 * pending.
-					 */
-					minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+					elog(DEBUG1, "Receive response from walkeeper %d epoch=%ld(current is %ld), flushPtr=%X/%X (targte is %X/%X)",
+						 i, wk->feedback.epoch, prop.epoch, LSN_FORMAT_ARGS(wk->feedback.flushLsn), LSN_FORMAT_ARGS(prop.VCL));
+				}
+				HandleWalKeeperResponse();
+				if (next) {
+					SendMessageToNode(i, next);
+				}
 
-					if (minQuorumLsn > lastSentVCLLsn)
-					{
-						BroadcastMessage(CreateMessageVCLOnly());
-						lastSentVCLLsn = minQuorumLsn;
-					}
+				/*
+				 * Also send the new VCL to all the walkeepers.
+				 *
+				 * FIXME: This is redundant for walkeepers that have other outbound messages
+				 * pending.
+				 */
+				minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+				if (minQuorumLsn > lastSentVCLLsn)
+				{
+					BroadcastMessage(CreateMessageVCLOnly());
+					lastSentVCLLsn = minQuorumLsn;
 				}
 				break;
 			}
