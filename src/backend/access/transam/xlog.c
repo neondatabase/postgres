@@ -7009,6 +7009,10 @@ StartupXLOG(void)
 			EndRecPtr = RecPtr = checkPoint.redo;
 			skipLastRecordReread = true;
 			close(fd);
+
+			elog(LOG,
+				"[ZENITH] found 'zenith.signal' file. Setting prevRecPtr to %X/%X",
+				LSN_FORMAT_ARGS(prevRecPtr));
 		}
 		else
 		{
@@ -7677,11 +7681,15 @@ StartupXLOG(void)
 	 */
 	if (skipLastRecordReread)
 	{
-		XLogRecPtr lastPage = EndRecPtr - (EndRecPtr % XLOG_BLCKSZ);
+		int offs = (EndRecPtr % XLOG_BLCKSZ);
+		XLogRecPtr lastPage = EndRecPtr - offs;
 		int idx = XLogRecPtrToBufIdx(lastPage);
 		XLogPageHeader xlogPageHdr = (XLogPageHeader)(XLogCtl->pages + idx*XLOG_BLCKSZ);
 		xlogPageHdr->xlp_pageaddr = lastPage;
 		xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+		xlogPageHdr->xlp_tli = ThisTimeLineID;
+		xlogPageHdr->xlp_info = XLP_FIRST_IS_CONTRECORD;
+		xlogPageHdr->xlp_rem_len = offs - SizeOfXLogShortPHD;
 		readOff = XLogSegmentOffset(lastPage, wal_segment_size);
 		elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
 	}
