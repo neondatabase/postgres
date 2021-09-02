@@ -2122,6 +2122,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 
+	{
+		{"zenith_transient_hint_bits", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Setting hint bit doesn't mark page as dirty"),
+		},
+		&zenith_transient_hint_bits,
+		true,
+		NULL, NULL, NULL
+	},
+
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
