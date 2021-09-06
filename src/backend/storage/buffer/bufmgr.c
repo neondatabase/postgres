@@ -3897,7 +3897,7 @@ IncrBufferRefCount(Buffer buffer)
  *	  (due to a race condition), so it cannot be used for important changes.
  */
 void
-MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
+MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn)
 {
 	BufferDesc *bufHdr;
 	Page		page = BufferGetPage(buffer);
@@ -3910,6 +3910,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		MarkLocalBufferDirty(buffer);
 		return;
 	}
+
 	if (zenith_transient_hint_bits)
 		return;
 
@@ -3933,7 +3934,6 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 	if ((pg_atomic_read_u32(&bufHdr->state) & (BM_DIRTY | BM_JUST_DIRTIED)) !=
 		(BM_DIRTY | BM_JUST_DIRTIED))
 	{
-		XLogRecPtr	lsn = InvalidXLogRecPtr;
 		bool		dirtied = false;
 		bool		delayChkpt = false;
 		uint32		buf_state;
@@ -3986,7 +3986,8 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 			 * rather than full transactionids.
 			 */
 			MyProc->delayChkpt = delayChkpt = true;
-			lsn = XLogSaveBufferForHint(buffer, buffer_std);
+			if (!XLogRecPtrIsInvalid(lsn))
+				lsn = XLogSaveBufferForHint(buffer, buffer_std);
 		}
 
 		buf_state = LockBufHdr(bufHdr);

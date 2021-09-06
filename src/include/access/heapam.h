@@ -209,7 +209,7 @@ extern HTSV_Result HeapTupleSatisfiesVacuum(HeapTuple stup, TransactionId Oldest
 											Buffer buffer);
 extern HTSV_Result HeapTupleSatisfiesVacuumHorizon(HeapTuple stup, Buffer buffer,
 												   TransactionId *dead_after);
-extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
+extern void HeapTupleSetHintBits(HeapTuple tuple, Buffer buffer,
 								 uint16 infomask, TransactionId xid);
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool XidInMVCCSnapshot(TransactionId xid, Snapshot snapshot);

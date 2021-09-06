@@ -59,6 +59,12 @@
 #define XLOG_HEAP2_LOCK_UPDATED 0x60
 #define XLOG_HEAP2_NEW_CID		0x70
 
+
+/*
+ * And one RmgrId... See comment above
+ */
+#define XLOG_HEAP3_SET_HINTS	0x00
+
 /*
  * xl_heap_insert/xl_heap_multi_insert flag values, 8 bits are available.
  */
@@ -380,6 +386,12 @@ typedef struct xl_heap_new_cid
 	ItemPointerData target_tid;
 } xl_heap_new_cid;
 
+typedef struct xl_heap_set_hints
+{
+	OffsetNumber offnum; /* updated tuple's offset */
+	uint16		  t_infomask;
+} xl_heap_set_hints;
+
 #define SizeOfHeapNewCid (offsetof(xl_heap_new_cid, target_tid) + sizeof(ItemPointerData))
 
 /* logical rewrite xlog record header */
@@ -401,8 +413,11 @@ extern void heap_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap_identify(uint8 info);
 extern void heap_mask(char *pagedata, BlockNumber blkno);
 extern void heap2_redo(XLogReaderState *record);
+extern void heap3_redo(XLogReaderState *record);
 extern void heap2_desc(StringInfo buf, XLogReaderState *record);
+extern void heap3_desc(StringInfo buf, XLogReaderState *record);
 extern const char *heap2_identify(uint8 info);
+extern const char *heap3_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 extern XLogRecPtr log_heap_freeze(Relation reln, Buffer buffer,

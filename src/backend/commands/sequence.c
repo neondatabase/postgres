@@ -1206,7 +1206,7 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 		HeapTupleHeaderSetXmax(seqdatatuple->t_data, InvalidTransactionId);
 		seqdatatuple->t_data->t_infomask &= ~HEAP_XMAX_COMMITTED;
 		seqdatatuple->t_data->t_infomask |= HEAP_XMAX_INVALID;
-		MarkBufferDirtyHint(*buf, true);
+		MarkBufferDirtyHint(*buf, true, InvalidXLogRecPtr);
 	}
 
 	seq = (Form_pg_sequence_data) GETSTRUCT(seqdatatuple);

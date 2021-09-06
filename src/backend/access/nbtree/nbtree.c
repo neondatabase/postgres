@@ -1321,7 +1321,7 @@ backtrack:
 				opaque->btpo_cycleid == vstate->cycleid)
 			{
 				opaque->btpo_cycleid = 0;
-				MarkBufferDirtyHint(buf, true);
+				MarkBufferDirtyHint(buf, true, InvalidXLogRecPtr);
 			}
 		}
 

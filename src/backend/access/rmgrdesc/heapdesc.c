@@ -179,6 +179,20 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 						 xlrec->cmin, xlrec->cmax, xlrec->combocid);
 	}
 }
+void
+heap3_desc(StringInfo buf, XLogReaderState *record)
+{
+	char	   *rec = XLogRecGetData(record);
+	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+
+	info &= XLOG_HEAP_OPMASK;
+	if (info == XLOG_HEAP3_SET_HINTS)
+	{
+		xl_heap_set_hints *xlrec = (xl_heap_set_hints *) rec;
+
+		appendStringInfo(buf, "off %u infomask=%x", xlrec->offnum, xlrec->t_infomask);
+	}
+}
 
 const char *
 heap_identify(uint8 info)
@@ -258,6 +272,21 @@ heap2_identify(uint8 info)
 			break;
 		case XLOG_HEAP2_REWRITE:
 			id = "REWRITE";
+			break;
+	}
+
+	return id;
+}
+
+const char *
+heap3_identify(uint8 info)
+{
+	const char *id = NULL;
+
+	switch (info & ~XLR_INFO_MASK)
+	{
+		case XLOG_HEAP3_SET_HINTS:
+			id = "SET_HINTS";
 			break;
 	}
 

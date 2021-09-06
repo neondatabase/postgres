@@ -1982,8 +1982,9 @@ heap_get_latest_tid(TableScanDesc sscan,
  * Note this is not allowed for tuples whose xmax is a multixact.
  */
 static void
-UpdateXmaxHintBits(HeapTupleHeader tuple, Buffer buffer, TransactionId xid)
+UpdateXmaxHintBits(HeapTuple htup, Buffer buffer, TransactionId xid)
 {
+	HeapTupleHeader tuple = htup->t_data;
 	Assert(TransactionIdEquals(HeapTupleHeaderGetRawXmax(tuple), xid));
 	Assert(!(tuple->t_infomask & HEAP_XMAX_IS_MULTI));
 
@@ -1991,10 +1992,10 @@ UpdateXmaxHintBits(HeapTupleHeader tuple, Buffer buffer, TransactionId xid)
 	{
 		if (!HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask) &&
 			TransactionIdDidCommit(xid))
-			HeapTupleSetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+			HeapTupleSetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 								 xid);
 		else
-			HeapTupleSetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+			HeapTupleSetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 								 InvalidTransactionId);
 	}
 }
@@ -2935,7 +2936,7 @@ l1:
 				goto l1;
 
 			/* Otherwise check if it committed or aborted */
-			UpdateXmaxHintBits(tp.t_data, buffer, xwait);
+			UpdateXmaxHintBits(&tp, buffer, xwait);
 		}
 
 		/*
@@ -3576,7 +3577,7 @@ l2:
 				goto l2;
 
 			/* Otherwise check if it committed or aborted */
-			UpdateXmaxHintBits(oldtup.t_data, buffer, xwait);
+			UpdateXmaxHintBits(&oldtup, buffer, xwait);
 			if (oldtup.t_data->t_infomask & HEAP_XMAX_INVALID)
 				can_continue = true;
 		}
@@ -4815,7 +4816,7 @@ l3:
 				 * don't check for this in the multixact case, because some
 				 * locker transactions might still be running.
 				 */
-				UpdateXmaxHintBits(tuple->t_data, *buffer, xwait);
+				UpdateXmaxHintBits(tuple, *buffer, xwait);
 			}
 		}
 
@@ -8630,6 +8631,46 @@ heap_xlog_vacuum(XLogReaderState *record)
 }
 
 /*
+ * Replay XLOG_HEAP3_SET_HINTS record.
+ */
+static void
+heap_xlog_set_hints(XLogReaderState *record)
+{
+	XLogRecPtr	lsn = record->EndRecPtr;
+	xl_heap_set_hints *xlrec = (xl_heap_set_hints *) XLogRecGetData(record);
+	Buffer		buffer;
+	Page		page;
+	RelFileNode rnode;
+	BlockNumber blkno;
+	OffsetNumber offnum;
+	XLogRedoAction action;
+	ItemId		lp = NULL;
+	HeapTupleHeader htup;
+
+	XLogRecGetBlockTag(record, 0, &rnode, NULL, &blkno);
+	action = XLogReadBufferForRedo(record, 0, &buffer);
+	if (action == BLK_NEEDS_REDO)
+	{
+		page = BufferGetPage(buffer);
+
+		offnum = xlrec->offnum;
+		if (PageGetMaxOffsetNumber(page) >= offnum)
+			lp = PageGetItemId(page, offnum);
+
+		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+			elog(PANIC, "invalid lp");
+
+		htup = (HeapTupleHeader) PageGetItem(page, lp);
+		htup->t_infomask |= xlrec->t_infomask;
+
+		PageSetLSN(page, lsn);
+		MarkBufferDirty(buffer);
+	}
+	if (BufferIsValid(buffer))
+		UnlockReleaseBuffer(buffer);
+}
+
+/*
  * Replay XLOG_HEAP2_VISIBLE record.
  *
  * The critical integrity requirement here is that we must never end up with
@@ -9763,6 +9804,21 @@ heap2_redo(XLogReaderState *record)
 			break;
 		default:
 			elog(PANIC, "heap2_redo: unknown op code %u", info);
+	}
+}
+
+void
+heap3_redo(XLogReaderState *record)
+{
+	uint8		info = XLogRecGetInfo(record) & ~XLR_INFO_MASK;
+
+	switch (info & XLOG_HEAP_OPMASK)
+	{
+		case XLOG_HEAP3_SET_HINTS:
+			heap_xlog_set_hints(record);
+			break;
+		default:
+			elog(PANIC, "heap3_redo: unknown op code %u", info);
 	}
 }
 

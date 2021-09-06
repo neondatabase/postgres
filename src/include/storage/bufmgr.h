@@ -226,7 +226,7 @@ extern Size BufferShmemSize(void);
 extern void BufferGetTag(Buffer buffer, RelFileNode *rnode,
 						 ForkNumber *forknum, BlockNumber *blknum);
 
-extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
+extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn);
 
 extern void UnlockBuffers(void);
 extern void LockBuffer(Buffer buffer, int mode);

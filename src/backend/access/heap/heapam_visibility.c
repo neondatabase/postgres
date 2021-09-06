@@ -64,6 +64,7 @@
 #include "postgres.h"
 
 #include "access/heapam.h"
+#include "access/heapam_xlog.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/subtrans.h"
@@ -110,9 +111,11 @@
  * InvalidTransactionId if no check is needed.
  */
 static inline void
-SetHintBits(HeapTupleHeader tuple, Buffer buffer,
+SetHintBits(HeapTuple htup, Buffer buffer,
 			uint16 infomask, TransactionId xid)
 {
+	HeapTupleHeader tuple = htup->t_data;
+	XLogRecPtr recptr = InvalidXLogRecPtr;
 	if (TransactionIdIsValid(xid))
 	{
 		/* NB: xid must be known committed here! */
@@ -127,7 +130,20 @@ SetHintBits(HeapTupleHeader tuple, Buffer buffer,
 	}
 
 	tuple->t_infomask |= infomask;
-	MarkBufferDirtyHint(buffer, true);
+
+	if (!BufferIsLocal(buffer))
+	{
+		xl_heap_set_hints xlrec;
+		Page page = BufferGetPage(buffer);
+		xlrec.offnum = ItemPointerGetOffsetNumber(&htup->t_self);
+		Assert(xlrec.offnum <= PageGetMaxOffsetNumber(page));
+		xlrec.t_infomask = infomask;
+		XLogBeginInsert();
+		XLogRegisterData((char *) &xlrec, sizeof(xl_heap_set_hints));
+		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD|REGBUF_NO_IMAGE);
+		recptr = XLogInsert(RM_HEAP3_ID, XLOG_HEAP3_SET_HINTS);
+	}
+	MarkBufferDirtyHint(buffer, true, recptr);
 }
 
 /*
@@ -137,7 +153,7 @@ SetHintBits(HeapTupleHeader tuple, Buffer buffer,
  * implement inline functions.
  */
 void
-HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
+HeapTupleSetHintBits(HeapTuple tuple, Buffer buffer,
 					 uint16 infomask, TransactionId xid)
 {
 	SetHintBits(tuple, buffer, infomask, xid);
@@ -189,11 +205,11 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 			{
 				if (TransactionIdDidCommit(xvac))
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			}
 		}
@@ -207,11 +223,11 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 				if (TransactionIdIsInProgress(xvac))
 					return false;
 				if (TransactionIdDidCommit(xvac))
-					SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+					SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 								InvalidTransactionId);
 				else
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
@@ -244,7 +260,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
 			{
 				/* deleting subtransaction must have aborted */
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
 				return true;
 			}
@@ -254,12 +270,12 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
 			return false;
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						HeapTupleHeaderGetRawXmin(tuple));
 		else
 		{
 			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 						InvalidTransactionId);
 			return false;
 		}
@@ -312,7 +328,7 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
 	{
 		/* it must have aborted or crashed */
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return true;
 	}
@@ -321,12 +337,12 @@ HeapTupleSatisfiesSelf(HeapTuple htup, Snapshot snapshot, Buffer buffer)
 
 	if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 	{
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return true;
 	}
 
-	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+	SetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 				HeapTupleHeaderGetRawXmax(tuple));
 	return false;
 }
@@ -382,11 +398,11 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
 			{
 				if (TransactionIdDidCommit(xvac))
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			}
 		}
@@ -400,11 +416,11 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
 				if (TransactionIdIsInProgress(xvac))
 					return false;
 				if (TransactionIdDidCommit(xvac))
-					SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+					SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 								InvalidTransactionId);
 				else
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
@@ -478,11 +494,11 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			{
 				if (TransactionIdDidCommit(xvac))
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return TM_Invisible;
 				}
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			}
 		}
@@ -496,11 +512,11 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 				if (TransactionIdIsInProgress(xvac))
 					return TM_Invisible;
 				if (TransactionIdDidCommit(xvac))
-					SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+					SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 								InvalidTransactionId);
 				else
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return TM_Invisible;
 				}
@@ -574,7 +590,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
 			{
 				/* deleting subtransaction must have aborted */
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
 				return TM_Ok;
 			}
@@ -587,12 +603,12 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 		else if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmin(tuple)))
 			return TM_Invisible;
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						HeapTupleHeaderGetRawXmin(tuple));
 		else
 		{
 			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 						InvalidTransactionId);
 			return TM_Invisible;
 		}
@@ -625,7 +641,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			if (MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple), true))
 				return TM_BeingModified;
 
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
+			SetHintBits(htup, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
 			return TM_Ok;
 		}
 
@@ -669,7 +685,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 			 * There's no member, even just a locker, alive anymore, so we can
 			 * mark the Xmax as invalid.
 			 */
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 						InvalidTransactionId);
 			return TM_Ok;
 		}
@@ -696,7 +712,7 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
 	{
 		/* it must have aborted or crashed */
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return TM_Ok;
 	}
@@ -705,12 +721,12 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 
 	if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 	{
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return TM_Ok;
 	}
 
-	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+	SetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 				HeapTupleHeaderGetRawXmax(tuple));
 	if (!ItemPointerEquals(&htup->t_self, &tuple->t_ctid))
 		return TM_Updated;		/* updated by other */
@@ -766,11 +782,11 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 			{
 				if (TransactionIdDidCommit(xvac))
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			}
 		}
@@ -784,11 +800,11 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 				if (TransactionIdIsInProgress(xvac))
 					return false;
 				if (TransactionIdDidCommit(xvac))
-					SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+					SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 								InvalidTransactionId);
 				else
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
@@ -821,7 +837,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
 			{
 				/* deleting subtransaction must have aborted */
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
 				return true;
 			}
@@ -849,12 +865,12 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 			return true;		/* in insertion by other */
 		}
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						HeapTupleHeaderGetRawXmin(tuple));
 		else
 		{
 			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 						InvalidTransactionId);
 			return false;
 		}
@@ -914,7 +930,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 	if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
 	{
 		/* it must have aborted or crashed */
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return true;
 	}
@@ -923,12 +939,12 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 
 	if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 	{
-		SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+		SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 					InvalidTransactionId);
 		return true;
 	}
 
-	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+	SetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 				HeapTupleHeaderGetRawXmax(tuple));
 	return false;				/* updated by other */
 }
@@ -980,11 +996,11 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			{
 				if (TransactionIdDidCommit(xvac))
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			}
 		}
@@ -998,11 +1014,11 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 				if (XidInMVCCSnapshot(xvac, snapshot))
 					return false;
 				if (TransactionIdDidCommit(xvac))
-					SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+					SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 								InvalidTransactionId);
 				else
 				{
-					SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+					SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 								InvalidTransactionId);
 					return false;
 				}
@@ -1040,7 +1056,7 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 			if (!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetRawXmax(tuple)))
 			{
 				/* deleting subtransaction must have aborted */
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
 				return true;
 			}
@@ -1053,12 +1069,12 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		else if (XidInMVCCSnapshot(HeapTupleHeaderGetRawXmin(tuple), snapshot))
 			return false;
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						HeapTupleHeaderGetRawXmin(tuple));
 		else
 		{
 			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 						InvalidTransactionId);
 			return false;
 		}
@@ -1122,13 +1138,13 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 		if (!TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
 		{
 			/* it must have aborted or crashed */
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 						InvalidTransactionId);
 			return true;
 		}
 
 		/* xmax transaction committed */
-		SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+		SetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 					HeapTupleHeaderGetRawXmax(tuple));
 	}
 	else
@@ -1223,11 +1239,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 				return HEAPTUPLE_DELETE_IN_PROGRESS;
 			if (TransactionIdDidCommit(xvac))
 			{
-				SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 							InvalidTransactionId);
 				return HEAPTUPLE_DEAD;
 			}
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						InvalidTransactionId);
 		}
 		/* Used by pre-9.0 binary upgrades */
@@ -1240,11 +1256,11 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 			if (TransactionIdIsInProgress(xvac))
 				return HEAPTUPLE_INSERT_IN_PROGRESS;
 			if (TransactionIdDidCommit(xvac))
-				SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+				SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 							InvalidTransactionId);
 			else
 			{
-				SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 							InvalidTransactionId);
 				return HEAPTUPLE_DEAD;
 			}
@@ -1276,14 +1292,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 			return HEAPTUPLE_INSERT_IN_PROGRESS;
 		}
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmin(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMIN_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMIN_COMMITTED,
 						HeapTupleHeaderGetRawXmin(tuple));
 		else
 		{
 			/*
 			 * Not in Progress, Not Committed, so either Aborted or crashed
 			 */
-			SetHintBits(tuple, buffer, HEAP_XMIN_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMIN_INVALID,
 						InvalidTransactionId);
 			return HEAPTUPLE_DEAD;
 		}
@@ -1322,13 +1338,13 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 					MultiXactIdIsRunning(HeapTupleHeaderGetRawXmax(tuple),
 										 true))
 					return HEAPTUPLE_LIVE;
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
 			}
 			else
 			{
 				if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
 					return HEAPTUPLE_LIVE;
-				SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+				SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 							InvalidTransactionId);
 			}
 		}
@@ -1373,7 +1389,7 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 			 * Not in Progress, Not Committed, so either Aborted or crashed.
 			 * Mark the Xmax as invalid.
 			 */
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
+			SetHintBits(htup, buffer, HEAP_XMAX_INVALID, InvalidTransactionId);
 		}
 
 		return HEAPTUPLE_LIVE;
@@ -1384,14 +1400,14 @@ HeapTupleSatisfiesVacuumHorizon(HeapTuple htup, Buffer buffer, TransactionId *de
 		if (TransactionIdIsInProgress(HeapTupleHeaderGetRawXmax(tuple)))
 			return HEAPTUPLE_DELETE_IN_PROGRESS;
 		else if (TransactionIdDidCommit(HeapTupleHeaderGetRawXmax(tuple)))
-			SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
+			SetHintBits(htup, buffer, HEAP_XMAX_COMMITTED,
 						HeapTupleHeaderGetRawXmax(tuple));
 		else
 		{
 			/*
 			 * Not in Progress, Not Committed, so either Aborted or crashed
 			 */
-			SetHintBits(tuple, buffer, HEAP_XMAX_INVALID,
+			SetHintBits(htup, buffer, HEAP_XMAX_INVALID,
 						InvalidTransactionId);
 			return HEAPTUPLE_LIVE;
 		}
