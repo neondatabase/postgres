@@ -567,6 +567,10 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 	ZenithResponse *resp;
 	bool		latest;
 	XLogRecPtr	request_lsn;
+	BlockNumber n_blocks;
+
+	if (get_cached_relsize(reln->smgr_rnode.node, forkNum, &n_blocks))
+		return true;
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -668,7 +672,9 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 {
 	XLogRecPtr	lsn;
 
-	zenith_wallog_page(reln, forkNum, blkno, buffer);
+	if (!PageIsNew(buffer))
+		zenith_wallog_page(reln, forkNum, blkno, buffer);
+
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);
