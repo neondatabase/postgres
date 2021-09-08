@@ -15,6 +15,7 @@
 #define HEAPAM_XLOG_H
 
 #include "access/htup.h"
+#include "access/htup_details.h"
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
 #include "storage/buf.h"
@@ -386,11 +387,21 @@ typedef struct xl_heap_new_cid
 	ItemPointerData target_tid;
 } xl_heap_new_cid;
 
+#define MAX_TUPLES_PER_PAGE (BLCKSZ/SizeofHeapTupleHeader)
+
+typedef struct xl_heap_tuple_mask {
+		OffsetNumber offnum; /* updated tuple's offset */
+		uint16		 t_infomask;
+} xl_heap_tuple_mask;
+
 typedef struct xl_heap_set_hints
 {
-	OffsetNumber offnum; /* updated tuple's offset */
-	uint16		  t_infomask;
+	XLogRecPtr lsn; /* LSN when this page was last updated */
+	int n_hints;
+	xl_heap_tuple_mask hints[MAX_TUPLES_PER_PAGE];
 } xl_heap_set_hints;
+
+#define SizeOfHeapSetHints(xlrec) (offsetof(xl_heap_set_hints, hints) + sizeof(xl_heap_tuple_mask)*xlrec.n_hints)
 
 #define SizeOfHeapNewCid (offsetof(xl_heap_new_cid, target_tid) + sizeof(ItemPointerData))
 

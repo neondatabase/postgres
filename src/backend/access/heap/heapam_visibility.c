@@ -72,6 +72,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/procarray.h"
 #include "utils/builtins.h"
@@ -114,8 +115,13 @@ static inline void
 SetHintBits(HeapTuple htup, Buffer buffer,
 			uint16 infomask, TransactionId xid)
 {
+	static BufferTag curr_page;
+	static xl_heap_set_hints xlrec;
+	BufferTag buf_tag;
+
 	HeapTupleHeader tuple = htup->t_data;
-	XLogRecPtr recptr = InvalidXLogRecPtr;
+	XLogRecPtr recptr;
+
 	if (TransactionIdIsValid(xid))
 	{
 		/* NB: xid must be known committed here! */
@@ -133,17 +139,28 @@ SetHintBits(HeapTuple htup, Buffer buffer,
 
 	if (!BufferIsLocal(buffer))
 	{
-		xl_heap_set_hints xlrec;
-		Page page = BufferGetPage(buffer);
-		xlrec.offnum = ItemPointerGetOffsetNumber(&htup->t_self);
-		Assert(xlrec.offnum <= PageGetMaxOffsetNumber(page));
-		xlrec.t_infomask = infomask;
-		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, sizeof(xl_heap_set_hints));
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD|REGBUF_NO_IMAGE);
-		recptr = XLogInsert(RM_HEAP3_ID, XLOG_HEAP3_SET_HINTS);
+		BufferGetTag(buffer, &buf_tag.rnode, &buf_tag.forkNum, &buf_tag.blockNum);
+		if (xlrec.n_hints > 0 && (xlrec.n_hints == MAX_TUPLES_PER_PAGE || memcmp(&buf_tag, &curr_page, sizeof(buf_tag)) != 0))
+		{
+			XLogBeginInsert();
+			XLogRegisterData((char *)&xlrec, SizeOfHeapSetHints(xlrec));
+			XLogRegisterBlock(0, &curr_page.rnode, curr_page.forkNum, curr_page.blockNum, NULL, REGBUF_STANDARD|REGBUF_NO_IMAGE);
+			recptr = XLogInsert(RM_HEAP3_ID, XLOG_HEAP3_SET_HINTS);
+			MarkBufferDirtyHint(buffer, true, recptr);
+			xlrec.n_hints = 0;
+		}
+		if (xlrec.n_hints == 0)
+		{
+			/* Remember page LSN to reject delayed setting hint bits when this pages is updated. */
+			xlrec.lsn = BufferGetLSNAtomic(buffer);
+		}
+		curr_page = buf_tag;
+		xlrec.hints[xlrec.n_hints].offnum = ItemPointerGetOffsetNumber(&htup->t_self);
+		xlrec.hints[xlrec.n_hints].t_infomask = infomask;
+		xlrec.n_hints += 1;
 	}
-	MarkBufferDirtyHint(buffer, true, recptr);
+	else
+		MarkBufferDirtyHint(buffer, true, InvalidXLogRecPtr);
 }
 
 /*

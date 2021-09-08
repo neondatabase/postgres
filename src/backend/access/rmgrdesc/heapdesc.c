@@ -189,8 +189,9 @@ heap3_desc(StringInfo buf, XLogReaderState *record)
 	if (info == XLOG_HEAP3_SET_HINTS)
 	{
 		xl_heap_set_hints *xlrec = (xl_heap_set_hints *) rec;
-
-		appendStringInfo(buf, "off %u infomask=%x", xlrec->offnum, xlrec->t_infomask);
+		for (int i = 0; i < xlrec->n_hints; i++) {
+			appendStringInfo(buf, "off %u infomask=%x,", xlrec->hints[i].offnum, xlrec->hints[i].t_infomask);
+		}
 	}
 }
 

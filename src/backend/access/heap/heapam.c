@@ -8630,6 +8630,9 @@ heap_xlog_vacuum(XLogReaderState *record)
 	}
 }
 
+int n_applied_set_hints;
+int n_rejected_set_hints;
+
 /*
  * Replay XLOG_HEAP3_SET_HINTS record.
  */
@@ -8651,20 +8654,27 @@ heap_xlog_set_hints(XLogReaderState *record)
 	action = XLogReadBufferForRedo(record, 0, &buffer);
 	if (action == BLK_NEEDS_REDO)
 	{
+		int i;
 		page = BufferGetPage(buffer);
+		if (PageGetLSN(page) == xlrec->lsn)
+		{
+			for (i = 0; i < xlrec->n_hints; i++)
+			{
+				offnum = xlrec->hints[i].offnum;
+				if (PageGetMaxOffsetNumber(page) >= offnum)
+					lp = PageGetItemId(page, offnum);
 
-		offnum = xlrec->offnum;
-		if (PageGetMaxOffsetNumber(page) >= offnum)
-			lp = PageGetItemId(page, offnum);
+				if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
+					elog(PANIC, "invalid lp");
 
-		if (PageGetMaxOffsetNumber(page) < offnum || !ItemIdIsNormal(lp))
-			elog(PANIC, "invalid lp");
-
-		htup = (HeapTupleHeader) PageGetItem(page, lp);
-		htup->t_infomask |= xlrec->t_infomask;
-
-		PageSetLSN(page, lsn);
-		MarkBufferDirty(buffer);
+				htup = (HeapTupleHeader) PageGetItem(page, lp);
+				htup->t_infomask |= xlrec->hints[i].t_infomask;
+			}
+			PageSetLSN(page, lsn);
+			MarkBufferDirty(buffer);
+			n_applied_set_hints += 1;
+		} else
+			n_rejected_set_hints += 1;
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
