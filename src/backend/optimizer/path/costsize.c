@@ -150,6 +150,8 @@ bool		enable_parallel_append = true;
 bool		enable_parallel_hash = true;
 bool		enable_partition_pruning = true;
 bool		enable_async_append = true;
+bool        enable_seqscan_prefetch = true;
+bool        enable_indexscan_prefetch = true;
 
 typedef struct
 {
