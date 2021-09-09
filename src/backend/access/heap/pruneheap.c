@@ -368,7 +368,7 @@ heap_page_prune(Relation relation, Buffer buffer,
 		{
 			((PageHeader) page)->pd_prune_xid = prstate.new_prune_xid;
 			PageClearFull(page);
-			MarkBufferDirtyHint(buffer, true, InvalidXLogRecPtr);
+			MarkBufferDirtyHint(buffer, true);
 		}
 	}
 

@@ -87,7 +87,7 @@ gistkillitems(IndexScanDesc scan)
 	if (killedsomething)
 	{
 		GistMarkPageHasGarbage(page);
-		MarkBufferDirtyHint(buffer, true, InvalidXLogRecPtr);
+		MarkBufferDirtyHint(buffer, true);
 	}
 
 	UnlockReleaseBuffer(buffer);

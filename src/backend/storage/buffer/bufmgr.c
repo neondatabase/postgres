@@ -3897,10 +3897,11 @@ IncrBufferRefCount(Buffer buffer)
  *	  (due to a race condition), so it cannot be used for important changes.
  */
 void
-MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn)
+MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 {
 	BufferDesc *bufHdr;
 	Page		page = BufferGetPage(buffer);
+	XLogRecPtr lsn = InvalidXLogRecPtr;
 
 	if (!BufferIsValid(buffer))
 		elog(ERROR, "bad buffer ID: %d", buffer);
@@ -3986,8 +3987,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn)
 			 * rather than full transactionids.
 			 */
 			MyProc->delayChkpt = delayChkpt = true;
-			if (XLogRecPtrIsInvalid(lsn))
-				lsn = XLogSaveBufferForHint(buffer, buffer_std);
+			lsn = XLogSaveBufferForHint(buffer, buffer_std);
 		}
 
 		buf_state = LockBufHdr(bufHdr);

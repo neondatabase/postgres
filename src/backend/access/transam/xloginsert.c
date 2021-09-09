@@ -978,7 +978,6 @@ XLogSaveBufferForHint(Buffer buffer, bool buffer_std)
 
 		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI_FOR_HINT);
 	}
-
 	return recptr;
 }
 

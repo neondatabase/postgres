@@ -543,7 +543,7 @@ brin_start_evacuating_page(Relation idxRel, Buffer buf)
 		{
 			/* prevent other backends from adding more stuff to this page */
 			BrinPageFlags(page) |= BRIN_EVACUATE_PAGE;
-			MarkBufferDirtyHint(buf, true, InvalidXLogRecPtr);
+			MarkBufferDirtyHint(buf, true);
 
 			return true;
 		}

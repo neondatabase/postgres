@@ -218,7 +218,7 @@ XLogRecordPageWithFreeSpace(RelFileNode rnode, BlockNumber heapBlk,
 		PageInit(page, BLCKSZ, 0);
 
 	if (fsm_set_avail(page, slot, new_cat))
-		MarkBufferDirtyHint(buf, false, InvalidXLogRecPtr);
+		MarkBufferDirtyHint(buf, false);
 	UnlockReleaseBuffer(buf);
 }
 
@@ -668,7 +668,7 @@ fsm_set_and_search(Relation rel, FSMAddress addr, uint16 slot,
 	page = BufferGetPage(buf);
 
 	if (fsm_set_avail(page, slot, newValue))
-		MarkBufferDirtyHint(buf, false, InvalidXLogRecPtr);
+		MarkBufferDirtyHint(buf, false);
 
 	if (minValue != 0)
 	{
@@ -870,7 +870,7 @@ fsm_vacuum_page(Relation rel, FSMAddress addr,
 			{
 				LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 				fsm_set_avail(page, slot, child_avail);
-				MarkBufferDirtyHint(buf, false, InvalidXLogRecPtr);
+				MarkBufferDirtyHint(buf, false);
 				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 			}
 		}

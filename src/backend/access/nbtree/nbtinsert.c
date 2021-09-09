@@ -687,9 +687,9 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 					 * crucial. Be sure to mark the proper buffer dirty.
 					 */
 					if (nbuf != InvalidBuffer)
-						MarkBufferDirtyHint(nbuf, true, InvalidXLogRecPtr);
+						MarkBufferDirtyHint(nbuf, true);
 					else
-						MarkBufferDirtyHint(insertstate->buf, true, InvalidXLogRecPtr);
+						MarkBufferDirtyHint(insertstate->buf, true);
 				}
 
 				/*

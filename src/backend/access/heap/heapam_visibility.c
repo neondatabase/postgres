@@ -145,7 +145,6 @@ SetHintBits(HeapTuple htup, Buffer buffer,
 			XLogRegisterData((char *)&xlrec, SizeOfHeapSetHints(xlrec));
 			XLogRegisterBlock(0, &curr_page.rnode, curr_page.forkNum, curr_page.blockNum, NULL, REGBUF_STANDARD|REGBUF_NO_IMAGE);
 			recptr = XLogInsert(RM_HEAP3_ID, XLOG_HEAP3_SET_HINTS);
-			MarkBufferDirtyHint(buffer, true, recptr);
 			xlrec.n_hints = 0;
 		}
 		if (xlrec.n_hints == 0)
@@ -159,7 +158,7 @@ SetHintBits(HeapTuple htup, Buffer buffer,
 		xlrec.n_hints += 1;
 	}
 	else
-		MarkBufferDirtyHint(buffer, true, InvalidXLogRecPtr);
+		MarkBufferDirtyHint(buffer, true);
 }
 
 /*
