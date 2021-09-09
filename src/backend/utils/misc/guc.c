@@ -2127,7 +2127,7 @@ static struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Setting hint bit doesn't mark page as dirty"),
 		},
 		&zenith_transient_hint_bits,
-		true,
+		false,
 		NULL, NULL, NULL
 	},
 

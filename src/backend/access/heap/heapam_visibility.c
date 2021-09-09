@@ -136,7 +136,6 @@ SetHintBits(HeapTuple htup, Buffer buffer,
 	}
 
 	tuple->t_infomask |= infomask;
-
 	if (!BufferIsLocal(buffer))
 	{
 		BufferGetTag(buffer, &buf_tag.rnode, &buf_tag.forkNum, &buf_tag.blockNum);

@@ -3986,7 +3986,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn)
 			 * rather than full transactionids.
 			 */
 			MyProc->delayChkpt = delayChkpt = true;
-			if (!XLogRecPtrIsInvalid(lsn))
+			if (XLogRecPtrIsInvalid(lsn))
 				lsn = XLogSaveBufferForHint(buffer, buffer_std);
 		}
 
@@ -4012,7 +4012,10 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std, XLogRecPtr lsn)
 			 * sometime later in this checkpoint cycle.
 			 */
 			if (!XLogRecPtrIsInvalid(lsn))
+			{
+				((PageHeader)page)->pd_flags |= PD_WAL_LOGGED;
 				PageSetLSN(page, lsn);
+			}
 		}
 
 		buf_state |= BM_DIRTY | BM_JUST_DIRTIED;
