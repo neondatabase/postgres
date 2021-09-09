@@ -58,6 +58,7 @@
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/md.h"
+#include "utils/timestamp.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -563,7 +564,7 @@ zenith_get_request_lsn(bool *latest)
 		*latest = false;
 		lsn = GetXLogReplayRecPtr(NULL);
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
-			 (uint32) ((lsn) >> 32), (uint32) (lsn));
+			 LSN_FORMAT_ARGS(lsn));
 	}
 	else if (am_walsender)
 	{
@@ -584,7 +585,7 @@ zenith_get_request_lsn(bool *latest)
 		lsn = GetLastWrittenPageLSN();
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
-			 (uint32) ((lsn) >> 32), (uint32) (lsn));
+			 LSN_FORMAT_ARGS(lsn));
 
 		lsn = zm_adjust_lsn(lsn);
 
@@ -598,8 +599,8 @@ zenith_get_request_lsn(bool *latest)
 		if (lsn > flushlsn)
 		{
 			elog(LOG, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
-				 (uint32) (lsn >> 32), (uint32) lsn,
-				 (uint32) (flushlsn >> 32), (uint32) flushlsn);
+				 LSN_FORMAT_ARGS(lsn),
+				 LSN_FORMAT_ARGS(flushlsn));
 			XLogFlush(lsn);
 		}
 	}
@@ -789,7 +790,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forkNum, blkno,
-		 (uint32) (lsn >> 32), (uint32) lsn);
+		 LSN_FORMAT_ARGS(lsn));
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -834,6 +835,7 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 bool
 zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
+	XLogRecPtr request_lsn;
 	switch (reln->smgr_relpersistence)
 	{
 		case 0:
@@ -851,8 +853,8 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	/* not implemented */
-	elog(SmgrTrace, "[ZENITH_SMGR] prefetch noop");
+	XLogRecPtr request_lsn = zenith_get_request_lsn(false);
+	zenith_prefetch_buffer(reln, forknum, blocknum, request_lsn);
 	return true;
 }
 
@@ -923,6 +925,13 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
+
+	if (zenith_find_prefetched_buffer(reln, forkNum, blkno, request_lsn, buffer))
+		return;
+
+	prefetch_log("%lu: read block %d of relation %d",
+				 GetCurrentTimestamp(), blkno, reln->smgr_rnode.node.relNode);
+
 	{
 		ZenithGetPageRequest request = {
 			.req.tag = T_ZenithGetPageRequest,
@@ -932,7 +941,6 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.forknum = forkNum,
 			.blkno = blkno
 		};
-
 		resp = page_server->request((ZenithRequest *) &request);
 	}
 
@@ -984,7 +992,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					 reln->smgr_rnode.node.dbNode,
 					 reln->smgr_rnode.node.relNode,
 					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 LSN_FORMAT_ARGS(request_lsn),
 					 hexdump_page(buffer));
 			}
 		}
@@ -996,7 +1004,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 reln->smgr_rnode.node.dbNode,
 				 reln->smgr_rnode.node.relNode,
 				 forkNum,
-				 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+				 LSN_FORMAT_ARGS(request_lsn),
 				 hexdump_page(mdbuf));
 		}
 		else if (PageGetSpecialSize(mdbuf) == 0)
@@ -1013,7 +1021,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					 reln->smgr_rnode.node.dbNode,
 					 reln->smgr_rnode.node.relNode,
 					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 LSN_FORMAT_ARGS(request_lsn),
 					 hexdump_page(mdbuf_masked),
 					 hexdump_page(pageserver_masked));
 			}
@@ -1034,7 +1042,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 						 reln->smgr_rnode.node.dbNode,
 						 reln->smgr_rnode.node.relNode,
 						 forkNum,
-						 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+						 LSN_FORMAT_ARGS(request_lsn),
 						 hexdump_page(mdbuf_masked),
 						 hexdump_page(pageserver_masked));
 				}
@@ -1118,7 +1126,7 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forknum, blocknum,
-		 (uint32) (lsn >> 32), (uint32) lsn);
+		 LSN_FORMAT_ARGS(lsn));
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -1206,7 +1214,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forknum,
-		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+		 LSN_FORMAT_ARGS(request_lsn),
 		 n_blocks);
 
 	pfree(resp);
