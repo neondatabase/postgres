@@ -79,6 +79,7 @@ static AppendResponse lastFeedback;
  *  + 1 of last chunk streamed to everyone)
  */
 static XLogRecPtr   truncateLsn;
+static XLogRecPtr   candidateTruncateLsn;
 static VoteRequest voteRequest; /* Vote request for walkeeper */
 static term_t       propTerm; /* term of the proposer */
 static XLogRecPtr   propEpochStartLsn;    /* epoch start lsn of the proposer */
@@ -344,10 +345,30 @@ HandleWalKeeperResponse(void)
 	{
 		WalMessage* msg = msgQueueHead;
 		msgQueueHead = msg->next;
-		if (truncateLsn < msg->req.beginLsn)
+		/*
+		 * This piece is received by everyone; try to advance truncateLsn, but
+		 * hold it back to nearest commitLsn. Thus we will always start
+		 * streaming from the beginning of the record, which simplifies decoding
+		 * on the far end.
+		 *
+		 * This also prevents surprising violation of truncateLsn <= commitLsn
+		 * invariant which might occur because 1) truncateLsn can be advanced
+		 * immediately once chunk is broadcast to all safekeepers, and commitLsn
+		 * generally can't be advanced based on feedback from safekeeper who is
+		 * still in the previous epoch (similar to 'leader can't commit entries
+		 * from previous term' in Raft); 2) chunks we read from WAL and send are
+		 * plain sheets of bytes, but safekeepers ack only on commit boundaries.
+		 */
+		if (msg->req.endLsn >= minQuorumLsn && minQuorumLsn != InvalidXLogRecPtr)
 		{
-			Assert(truncateLsn < msg->req.endLsn);
-			truncateLsn = msg->req.endLsn;
+			truncateLsn = minQuorumLsn;
+			candidateTruncateLsn = InvalidXLogRecPtr;
+		}
+		else if (msg->req.endLsn >= candidateTruncateLsn &&
+				 candidateTruncateLsn != InvalidXLogRecPtr)
+		{
+			truncateLsn = candidateTruncateLsn;
+			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
@@ -509,6 +530,10 @@ WalProposerMain(Datum main_arg)
 	if (SearchNamedReplicationSlot(WAL_PROPOSER_SLOT_NAME, false) == NULL)
 	{
 		ReplicationSlotCreate(WAL_PROPOSER_SLOT_NAME, false, RS_PERSISTENT, false);
+		ReplicationSlotReserveWal();
+		/* Write this slot to disk */
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
 		ReplicationSlotRelease();
 	}
 
@@ -601,21 +626,7 @@ SendMessageToNode(int i, WalMessage* msg)
 	if (wk->currMsg)
 	{
 		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
-		/*
-		 * truncateLsn is advanced immediately once chunk is broadcast to all
-		 * safekeepers, and commitLsn generally can't be advanced based on
-		 * feedback from safekeeper who is still in the previous epoch (similar
-		 * to 'leader can't commit entries from previous term' in Raft), so the
-		 * first might surprisingly get higher than the latter.
-		 *
-		 * Another reason for this will be switch to proper acks from
-		 * safekeepers: they must point to end of last valid record, not just
-		 * end of last received chunk.
-		 *
-		 * Free safekeeper from such surprises by holding back truncateLsn in
-		 * these cases.
-		 */
-		wk->currMsg->req.truncateLsn = Min(truncateLsn, wk->currMsg->req.commitLsn);
+		wk->currMsg->req.truncateLsn = truncateLsn;
 
 		/* Once we've selected and set up our message, actually start sending it. */
 		wk->state = SS_SEND_WAL;
@@ -741,10 +752,9 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 static void
 DetermineEpochStartLsn(void)
 {
-	// FIXME: If the WAL acceptors have nothing, start from "the beginning of time"
-	propEpochStartLsn = wal_segment_size;
+	propEpochStartLsn = InvalidXLogRecPtr;
 	donorEpoch = 0;
-	truncateLsn = wal_segment_size;
+	truncateLsn = InvalidXLogRecPtr;
 
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -762,7 +772,28 @@ DetermineEpochStartLsn(void)
 		}
 	}
 
-	elog(LOG, "got votes from majority (%d) of nodes, term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s, restart_lsn %X/%X",
+	/*
+	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing was
+	 * committed yet. To keep the idea of always starting streaming since record
+	 * boundary (which simplifies decoding on safekeeper), take start position
+	 * of the slot.
+	 */
+	if (propEpochStartLsn == InvalidXLogRecPtr && !syncSafekeepers)
+	{
+		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, SAB_Error);
+		propEpochStartLsn = truncateLsn = MyReplicationSlot->data.restart_lsn;
+		ReplicationSlotRelease();
+		elog(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(propEpochStartLsn));
+	}
+	/*
+	 * If propEpochStartLsn is not 0, at least one msg with WAL was sent to some
+	 * connected safekeeper; it must have carried truncateLsn pointing to the
+	 * first record.
+	 */
+	Assert((truncateLsn != InvalidXLogRecPtr) ||
+		   (syncSafekeepers && truncateLsn == propEpochStartLsn));
+
+	elog(LOG, "got votes from majority (%d) of nodes, term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s, truncate_lsn %X/%X",
 		 quorum,
 		 propTerm,
 		 LSN_FORMAT_ARGS(propEpochStartLsn),
@@ -1240,8 +1271,9 @@ AdvancePollState(int i, uint32 events)
 			{
 				WalMessage* msg = wk->currMsg;
 
-				elog(LOG, "Sending message with len %ld commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
+				elog(LOG, "sending message with len %ld beginLsn=%X/%X commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
 					 msg->size - sizeof(AppendRequestHeader),
+					 LSN_FORMAT_ARGS(msg->req.beginLsn),
 					 LSN_FORMAT_ARGS(msg->req.commitLsn),
 					 LSN_FORMAT_ARGS(truncateLsn),
 					 wk->host, wk->port);
@@ -1294,6 +1326,16 @@ AdvancePollState(int i, uint32 events)
 				if (minQuorumLsn > lastSentCommitLsn)
 				{
 					BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+					/*
+					 * commitLsn is always the record boundary; remember it so
+					 * we can advance truncateLsn there. But do so only if
+					 * previous value is applied, otherwise it might never catch
+					 * up.
+					 */
+					if (candidateTruncateLsn == InvalidXLogRecPtr)
+					{
+						candidateTruncateLsn = minQuorumLsn;
+					}
 					lastSentCommitLsn = minQuorumLsn;
 				}
 				break;
