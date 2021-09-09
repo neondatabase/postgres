@@ -23,6 +23,7 @@
 #include "access/xlogdefs.h"
 #include "postmaster/interrupt.h"
 #include "storage/bufmgr.h"
+#include "utils/timestamp.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -207,7 +208,7 @@ zm_to_string(ZenithMessage *msg)
 							 msg_req->page_key.rnode.relNode,
 							 msg_req->page_key.forknum,
 							 msg_req->page_key.blkno,
-							 (uint32) (msg_req->lsn >> 32), (uint32) (msg_req->lsn));
+							 LSN_FORMAT_ARGS(msg_req->lsn));
 
 			break;
 		}
@@ -422,7 +423,7 @@ zenith_get_request_lsn(bool nonrel)
 	{
 		lsn = GetXLogReplayRecPtr(NULL);
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
-			(uint32) ((lsn) >> 32), (uint32) (lsn));
+			 LSN_FORMAT_ARGS(lsn));
 
 		lsn = InvalidXLogRecPtr;
 	}
@@ -434,7 +435,7 @@ zenith_get_request_lsn(bool nonrel)
 	else if (nonrel)
 	{
 		lsn = GetLastImportantRecPtr();
-		elog(DEBUG1, "zenith_get_request_lsn norel GetLastImportantRecPtr  %X/%X", (uint32) ((lsn) >> 32), (uint32) (lsn));
+		elog(DEBUG1, "zenith_get_request_lsn norel GetLastImportantRecPtr  %X/%X", LSN_FORMAT_ARGS(lsn));
 	}
 	else
 	{
@@ -448,7 +449,7 @@ zenith_get_request_lsn(bool nonrel)
 		lsn = GetLastWrittenPageLSN();
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
-			(uint32) ((lsn) >> 32), (uint32) (lsn));
+			 LSN_FORMAT_ARGS(lsn));
 
 		lsn = zm_adjust_lsn(lsn);
 
@@ -461,8 +462,8 @@ zenith_get_request_lsn(bool nonrel)
 		if (lsn > flushlsn)
 		{
 			elog(LOG, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
-				 (uint32) (lsn >> 32), (uint32) lsn,
-				 (uint32) (flushlsn >> 32), (uint32) flushlsn);
+				 LSN_FORMAT_ARGS(lsn),
+				 LSN_FORMAT_ARGS(flushlsn));
 			XLogFlush(lsn);
 		}
 	}
@@ -562,7 +563,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forkNum, blkno,
-		 (uint32) (lsn >> 32), (uint32) lsn);
+		 LSN_FORMAT_ARGS(lsn));
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -606,8 +607,8 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 bool
 zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
-	/* not implemented */
-	elog(SmgrTrace, "[ZENITH_SMGR] prefetch noop");
+	XLogRecPtr request_lsn = zenith_get_request_lsn(false);
+	zenith_prefetch_buffer(reln, forknum, blocknum, request_lsn);
 	return true;
 }
 
@@ -635,12 +636,17 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
  */
 void
 zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
-				 char *buffer)
+			char *buffer)
 {
 	ZenithResponse *resp;
-	XLogRecPtr request_lsn;
+	XLogRecPtr request_lsn = zenith_get_request_lsn(false);
 
-	request_lsn = zenith_get_request_lsn(false);
+	if (zenith_find_prefetched_buffer(reln, forkNum, blkno, request_lsn, buffer))
+		return;
+
+	prefetch_log("%lu: read block %d of relation %d",
+				 GetCurrentTimestamp(), blkno, reln->smgr_rnode.node.relNode);
+
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
 		.page_key = {
@@ -653,14 +659,14 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	if (!resp->ok)
 		ereport(ERROR,
-			(errcode(ERRCODE_IO_ERROR),
-			errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
-					blkno,
-					reln->smgr_rnode.node.spcNode,
-					reln->smgr_rnode.node.dbNode,
-					reln->smgr_rnode.node.relNode,
-					forkNum,
-					(uint32) (request_lsn >> 32), (uint32) request_lsn)));
+				(errcode(ERRCODE_IO_ERROR),
+				 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+						blkno,
+						reln->smgr_rnode.node.spcNode,
+						reln->smgr_rnode.node.dbNode,
+						reln->smgr_rnode.node.relNode,
+						forkNum,
+						LSN_FORMAT_ARGS(request_lsn))));
 
 	memcpy(buffer, resp->page, BLCKSZ);
 	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
@@ -687,19 +693,19 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					 reln->smgr_rnode.node.dbNode,
 					 reln->smgr_rnode.node.relNode,
 					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 LSN_FORMAT_ARGS(request_lsn),
 					 hexdump_page(buffer));
 			}
 		}
 		else if (PageIsNew(buffer)) {
 			elog(PANIC, "page is new in Page Server but not in MD at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n%s\n",
-					 blkno,
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
-					 reln->smgr_rnode.node.relNode,
-					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
-					 hexdump_page(mdbuf));
+				 blkno,
+				 reln->smgr_rnode.node.spcNode,
+				 reln->smgr_rnode.node.dbNode,
+				 reln->smgr_rnode.node.relNode,
+				 forkNum,
+				 LSN_FORMAT_ARGS(request_lsn),
+				 hexdump_page(mdbuf));
 		}
 		else if (PageGetSpecialSize(mdbuf) == 0)
 		{
@@ -714,7 +720,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					 reln->smgr_rnode.node.dbNode,
 					 reln->smgr_rnode.node.relNode,
 					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 LSN_FORMAT_ARGS(request_lsn),
 					 hexdump_page(mdbuf_masked),
 					 hexdump_page(pageserver_masked));
 			}
@@ -734,7 +740,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 						 reln->smgr_rnode.node.dbNode,
 						 reln->smgr_rnode.node.relNode,
 						 forkNum,
-						 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+						 LSN_FORMAT_ARGS(request_lsn),
 						 hexdump_page(mdbuf_masked),
 						 hexdump_page(pageserver_masked));
 				}
@@ -804,8 +810,8 @@ zenith_read_nonrel(RelFileNode rnode, BlockNumber blkno, char *buffer, int forkn
 	lsn = zenith_get_request_lsn(true);
 
 	elog(SmgrTrace, "[ZENITH_SMGR] read nonrel relnode %u/%u/%u_%d blkno %u lsn %X/%X",
-		rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
-		(uint32) ((lsn) >> 32), (uint32) (lsn));
+		 rnode.spcNode, rnode.dbNode, rnode.relNode, forknum, blkno,
+		 LSN_FORMAT_ARGS(lsn));
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithReadRequest,
@@ -846,7 +852,7 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forknum, blocknum,
-		 (uint32) (lsn >> 32), (uint32) lsn);
+		 LSN_FORMAT_ARGS(lsn));
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
@@ -884,7 +890,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forknum,
-		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+		 LSN_FORMAT_ARGS(request_lsn),
 		 n_blocks);
 
 	pfree(resp);

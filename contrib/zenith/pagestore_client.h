@@ -46,6 +46,8 @@ typedef struct
 }			ZenithMessage;
 
 #define messageTag(m)		(((const ZenithMessage *)(m))->tag)
+//#define prefetch_log(fmt, ...) elog(LOG, fmt,  ## __VA_ARGS__)
+#define prefetch_log(fmt, ...)
 
 extern char const *const ZenithMessageStr[];
 
@@ -83,6 +85,9 @@ char	   *zm_to_string(ZenithMessage * msg);
 typedef struct
 {
 	ZenithResponse *(*request) (ZenithRequest request);
+	void (*send) (ZenithRequest request);
+	ZenithResponse *(*receive) (void);
+	void (*flush) (void);
 }			page_server_api;
 
 extern page_server_api * page_server;
@@ -99,6 +104,11 @@ extern void smgr_init_zenith(void);
 extern const f_smgr *smgr_inmem(BackendId backend, RelFileNode rnode);
 extern void smgr_init_inmem(void);
 extern void smgr_shutdown_inmem(void);
+
+extern void zenith_prefetch_main(Datum arg);
+extern void zenith_prefetch_init(void);
+extern bool zenith_find_prefetched_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, XLogRecPtr lsn, char* buffer);
+extern void zenith_prefetch_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, XLogRecPtr lsn);
 
 /* zenith storage manager functionality */
 

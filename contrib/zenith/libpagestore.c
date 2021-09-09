@@ -42,11 +42,6 @@ void		_PG_init(void);
 bool		connected = false;
 PGconn	   *pageserver_conn;
 
-static ZenithResponse * zenith_call(ZenithRequest request);
-page_server_api api = {
-	.request = zenith_call
-};
-
 static void
 zenith_connect()
 {
@@ -198,13 +193,10 @@ zenith_connect()
 	connected = true;
 }
 
-
-static ZenithResponse *
-zenith_call(ZenithRequest request)
+static void
+zenith_send(ZenithRequest request)
 {
 	StringInfoData req_buff;
-	StringInfoData resp_buff;
-	ZenithMessage *resp;
 
 	/* If the connection was lost for some reason, reconnect */
 	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
@@ -220,7 +212,7 @@ zenith_call(ZenithRequest request)
 	req_buff = zm_pack((ZenithMessage *) & request);
 
 	/* send request */
-	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
+	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0)
 	{
 		zenith_log(ERROR, "failed to send page request: %s",
 				   PQerrorMessage(pageserver_conn));
@@ -233,6 +225,23 @@ zenith_call(ZenithRequest request)
 		zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
 		pfree(msg);
 	}
+}
+
+static void
+zenith_flush(void)
+{
+	if (PQflush(pageserver_conn))
+	{
+		zenith_log(ERROR, "failed to flush page requests: %s",
+				   PQerrorMessage(pageserver_conn));
+	}
+}
+
+static ZenithResponse *
+zenith_receive(void)
+{
+	StringInfoData resp_buff;
+	ZenithMessage *resp;
 
 	/* read response */
 	resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
@@ -250,21 +259,25 @@ zenith_call(ZenithRequest request)
 		   || messageTag(resp) == T_ZenithNblocksResponse
 		   || messageTag(resp) == T_ZenithReadResponse);
 
-	{
-		char	   *msg = zm_to_string((ZenithMessage *) & request);
-
-		zenith_log(PqPageStoreTrace, "Got response: %s", msg);
-		pfree(msg);
-	}
-
-
-	/*
-	 * XXX: zm_to_string leak strings. Check with what memory contex all this
-	 * methods are called.
-	 */
-
 	return (ZenithResponse *) resp;
 }
+
+
+static ZenithResponse *
+zenith_call(ZenithRequest request)
+{
+	zenith_send(request);
+	zenith_flush();
+	return zenith_receive();
+}
+
+
+page_server_api api = {
+	.request = zenith_call,
+	.send = zenith_send,
+	.flush = zenith_flush,
+	.receive = zenith_receive
+};
 
 
 static bool
@@ -350,4 +363,5 @@ _PG_init(void)
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
 	}
+	zenith_prefetch_init();
 }

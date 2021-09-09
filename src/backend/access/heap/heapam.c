@@ -396,9 +396,13 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
+	/* Prefetch next block */
+	PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, (page+2) & ~1);
+
 	/* read page using selected strategy */
 	scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM, page,
 									   RBM_NORMAL, scan->rs_strategy);
+
 	scan->rs_cblock = page;
 
 	if (!(scan->rs_base.rs_flags & SO_ALLOW_PAGEMODE))
