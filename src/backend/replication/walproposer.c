@@ -880,23 +880,23 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 						timeline, (uint32)(startpos >> 32), (uint32)startpos)));
 		return false;
 	}
-	/* Setup restart point for all walkeepers */
+
+	/*
+	 * Start sending entries to everyone from the beginning (truncateLsn),
+	 * except for donor who doesn't need recovery at all. We could do here
+	 * better, taking into account commitLsn of safekeepers to avoid sending
+	 * them excessive data, but this requires some effort (note also that we
+	 * must always start sending from the beginning of the record).
+	 *
+	 * And note that we definitely can't pick up flushLsn of safekeeper and
+	 * decide he already has everything before, as such WAL is generally
+	 * entirely different than the correct (donor) one.
+	 */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if (walkeeper[i].state == SS_IDLE)
+		if (walkeeper[i].state == SS_IDLE && i != donor)
 		{
-			for (WalMessage* msg = msgQueueHead; msg != NULL; msg = msg->next)
-			{
-				if (msg->req.endLsn <= walkeeper[i].voteResponse.flushLsn)
-				{
-					msg->ackMask |= 1 << i; /* message is already received by this walkeeper */
-				}
-				else
-				{
-					SendMessageToNode(i, msg);
-					break;
-				}
-			}
+			SendMessageToNode(i, msgQueueHead);
 		}
 	}
 	return true;
