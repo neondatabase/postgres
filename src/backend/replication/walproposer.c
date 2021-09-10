@@ -861,10 +861,11 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 						err)));
 		return false;
 	}
-	elog(LOG, "Start recovery from %s:%s starting from %X/%08X till %X/%08X timeline %d",
-		 walkeeper[donor].host, walkeeper[donor].port,
-		 (uint32)(startpos>>32), (uint32)startpos, (uint32)(endpos >> 32), (uint32)endpos,
-		 timeline);
+	elog(LOG,
+		 "start recovery from %s:%s starting from %X/%08X till %X/%08X timeline "
+		 "%d",
+		 walkeeper[donor].host, walkeeper[donor].port, (uint32) (startpos >> 32),
+		 (uint32) startpos, (uint32) (endpos >> 32), (uint32) endpos, timeline);
 
 	options.logical = false;
 	options.startpoint = startpos;
@@ -1017,7 +1018,8 @@ AdvancePollState(int i, uint32 events)
 				switch (result)
 				{
 					case WP_CONN_POLLING_OK:
-						elog(LOG, "Connected with node %s:%s", wk->host, wk->port);
+						elog(LOG, "connected with node %s:%s", wk->host,
+							 wk->port);
 
 						/* Once we're fully connected, we can move to the next state */
 						wk->state = SS_EXEC_STARTWALPUSH;
@@ -1233,8 +1235,11 @@ AdvancePollState(int i, uint32 events)
 					/* Check if not all safekeepers are up-to-date, we need to download WAL needed to synchronize them */
 					if (truncateLsn < propEpochStartLsn)
 					{
-						elog(LOG, "start recovery because restart LSN=%X/%X is not equal to epochStartLsn=%X/%X",
-							 LSN_FORMAT_ARGS(truncateLsn), LSN_FORMAT_ARGS(propEpochStartLsn));
+						elog(LOG,
+							 "start recovery because truncateLsn=%X/%X is not "
+							 "equal to epochStartLsn=%X/%X",
+							 LSN_FORMAT_ARGS(truncateLsn),
+							 LSN_FORMAT_ARGS(propEpochStartLsn));
 						/* Perform recovery */
 						if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
 							elog(FATAL, "Failed to recover state");
@@ -1271,12 +1276,13 @@ AdvancePollState(int i, uint32 events)
 			{
 				WalMessage* msg = wk->currMsg;
 
-				elog(LOG, "sending message with len %ld beginLsn=%X/%X commitLsn=%X/%X restart LSN=%X/%X to %s:%s",
+				elog(LOG,
+					 "sending message with len %ld beginLsn=%X/%X "
+					 "commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
 					 msg->size - sizeof(AppendRequestHeader),
 					 LSN_FORMAT_ARGS(msg->req.beginLsn),
 					 LSN_FORMAT_ARGS(msg->req.commitLsn),
-					 LSN_FORMAT_ARGS(truncateLsn),
-					 wk->host, wk->port);
+					 LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
 
 				/* We write with msg->size here because the body of the message
 				 * is stored after the end of the WalMessage struct, in the
