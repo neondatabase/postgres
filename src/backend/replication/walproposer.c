@@ -316,8 +316,7 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn;
-	int i;
-	int n_synced;
+	int n_synced = 0;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
