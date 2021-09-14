@@ -224,8 +224,6 @@ ResetConnection(int i)
 
 	if (wk->state != SS_OFFLINE)
 	{
-		elog(WARNING, "Connection with node %s:%s in %s state failed",
-			wk->host, wk->port, FormatWalKeeperState(wk->state));
 		ShutdownConnection(i);
 	}
 
@@ -1187,9 +1185,10 @@ AdvancePollState(int i, uint32 events)
 			 * execution of SS_HANDSHAKE_RECV to see how nodes are transferred from SS_VOTING to
 			 * SS_SEND_VOTE. */
 			case SS_VOTING:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is voting",
-					 wk->host, wk->port);
-				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
+				elog(WARNING, "EOF from node %s:%s in %s state", wk->host,
+					 wk->port, FormatWalKeeperState(wk->state));
+				ResetConnection(i);
+				break;
 
 			/* We have quorum for voting, send our vote request */
 			case SS_SEND_VOTE:
@@ -1276,8 +1275,10 @@ AdvancePollState(int i, uint32 events)
 			/* Idle state for sending WAL. Moved out only by calls to
 			 * SendMessageToNode */
 			case SS_IDLE:
-				elog(FATAL, "Unexpected walkeeper %s:%s state advancement: is idle", wk->host, wk->port);
-				break; /* actually unreachable, but prevents -Wimplicit-fallthrough */
+				elog(WARNING, "EOF from node %s:%s in %s state", wk->host,
+					 wk->port, FormatWalKeeperState(wk->state));
+				ResetConnection(i);
+				break;
 
 			/* Start to send the message at wk->currMsg. Triggered only by calls
 			 * to SendMessageToNode */
