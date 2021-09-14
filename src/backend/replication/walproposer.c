@@ -613,9 +613,8 @@ SendMessageToNode(int i, WalMessage* msg)
 	/* we shouldn't be already sending something */
 	Assert(wk->currMsg == NULL);
 	/*
-	 * Skip already acknowledged messages. Used during start to get to the
-	 * first not yet received message. Otherwise we always just send
-	 * 'msg'.
+	 * Skip already acknowledged messages. Used after reconnection to get to the
+	 * first not yet sent message. Otherwise we always just send 'msg'.
 	 */
 	while (msg != NULL && (msg->ackMask & (1 << i)) != 0)
 		msg = msg->next;
@@ -931,6 +930,11 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 			SendMessageToNode(i, msgQueueHead);
 		}
 	}
+	/* Mark all recovery messages as already received by the donor. */
+	for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
+	{
+		msg->ackMask |= 1 << donor;
+	}
 	return true;
 }
 
@@ -1243,7 +1247,12 @@ AdvancePollState(int i, uint32 events)
 						/* Perform recovery */
 						if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
 							elog(FATAL, "Failed to recover state");
-						/* this message signifies epoch switch */
+						/*
+						 * This message signifies epoch switch; it is needed to
+						 * make the switch happen on donor, as he won't get any
+						 * other messages until we start writing new WAL (and we
+						 * e.g. don't in --sync mode at all)
+						 */
 						BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
 
 						if (syncSafekeepers)
