@@ -399,7 +399,10 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 
 	/* Prefetch next block */
 	if (enable_seqscan_prefetch)
-		PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, (page+2) & ~1);
+	{
+		for (int i = 1; i <= seqscan_prefetch_buffers; i++)
+			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
+	}
 
 	/* read page using selected strategy */
 	scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM, page,
