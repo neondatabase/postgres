@@ -259,6 +259,12 @@ struct WalMessage
 	WalMessage* next;      /* L1 list of messages */
 	uint32 size;           /* message size */
 	uint32 ackMask;        /* mask of receivers acknowledged receiving of this message */
+	/*
+	 * By convention safekeeper starts receiving data since record boundary, we
+	 * may need to send first message not from the chunk beginning for that;
+	 * such trimmed message is formed here.
+	 */
+	AppendRequestHeader *perSafekeeper[MAX_WALKEEPERS];
 	AppendRequestHeader req; /* request to walkeeper (message header) */
 
 	/* PHANTOM FIELD:
