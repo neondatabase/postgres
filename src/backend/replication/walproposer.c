@@ -394,11 +394,6 @@ HandleWalKeeperResponse(void)
 			truncateLsn = candidateTruncateLsn;
 			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
-		for (int i = 0; i < n_walkeepers; i++)
-		{
-			if (msg->perSafekeeper[i])
-				free(msg->perSafekeeper[i]);
-		}
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
 	}
@@ -489,6 +484,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 */
 		walkeeper[n_walkeepers].conninfo[0] = '\0';
 		walkeeper[n_walkeepers].currMsg = NULL;
+		walkeeper[n_walkeepers].startStreamingAt = InvalidXLogRecPtr;
 		n_walkeepers += 1;
 	}
 	if (n_walkeepers < 1)
@@ -723,7 +719,6 @@ CreateMessage(XLogRecPtr startpos, char *data, int len)
 	msg->size = sizeof(AppendRequestHeader) + len;
 	msg->next = NULL;
 	msg->ackMask = 0;
-	memset(&msg->perSafekeeper, '\0', sizeof(msg->perSafekeeper));
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
 	msg->req.epochStartLsn = propEpochStartLsn;
@@ -766,7 +761,6 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 	msg->size = sizeof(AppendRequestHeader);
 	msg->next = NULL;
 	msg->ackMask = 0;
-	memset(&msg->perSafekeeper, '\0', sizeof(msg->perSafekeeper));
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
 	msg->req.epochStartLsn = propEpochStartLsn;
@@ -992,25 +986,11 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 				}
 				else
 				{
-					uint32		len;
-					uint32		size;
-
 					/*
 					 * By convention we always stream since the beginning of
-					 * the record, and flushLsn points to it -- form the
-					 * message starting there.
+					 * the record, and flushLsn points to it.
 					 */
-					len = msg->req.endLsn - walkeeper[i].voteResponse.flushLsn;
-					size = sizeof(AppendRequestHeader) + len;
-					msg->perSafekeeper[i] = malloc(size);
-					*msg->perSafekeeper[i] = msg->req;
-					msg->perSafekeeper[i]->beginLsn =
-						walkeeper[i].voteResponse.flushLsn;
-					memcpy(&msg->perSafekeeper[i] + 1,
-						   (char *) (&msg->req + 1) +
-						   walkeeper[i].voteResponse.flushLsn -
-						   msg->req.beginLsn,
-						   len);
+					walkeeper[i].startStreamingAt = walkeeper[i].voteResponse.flushLsn;
 					SendMessageToNode(i, msg);
 					break;
 				}
@@ -1307,7 +1287,7 @@ AdvancePollState(int i, uint32 events)
 						voteRequest = (VoteRequest)
 						{
 							.tag = 'v',
-							.term = propTerm
+								.term = propTerm
 						};
 						memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
 					}
@@ -1465,16 +1445,33 @@ AdvancePollState(int i, uint32 events)
 					AppendRequestHeader *req = &msg->req;
 
 					/*
-					 * if there is a message specially crafted for this
-					 * safekeeper, send it
+					 * If we need to send this message not from the beginning,
+					 * form the cut version. Only happens for the first
+					 * message.
 					 */
-					if (msg->perSafekeeper[i])
-						req = msg->perSafekeeper[i];
+					if (wk->startStreamingAt > msg->req.beginLsn)
+					{
+						uint32		len;
+						uint32		size;
+
+						Assert(wk->startStreamingAt < req->endLsn);
+
+						len = msg->req.endLsn - wk->startStreamingAt;
+						size = sizeof(AppendRequestHeader) + len;
+						req = malloc(size);
+						*req = msg->req;
+						req->beginLsn = wk->startStreamingAt;
+						memcpy(req + 1,
+							   (char *) (&msg->req + 1) + wk->startStreamingAt -
+							   msg->req.beginLsn,
+							   len);
+					}
 
 					elog(LOG,
-						 "sending message with len %ld beginLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-						 msg->size - sizeof(AppendRequestHeader),
+						 "sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+						 req->endLsn - req->beginLsn,
 						 LSN_FORMAT_ARGS(req->beginLsn),
+						 LSN_FORMAT_ARGS(req->endLsn),
 						 LSN_FORMAT_ARGS(req->commitLsn),
 						 LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
 
@@ -1487,7 +1484,13 @@ AdvancePollState(int i, uint32 events)
 									sizeof(AppendRequestHeader) + req->endLsn -
 									req->beginLsn,
 									SS_SEND_WAL_FLUSH, SS_RECV_FEEDBACK))
+					{
+						if (req != &msg->req)
+							free(req);
 						return;
+					}
+					if (req != &msg->req)
+						free(req);
 
 					break;
 				}
