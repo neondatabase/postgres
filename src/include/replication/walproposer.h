@@ -258,13 +258,7 @@ struct WalMessage
 {
 	WalMessage* next;      /* L1 list of messages */
 	uint32 size;           /* message size */
-	uint32 ackMask;        /* mask of receivers acknowledged receiving of this message */
-	/*
-	 * By convention safekeeper starts receiving data since record boundary, we
-	 * may need to send first message not from the chunk beginning for that;
-	 * such trimmed message is formed here.
-	 */
-	AppendRequestHeader *perSafekeeper[MAX_WALKEEPERS];
+	uint32 ackMask; /* mask of receivers acknowledged receiving of this message */
 	AppendRequestHeader req; /* request to walkeeper (message header) */
 
 	/* PHANTOM FIELD:
@@ -327,7 +321,12 @@ typedef struct WalKeeper
 	WalKeeperState     state;         /* walkeeper state machine state */
 	AcceptorGreeting   greet;         /* acceptor greeting  */
 	VoteResponse	   voteResponse;  /* the vote */
-	AppendResponse  feedback;      /* feedback to master */
+	AppendResponse feedback;		  /* feedback to master */
+	/*
+	 * streaming must be started at the record boundary which is saved here, if
+	 * it differs from the chunk start
+	 */
+	XLogRecPtr startStreamingAt;
 } WalKeeper;
 
 
