@@ -119,22 +119,24 @@ zenith_connect()
 	 * copy values from PQconninfoOption to key/value arrays because
 	 * PQconnectdbParams accepts options this way
 	 */
-	const char **keywords = malloc((noptions + 1) * sizeof(*keywords));
-	const char **values = malloc((noptions + 1) * sizeof(*values));
-	int			i = 0;
-
-	for (i = 0; i < noptions; i++)
 	{
-		keywords[i] = conn_options[i].keyword;
-		values[i] = conn_options[i].val;
-	}
-	/* add array terminator */
-	keywords[i] = NULL;
-	values[i] = NULL;
+		const char **keywords = malloc((noptions + 1) * sizeof(*keywords));
+		const char **values = malloc((noptions + 1) * sizeof(*values));
+		int			i = 0;
 
-	pageserver_conn = PQconnectdbParams(keywords, values, false);
-	free(keywords);
-	free(values);
+		for (i = 0; i < noptions; i++)
+		{
+			keywords[i] = conn_options[i].keyword;
+			values[i] = conn_options[i].val;
+		}
+		/* add array terminator */
+		keywords[i] = NULL;
+		values[i] = NULL;
+
+		pageserver_conn = PQconnectdbParams(keywords, values, false);
+		free(keywords);
+		free(values);
+	}
 
 	PQconninfoFree(conn_options);
 
