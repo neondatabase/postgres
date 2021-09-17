@@ -206,7 +206,7 @@ zenith_call(ZenithRequest *request)
 {
 	StringInfoData req_buff;
 	StringInfoData resp_buff;
-	ZenithMessage *resp;
+	ZenithResponse *resp;
 
 	/* If the connection was lost for some reason, reconnect */
 	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
@@ -248,10 +248,6 @@ zenith_call(ZenithRequest *request)
 
 	resp = zm_unpack_response(&resp_buff);
 	PQfreemem(resp_buff.data);
-
-	Assert(messageTag(resp) == T_ZenithStatusResponse
-		   || messageTag(resp) == T_ZenithNblocksResponse
-		   || messageTag(resp) == T_ZenithReadResponse);
 
 	if (message_level_is_interesting(PqPageStoreTrace))
 	{
