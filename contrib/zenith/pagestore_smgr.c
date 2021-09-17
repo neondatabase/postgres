@@ -59,16 +59,6 @@ char *zenith_timeline;
 char *zenith_tenant;
 bool wal_redo = false;
 
-char const *const ZenithMessageStr[] =
-{
-	"ZenithExistsRequest",
-	"ZenithNblocksRequest",
-	"ZenithReadRequest",
-	"ZenithStatusResponse",
-	"ZenithReadResponse",
-	"ZenithNblocksResponse",
-};
-
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
 {
@@ -81,25 +71,51 @@ zm_pack_request(ZenithRequest *msg)
 	{
 		/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		case T_ZenithNblocksRequest:
-		case T_ZenithReadRequest:
 		{
-			ZenithRequest *msg_req = (ZenithRequest *) msg;
+			ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
 
-			pq_sendint32(&s, msg_req->page_key.rnode.spcNode);
-			pq_sendint32(&s, msg_req->page_key.rnode.dbNode);
-			pq_sendint32(&s, msg_req->page_key.rnode.relNode);
-			pq_sendbyte(&s, msg_req->page_key.forknum);
-			pq_sendint32(&s, msg_req->page_key.blkno);
-			pq_sendint64(&s, msg_req->lsn);
+			pq_sendbyte(&s, msg_req->req.latest);
+			pq_sendint64(&s, msg_req->req.lsn);
+			pq_sendint32(&s, msg_req->rnode.spcNode);
+			pq_sendint32(&s, msg_req->rnode.dbNode);
+			pq_sendint32(&s, msg_req->rnode.relNode);
+			pq_sendbyte(&s, msg_req->forknum);
+
+			break;
+		}
+		case T_ZenithNblocksRequest:
+		{
+			ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
+
+			pq_sendbyte(&s, msg_req->req.latest);
+			pq_sendint64(&s, msg_req->req.lsn);
+			pq_sendint32(&s, msg_req->rnode.spcNode);
+			pq_sendint32(&s, msg_req->rnode.dbNode);
+			pq_sendint32(&s, msg_req->rnode.relNode);
+			pq_sendbyte(&s, msg_req->forknum);
+
+			break;
+		}
+		case T_ZenithGetPageRequest:
+		{
+			ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
+
+			pq_sendbyte(&s, msg_req->req.latest);
+			pq_sendint64(&s, msg_req->req.lsn);
+			pq_sendint32(&s, msg_req->rnode.spcNode);
+			pq_sendint32(&s, msg_req->rnode.dbNode);
+			pq_sendint32(&s, msg_req->rnode.relNode);
+			pq_sendbyte(&s, msg_req->forknum);
+			pq_sendint32(&s, msg_req->blkno);
 
 			break;
 		}
 
 		/* pagestore -> pagestore_client. We never need to create these. */
-		case T_ZenithStatusResponse:
+		case T_ZenithExistsResponse:
 		case T_ZenithNblocksResponse:
-		case T_ZenithReadResponse:
+		case T_ZenithGetPageResponse:
+		case T_ZenithErrorResponse:
 		default:
 			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
 			break;
@@ -107,40 +123,66 @@ zm_pack_request(ZenithRequest *msg)
 	return s;
 }
 
-ZenithMessage *
+ZenithResponse *
 zm_unpack_response(StringInfo s)
 {
 	ZenithMessageTag tag = pq_getmsgbyte(s);
-	ZenithMessage *msg = NULL;
+	ZenithResponse *resp = NULL;
 
 	switch (tag)
 	{
 		/* pagestore -> pagestore_client */
-		case T_ZenithStatusResponse:
-		case T_ZenithNblocksResponse:
+		case T_ZenithExistsResponse:
 		{
-			ZenithResponse *msg_resp = palloc0(sizeof(ZenithResponse));
+			ZenithExistsResponse *msg_resp = palloc0(sizeof(ZenithExistsResponse));
 
 			msg_resp->tag = tag;
-			msg_resp->ok = pq_getmsgbyte(s);
-			msg_resp->n_blocks = pq_getmsgint(s, 4);
+			msg_resp->exists = pq_getmsgbyte(s);
 			pq_getmsgend(s);
 
-			msg = (ZenithMessage *) msg_resp;
+			resp = (ZenithResponse *) msg_resp;
 			break;
 		}
 
-		case T_ZenithReadResponse:
+		case T_ZenithNblocksResponse:
 		{
-			ZenithResponse *msg_resp = palloc0(sizeof(ZenithResponse) + BLCKSZ);
+			ZenithNblocksResponse *msg_resp = palloc0(sizeof(ZenithNblocksResponse));
 
 			msg_resp->tag = tag;
-			msg_resp->ok = pq_getmsgbyte(s);
 			msg_resp->n_blocks = pq_getmsgint(s, 4);
+			pq_getmsgend(s);
+
+			resp = (ZenithResponse *) msg_resp;
+			break;
+		}
+
+		case T_ZenithGetPageResponse:
+		{
+			ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ);
+
+			msg_resp->tag = tag;
 			memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ); // XXX: should be varlena
 			pq_getmsgend(s);
 
-			msg = (ZenithMessage *) msg_resp;
+			resp = (ZenithResponse *) msg_resp;
+			break;
+		}
+
+		case T_ZenithErrorResponse:
+		{
+			ZenithErrorResponse *msg_resp;
+			size_t		msglen;
+			const char *msgtext;
+
+			msgtext = pq_getmsgrawstring(s);
+			msglen = strlen(msgtext);
+
+			msg_resp = palloc0(sizeof(ZenithErrorResponse) + msglen + 1);
+			msg_resp->tag = tag;
+			memcpy(msg_resp->message, msgtext, msglen + 1);
+			pq_getmsgend(s);
+
+			resp = (ZenithResponse *) msg_resp;
 			break;
 		}
 
@@ -151,13 +193,13 @@ zm_unpack_response(StringInfo s)
 		 */
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
-		case T_ZenithReadRequest:
+		case T_ZenithGetPageRequest:
 		default:
-			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
+			elog(ERROR, "unexpected zenith message tag 0x%02x", tag);
 			break;
 	}
 
-	return msg;
+	return resp;
 }
 
 /* dump to json for debugging / error reporting purposes */
@@ -168,52 +210,107 @@ zm_to_string(ZenithMessage *msg)
 
 	initStringInfo(&s);
 
-	appendStringInfoString(&s, "{");
-	appendStringInfo(&s, "\"type\": \"%s\"", ZenithMessageStr[msg->tag]);
-
 	switch (messageTag(msg))
 	{
 		/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		case T_ZenithNblocksRequest:
-		case T_ZenithReadRequest:
 		{
-			ZenithRequest *msg_req = (ZenithRequest *) msg;
+			ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
 
-			appendStringInfo(&s, ", \"page_key\": \"%d.%d.%d.%d.%u\", \"lsn\": \"%X/%X\"}",
-							 msg_req->page_key.rnode.spcNode,
-							 msg_req->page_key.rnode.dbNode,
-							 msg_req->page_key.rnode.relNode,
-							 msg_req->page_key.forknum,
-							 msg_req->page_key.blkno,
-							 (uint32) (msg_req->lsn >> 32), (uint32) (msg_req->lsn));
+			appendStringInfoString(&s, "{\"type\": \"ZenithExistsRequest\"");
+			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+							 msg_req->rnode.spcNode,
+							 msg_req->rnode.dbNode,
+							 msg_req->rnode.relNode);
+			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+			appendStringInfoChar(&s, '}');
+			break;
+		}
 
+		case T_ZenithNblocksRequest:
+		{
+			ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
+
+			appendStringInfoString(&s, "{\"type\": \"ZenithNblocksRequest\"");
+			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+							 msg_req->rnode.spcNode,
+							 msg_req->rnode.dbNode,
+							 msg_req->rnode.relNode);
+			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+			appendStringInfoChar(&s, '}');
+			break;
+		}
+
+		case T_ZenithGetPageRequest:
+		{
+			ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
+
+			appendStringInfoString(&s, "{\"type\": \"ZenithGetPageRequest\"");
+			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+							 msg_req->rnode.spcNode,
+							 msg_req->rnode.dbNode,
+							 msg_req->rnode.relNode);
+			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+			appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
+			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+			appendStringInfoChar(&s, '}');
 			break;
 		}
 
 		/* pagestore -> pagestore_client */
-		case T_ZenithStatusResponse:
+		case T_ZenithExistsResponse:
+		{
+			ZenithExistsResponse *msg_resp = (ZenithExistsResponse *) msg;
+
+			appendStringInfoString(&s, "{\"type\": \"ZenithExistsResponse\"");
+			appendStringInfo(&s, ", \"exists\": %d}",
+				msg_resp->exists
+			);
+			appendStringInfoChar(&s, '}');
+
+			break;
+		}
 		case T_ZenithNblocksResponse:
 		{
-			ZenithResponse *msg_resp = (ZenithResponse *) msg;
+			ZenithNblocksResponse *msg_resp = (ZenithNblocksResponse *) msg;
 
-			appendStringInfo(&s, ", \"ok\": %d, \"n_blocks\": %u}",
-				msg_resp->ok,
+			appendStringInfoString(&s, "{\"type\": \"ZenithNblocksResponse\"");
+			appendStringInfo(&s, ", \"n_blocks\": %u}",
 				msg_resp->n_blocks
 			);
+			appendStringInfoChar(&s, '}');
 
 			break;
 		}
-		case T_ZenithReadResponse:
+		case T_ZenithGetPageResponse:
 		{
-			ZenithResponse *msg_resp = (ZenithResponse *) msg;
+#if 0
+			ZenithGetPageResponse *msg_resp = (ZenithGetPageResponse *) msg;
+#endif
 
-			appendStringInfo(&s, ", \"ok\": %d, \"n_blocks\": %u, \"page\": \"XXX\"}",
-				msg_resp->ok,
-				msg_resp->n_blocks
-			);
+			appendStringInfoString(&s, "{\"type\": \"ZenithGetPageResponse\"");
+			appendStringInfo(&s, ", \"page\": \"XXX\"}");
+			appendStringInfoChar(&s, '}');
 			break;
 		}
+		case T_ZenithErrorResponse:
+		{
+			ZenithErrorResponse *msg_resp = (ZenithErrorResponse *) msg;
+
+			/* FIXME: escape double-quotes in the message */
+			appendStringInfoString(&s, "{\"type\": \"ZenithErrorResponse\"");
+			appendStringInfo(&s, ", \"message\": \"%s\"}", msg_resp->message);
+			appendStringInfoChar(&s, '}');
+			break;
+		}
+
+		default:
+			appendStringInfo(&s, "{\"type\": \"unknown 0x%02x\"", msg->tag);
 	}
 	return s.data;
 }
@@ -393,7 +490,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(void)
+zenith_get_request_lsn(bool *latest)
 {
 	XLogRecPtr lsn;
 
@@ -402,7 +499,6 @@ zenith_get_request_lsn(void)
 		lsn = GetXLogReplayRecPtr(NULL);
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			(uint32) ((lsn) >> 32), (uint32) (lsn));
-
 		lsn = InvalidXLogRecPtr;
 	}
 	else if (am_walsender)
@@ -440,6 +536,12 @@ zenith_get_request_lsn(void)
 			XLogFlush(lsn);
 		}
 	}
+
+	/*
+	 * FIXME: In read-only mode, we would need to set *latest=false here. But we don't
+	 * support read-only mode at the moment
+	 */
+	*latest = true;
 	return lsn;
 }
 
@@ -450,20 +552,46 @@ zenith_get_request_lsn(void)
 bool
 zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 {
-	bool		ok;
+	bool		exists;
 	ZenithResponse *resp;
+	bool		latest;
+	XLogRecPtr	request_lsn;
 
-	resp = page_server->request(&(ZenithRequest) {
-		.tag = T_ZenithExistsRequest,
-		.page_key = {
+	request_lsn = zenith_get_request_lsn(&latest);
+	{
+		ZenithExistsRequest request = {
+			.req.tag = T_ZenithExistsRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum
-		},
-		.lsn = zenith_get_request_lsn()
-	});
-	ok = resp->ok;
+		};
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag) {
+		case T_ZenithExistsResponse:
+			exists = ((ZenithExistsResponse *) resp)->exists;
+			break;
+
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read relation existence of rel %u/%u/%u.%u from page server at lsn %X/%08X",
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forkNum,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s", 
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
 	pfree(resp);
-	return ok;
+	return exists;
 }
 
 /*
@@ -609,37 +737,52 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
  */
 void
 zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
-				 char *buffer)
+			char *buffer)
 {
 	ZenithResponse *resp;
+	bool		latest;
 	XLogRecPtr request_lsn;
 
-	request_lsn = zenith_get_request_lsn();
-	resp = page_server->request(&(ZenithRequest) {
-		.tag = T_ZenithReadRequest,
-		.page_key = {
+	request_lsn = zenith_get_request_lsn(&latest);
+	{
+		ZenithGetPageRequest request = {
+			.req.tag = T_ZenithGetPageRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum,
 			.blkno = blkno
-		},
-		.lsn = request_lsn
-	});
+		};
+		resp = page_server->request((ZenithRequest *) &request);
+	}
 
-	if (!resp->ok)
-		ereport(ERROR,
-			(errcode(ERRCODE_IO_ERROR),
-			errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
-					blkno,
-					reln->smgr_rnode.node.spcNode,
-					reln->smgr_rnode.node.dbNode,
-					reln->smgr_rnode.node.relNode,
-					forkNum,
-					(uint32) (request_lsn >> 32), (uint32) request_lsn)));
+	switch (resp->tag) {
+		case T_ZenithGetPageResponse:
+			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
+			break;
 
-	memcpy(buffer, resp->page, BLCKSZ);
-	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+							blkno,
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forkNum,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s", 
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
 	pfree(resp);
 
+	/* Clear PD_WAL_LOGGED bit stored in WAL record */
+	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED;
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
@@ -776,21 +919,46 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	ZenithResponse *resp;
 	BlockNumber n_blocks;
-	XLogRecPtr request_lsn;
+	bool		latest;
+	XLogRecPtr	request_lsn;
 
 	if (get_cached_relsize(reln->smgr_rnode.node, forknum, &n_blocks))
 		return n_blocks;
 
-	request_lsn = zenith_get_request_lsn();
-	resp = page_server->request(&(ZenithRequest) {
-		.tag = T_ZenithNblocksRequest,
-		.page_key = {
+	request_lsn = zenith_get_request_lsn(&latest);
+	{
+		ZenithNblocksRequest request = {
+			.req.tag = T_ZenithNblocksRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forknum,
-		},
-		.lsn = request_lsn
-	});
-	n_blocks = resp->n_blocks;
+		};
+
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag) {
+		case T_ZenithNblocksResponse:
+			n_blocks = ((ZenithNblocksResponse *) resp)->n_blocks;
+			break;
+
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read relation size of rel %u/%u/%u.%u from page server at lsn %X/%08X",
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forknum,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s", 
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
 	update_cached_relsize(reln->smgr_rnode.node, forknum, n_blocks);
 
 	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
