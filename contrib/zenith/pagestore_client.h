@@ -36,14 +36,14 @@ typedef enum
 	T_ZenithStatusResponse = 100,
 	T_ZenithNblocksResponse,
 	T_ZenithReadResponse,
-}			ZenithMessageTag;
+} ZenithMessageTag;
 
 
 /* base struct for c-style inheritance */
 typedef struct
 {
 	ZenithMessageTag tag;
-}			ZenithMessage;
+} ZenithMessage;
 
 #define messageTag(m)		(((const ZenithMessage *)(m))->tag)
 
@@ -54,15 +54,14 @@ typedef struct
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
-}			PageKey;
+} PageKey;
 
 typedef struct
 {
 	ZenithMessageTag tag;
-	uint64		system_id;
 	PageKey		page_key;
 	XLogRecPtr	lsn;			/* request page version @ this LSN */
-}			ZenithRequest;
+} ZenithRequest;
 
 typedef struct
 {
@@ -70,11 +69,11 @@ typedef struct
 	bool		ok;
 	uint32		n_blocks;
 	char		page[1];
-}			ZenithResponse;
+} ZenithResponse;
 
-StringInfoData zm_pack(ZenithMessage * msg);
-ZenithMessage *zm_unpack(StringInfo s);
-char	   *zm_to_string(ZenithMessage * msg);
+extern StringInfoData zm_pack_request(ZenithRequest *msg);
+extern ZenithMessage *zm_unpack_response(StringInfo s);
+extern char *zm_to_string(ZenithMessage *msg);
 
 /*
  * API
@@ -82,10 +81,10 @@ char	   *zm_to_string(ZenithMessage * msg);
 
 typedef struct
 {
-	ZenithResponse *(*request) (ZenithRequest request);
-}			page_server_api;
+	ZenithResponse *(*request) (ZenithRequest *request);
+} page_server_api;
 
-extern page_server_api * page_server;
+extern page_server_api *page_server;
 
 extern char *page_server_connstring;
 extern char *callmemaybe_connstring;
