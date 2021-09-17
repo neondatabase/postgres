@@ -315,7 +315,6 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr minQuorumLsn;
-	int n_synced = 0;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
@@ -393,6 +392,9 @@ HandleWalKeeperResponse(void)
 	 */
 	if (syncSafekeepers)
 	{
+		int			n_synced;
+
+		n_synced = 0;
 		for (int i = 0; i < n_walkeepers; i++)
 		{
 			WalKeeper *wk = &walkeeper[i];
