@@ -50,8 +50,6 @@ static char *hexdump_page(char *page);
 
 const int SmgrTrace = DEBUG5;
 
-bool loaded = false;
-
 page_server_api *page_server;
 
 /* GUCs */
@@ -72,7 +70,7 @@ char const *const ZenithMessageStr[] =
 };
 
 StringInfoData
-zm_pack(ZenithMessage *msg)
+zm_pack_request(ZenithRequest *msg)
 {
 	StringInfoData	s;
 
@@ -98,56 +96,25 @@ zm_pack(ZenithMessage *msg)
 			break;
 		}
 
-		/* pagestore -> pagestore_client */
+		/* pagestore -> pagestore_client. We never need to create these. */
 		case T_ZenithStatusResponse:
 		case T_ZenithNblocksResponse:
-		{
-			ZenithResponse *msg_resp = (ZenithResponse *) msg;
-			pq_sendbyte(&s, msg_resp->ok);
-			pq_sendint32(&s, msg_resp->n_blocks);
-			break;
-		}
 		case T_ZenithReadResponse:
-		{
-			ZenithResponse *msg_resp = (ZenithResponse *) msg;
-			pq_sendbyte(&s, msg_resp->ok);
-			pq_sendint32(&s, msg_resp->n_blocks);
-			pq_sendbytes(&s, msg_resp->page, BLCKSZ); // XXX: should be varlena
+		default:
+			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
 			break;
-		}
 	}
 	return s;
 }
 
 ZenithMessage *
-zm_unpack(StringInfo s)
+zm_unpack_response(StringInfo s)
 {
 	ZenithMessageTag tag = pq_getmsgbyte(s);
 	ZenithMessage *msg = NULL;
 
 	switch (tag)
 	{
-		/* pagestore_client -> pagestore */
-		case T_ZenithExistsRequest:
-		case T_ZenithNblocksRequest:
-		case T_ZenithReadRequest:
-		{
-			ZenithRequest *msg_req = palloc0(sizeof(ZenithRequest));
-
-			msg_req->tag = tag;
-			msg_req->system_id = 42;
-			msg_req->page_key.rnode.spcNode = pq_getmsgint(s, 4);
-			msg_req->page_key.rnode.dbNode = pq_getmsgint(s, 4);
-			msg_req->page_key.rnode.relNode = pq_getmsgint(s, 4);
-			msg_req->page_key.forknum = pq_getmsgbyte(s);
-			msg_req->page_key.blkno = pq_getmsgint(s, 4);
-			msg_req->lsn = pq_getmsgint64(s);
-			pq_getmsgend(s);
-
-			msg = (ZenithMessage *) msg_req;
-			break;
-		}
-
 		/* pagestore -> pagestore_client */
 		case T_ZenithStatusResponse:
 		case T_ZenithNblocksResponse:
@@ -176,6 +143,18 @@ zm_unpack(StringInfo s)
 			msg = (ZenithMessage *) msg_resp;
 			break;
 		}
+
+		/*
+		 * pagestore_client -> pagestore
+		 *
+		 * We create these ourselves, and don't need to decode them.
+		 */
+		case T_ZenithExistsRequest:
+		case T_ZenithNblocksRequest:
+		case T_ZenithReadRequest:
+		default:
+			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
+			break;
 	}
 
 	return msg;
@@ -474,7 +453,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 	bool		ok;
 	ZenithResponse *resp;
 
-	resp = page_server->request((ZenithRequest) {
+	resp = page_server->request(&(ZenithRequest) {
 		.tag = T_ZenithExistsRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -636,7 +615,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	XLogRecPtr request_lsn;
 
 	request_lsn = zenith_get_request_lsn();
-	resp = page_server->request((ZenithRequest) {
+	resp = page_server->request(&(ZenithRequest) {
 		.tag = T_ZenithReadRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
@@ -803,7 +782,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		return n_blocks;
 
 	request_lsn = zenith_get_request_lsn();
-	resp = page_server->request((ZenithRequest) {
+	resp = page_server->request(&(ZenithRequest) {
 		.tag = T_ZenithNblocksRequest,
 		.page_key = {
 			.rnode = reln->smgr_rnode.node,
