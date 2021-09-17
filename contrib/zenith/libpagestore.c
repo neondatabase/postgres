@@ -42,7 +42,7 @@ void		_PG_init(void);
 bool		connected = false;
 PGconn	   *pageserver_conn;
 
-static ZenithResponse * zenith_call(ZenithRequest request);
+static ZenithResponse * zenith_call(ZenithRequest *request);
 page_server_api api = {
 	.request = zenith_call
 };
@@ -200,7 +200,7 @@ zenith_connect()
 
 
 static ZenithResponse *
-zenith_call(ZenithRequest request)
+zenith_call(ZenithRequest *request)
 {
 	StringInfoData req_buff;
 	StringInfoData resp_buff;
@@ -217,7 +217,7 @@ zenith_call(ZenithRequest request)
 	if (!connected)
 		zenith_connect();
 
-	req_buff = zm_pack((ZenithMessage *) & request);
+	req_buff = zm_pack_request(request);
 
 	/* send request */
 	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
@@ -227,8 +227,9 @@ zenith_call(ZenithRequest request)
 	}
 	pfree(req_buff.data);
 
+	if (message_level_is_interesting(PqPageStoreTrace))
 	{
-		char	   *msg = zm_to_string((ZenithMessage *) & request);
+		char	   *msg = zm_to_string((ZenithMessage *) request);
 
 		zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
 		pfree(msg);
@@ -243,20 +244,20 @@ zenith_call(ZenithRequest request)
 	else if (resp_buff.len == -2)
 		zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
 
-	resp = zm_unpack(&resp_buff);
+	resp = zm_unpack_response(&resp_buff);
 	PQfreemem(resp_buff.data);
 
 	Assert(messageTag(resp) == T_ZenithStatusResponse
 		   || messageTag(resp) == T_ZenithNblocksResponse
 		   || messageTag(resp) == T_ZenithReadResponse);
 
+	if (message_level_is_interesting(PqPageStoreTrace))
 	{
-		char	   *msg = zm_to_string((ZenithMessage *) & request);
+		char	   *msg = zm_to_string((ZenithMessage *) resp);
 
 		zenith_log(PqPageStoreTrace, "Got response: %s", msg);
 		pfree(msg);
 	}
-
 
 	/*
 	 * XXX: zm_to_string leak strings. Check with what memory contex all this
