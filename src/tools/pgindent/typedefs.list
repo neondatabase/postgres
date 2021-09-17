@@ -2146,6 +2146,8 @@ RelMapFile
 RelMapping
 RelOptInfo
 RelOptKind
+RelSizeEntry
+RelTag
 RelToCheck
 RelToCluster
 RelabelType
@@ -2840,6 +2842,8 @@ WaitEventTimeout
 WaitPMResult
 WalCloseMethod
 WalLevel
+WalKeeper
+WalMessage
 WalRcvData
 WalRcvExecResult
 WalRcvExecStatus
@@ -2943,6 +2947,17 @@ XmlTableBuilderData
 YYLTYPE
 YYSTYPE
 YY_BUFFER_STATE
+ZenithErrorResponse
+ZenithExistsRequest
+ZenithExistsResponse
+ZenithGetPageRequest
+ZenithGetPageResponse
+ZenithMessage
+ZenithMessageTag
+ZenithNblocksRequest
+ZenithNblocksResponse
+ZenithRequest
+ZenithResponse
 _SPI_connection
 _SPI_plan
 __AssignProcessToJobObject
