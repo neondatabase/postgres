@@ -30,14 +30,14 @@ typedef enum
 	/* pagestore_client -> pagestore */
 	T_ZenithExistsRequest = 0,
 	T_ZenithNblocksRequest,
-	T_ZenithReadRequest,
+	T_ZenithGetPageRequest,
 
 	/* pagestore -> pagestore_client */
-	T_ZenithStatusResponse = 100,
+	T_ZenithExistsResponse = 100,
 	T_ZenithNblocksResponse,
-	T_ZenithReadResponse,
+	T_ZenithGetPageResponse,
+	T_ZenithErrorResponse,
 } ZenithMessageTag;
-
 
 /* base struct for c-style inheritance */
 typedef struct
@@ -47,32 +47,74 @@ typedef struct
 
 #define messageTag(m)		(((const ZenithMessage *)(m))->tag)
 
-extern char const *const ZenithMessageStr[];
-
-typedef struct
-{
-	RelFileNode rnode;
-	ForkNumber	forknum;
-	BlockNumber blkno;
-} PageKey;
-
+/*
+ * supertype of all the Zenith*Request structs below
+ *
+ * If 'latest' is true, we are requesting the latest page version, and 'lsn'
+ * is just a hint to the server that we know there are no versions of the page
+ * (or relation size, for exists/nblocks requests) later than the 'lsn'.
+ */
 typedef struct
 {
 	ZenithMessageTag tag;
-	PageKey		page_key;
+	bool		latest;			/* if true, request latest page version */
 	XLogRecPtr	lsn;			/* request page version @ this LSN */
 } ZenithRequest;
 
 typedef struct
 {
+	ZenithRequest req;
+	RelFileNode rnode;
+	ForkNumber	forknum;
+} ZenithExistsRequest;
+
+typedef struct
+{
+	ZenithRequest req;
+	RelFileNode rnode;
+	ForkNumber	forknum;
+} ZenithNblocksRequest;
+
+typedef struct
+{
+	ZenithRequest req;
+	RelFileNode rnode;
+	ForkNumber	forknum;
+	BlockNumber blkno;
+} ZenithGetPageRequest;
+
+/* supertype of all the Zenith*Response structs below */
+typedef struct
+{
 	ZenithMessageTag tag;
-	bool		ok;
-	uint32		n_blocks;
-	char		page[1];
 } ZenithResponse;
 
+typedef struct
+{
+	ZenithMessageTag tag;
+	bool		exists;
+} ZenithExistsResponse;
+
+typedef struct
+{
+	ZenithMessageTag tag;
+	uint32		n_blocks;
+} ZenithNblocksResponse;
+
+typedef struct
+{
+	ZenithMessageTag tag;
+	char		page[FLEXIBLE_ARRAY_MEMBER];
+} ZenithGetPageResponse;
+
+typedef struct
+{
+	ZenithMessageTag tag;
+	char		message[FLEXIBLE_ARRAY_MEMBER]; /* null-terminated error message */
+} ZenithErrorResponse;
+
 extern StringInfoData zm_pack_request(ZenithRequest *msg);
-extern ZenithMessage *zm_unpack_response(StringInfo s);
+extern ZenithResponse *zm_unpack_response(StringInfo s);
 extern char *zm_to_string(ZenithMessage *msg);
 
 /*
