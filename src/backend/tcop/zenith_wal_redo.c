@@ -156,6 +156,7 @@ WalRedoMain(int argc, char *argv[],
 {
 	int			firstchar;
 	StringInfoData input_message;
+	bool		enable_seccomp;
 
 	/* Initialize startup process environment if necessary. */
 	InitStandaloneProcess(argv[0]);
@@ -291,7 +292,7 @@ WalRedoMain(int argc, char *argv[],
 
 #ifdef HAVE_LIBSECCOMP
 	/* We prefer opt-out to opt-in for greater security */
-	bool enable_seccomp = true;
+	enable_seccomp = true;
 	for (int i = 1; i < argc; i++)
 		if (strcmp(argv[i], "--disable-seccomp") == 0)
 			enable_seccomp = false;
