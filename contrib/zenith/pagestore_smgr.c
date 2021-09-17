@@ -48,70 +48,70 @@ static char *hexdump_page(char *page);
 
 #define IS_LOCAL_REL(reln) (reln->smgr_rnode.node.dbNode != 0 && reln->smgr_rnode.node.relNode > FirstNormalObjectId)
 
-const int SmgrTrace = DEBUG5;
+const int	SmgrTrace = DEBUG5;
 
 page_server_api *page_server;
 
 /* GUCs */
-char *page_server_connstring;
-char *callmemaybe_connstring;
-char *zenith_timeline;
-char *zenith_tenant;
-bool wal_redo = false;
+char	   *page_server_connstring;
+char	   *callmemaybe_connstring;
+char	   *zenith_timeline;
+char	   *zenith_tenant;
+bool		wal_redo = false;
 
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
 {
-	StringInfoData	s;
+	StringInfoData s;
 
 	initStringInfo(&s);
 	pq_sendbyte(&s, msg->tag);
 
 	switch (messageTag(msg))
 	{
-		/* pagestore_client -> pagestore */
+			/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		{
-			ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
+			{
+				ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
 
-			pq_sendbyte(&s, msg_req->req.latest);
-			pq_sendint64(&s, msg_req->req.lsn);
-			pq_sendint32(&s, msg_req->rnode.spcNode);
-			pq_sendint32(&s, msg_req->rnode.dbNode);
-			pq_sendint32(&s, msg_req->rnode.relNode);
-			pq_sendbyte(&s, msg_req->forknum);
+				pq_sendbyte(&s, msg_req->req.latest);
+				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint32(&s, msg_req->rnode.spcNode);
+				pq_sendint32(&s, msg_req->rnode.dbNode);
+				pq_sendint32(&s, msg_req->rnode.relNode);
+				pq_sendbyte(&s, msg_req->forknum);
 
-			break;
-		}
+				break;
+			}
 		case T_ZenithNblocksRequest:
-		{
-			ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
+			{
+				ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
 
-			pq_sendbyte(&s, msg_req->req.latest);
-			pq_sendint64(&s, msg_req->req.lsn);
-			pq_sendint32(&s, msg_req->rnode.spcNode);
-			pq_sendint32(&s, msg_req->rnode.dbNode);
-			pq_sendint32(&s, msg_req->rnode.relNode);
-			pq_sendbyte(&s, msg_req->forknum);
+				pq_sendbyte(&s, msg_req->req.latest);
+				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint32(&s, msg_req->rnode.spcNode);
+				pq_sendint32(&s, msg_req->rnode.dbNode);
+				pq_sendint32(&s, msg_req->rnode.relNode);
+				pq_sendbyte(&s, msg_req->forknum);
 
-			break;
-		}
+				break;
+			}
 		case T_ZenithGetPageRequest:
-		{
-			ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
+			{
+				ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
 
-			pq_sendbyte(&s, msg_req->req.latest);
-			pq_sendint64(&s, msg_req->req.lsn);
-			pq_sendint32(&s, msg_req->rnode.spcNode);
-			pq_sendint32(&s, msg_req->rnode.dbNode);
-			pq_sendint32(&s, msg_req->rnode.relNode);
-			pq_sendbyte(&s, msg_req->forknum);
-			pq_sendint32(&s, msg_req->blkno);
+				pq_sendbyte(&s, msg_req->req.latest);
+				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint32(&s, msg_req->rnode.spcNode);
+				pq_sendint32(&s, msg_req->rnode.dbNode);
+				pq_sendint32(&s, msg_req->rnode.relNode);
+				pq_sendbyte(&s, msg_req->forknum);
+				pq_sendint32(&s, msg_req->blkno);
 
-			break;
-		}
+				break;
+			}
 
-		/* pagestore -> pagestore_client. We never need to create these. */
+			/* pagestore -> pagestore_client. We never need to create these. */
 		case T_ZenithExistsResponse:
 		case T_ZenithNblocksResponse:
 		case T_ZenithGetPageResponse:
@@ -131,66 +131,67 @@ zm_unpack_response(StringInfo s)
 
 	switch (tag)
 	{
-		/* pagestore -> pagestore_client */
+			/* pagestore -> pagestore_client */
 		case T_ZenithExistsResponse:
-		{
-			ZenithExistsResponse *msg_resp = palloc0(sizeof(ZenithExistsResponse));
+			{
+				ZenithExistsResponse *msg_resp = palloc0(sizeof(ZenithExistsResponse));
 
-			msg_resp->tag = tag;
-			msg_resp->exists = pq_getmsgbyte(s);
-			pq_getmsgend(s);
+				msg_resp->tag = tag;
+				msg_resp->exists = pq_getmsgbyte(s);
+				pq_getmsgend(s);
 
-			resp = (ZenithResponse *) msg_resp;
-			break;
-		}
+				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
 
 		case T_ZenithNblocksResponse:
-		{
-			ZenithNblocksResponse *msg_resp = palloc0(sizeof(ZenithNblocksResponse));
+			{
+				ZenithNblocksResponse *msg_resp = palloc0(sizeof(ZenithNblocksResponse));
 
-			msg_resp->tag = tag;
-			msg_resp->n_blocks = pq_getmsgint(s, 4);
-			pq_getmsgend(s);
+				msg_resp->tag = tag;
+				msg_resp->n_blocks = pq_getmsgint(s, 4);
+				pq_getmsgend(s);
 
-			resp = (ZenithResponse *) msg_resp;
-			break;
-		}
+				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
 
 		case T_ZenithGetPageResponse:
-		{
-			ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ);
+			{
+				ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ);
 
-			msg_resp->tag = tag;
-			memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ); // XXX: should be varlena
-			pq_getmsgend(s);
+				msg_resp->tag = tag;
+				/* XXX:	should be varlena */
+				memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
+				pq_getmsgend(s);
 
-			resp = (ZenithResponse *) msg_resp;
-			break;
-		}
+				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
 
 		case T_ZenithErrorResponse:
-		{
-			ZenithErrorResponse *msg_resp;
-			size_t		msglen;
-			const char *msgtext;
+			{
+				ZenithErrorResponse *msg_resp;
+				size_t		msglen;
+				const char *msgtext;
 
-			msgtext = pq_getmsgrawstring(s);
-			msglen = strlen(msgtext);
+				msgtext = pq_getmsgrawstring(s);
+				msglen = strlen(msgtext);
 
-			msg_resp = palloc0(sizeof(ZenithErrorResponse) + msglen + 1);
-			msg_resp->tag = tag;
-			memcpy(msg_resp->message, msgtext, msglen + 1);
-			pq_getmsgend(s);
+				msg_resp = palloc0(sizeof(ZenithErrorResponse) + msglen + 1);
+				msg_resp->tag = tag;
+				memcpy(msg_resp->message, msgtext, msglen + 1);
+				pq_getmsgend(s);
 
-			resp = (ZenithResponse *) msg_resp;
-			break;
-		}
+				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
 
-		/*
-		 * pagestore_client -> pagestore
-		 *
-		 * We create these ourselves, and don't need to decode them.
-		 */
+			/*
+			 * pagestore_client -> pagestore
+			 *
+			 * We create these ourselves, and don't need to decode them.
+			 */
 		case T_ZenithExistsRequest:
 		case T_ZenithNblocksRequest:
 		case T_ZenithGetPageRequest:
@@ -206,108 +207,108 @@ zm_unpack_response(StringInfo s)
 char *
 zm_to_string(ZenithMessage *msg)
 {
-	StringInfoData	s;
+	StringInfoData s;
 
 	initStringInfo(&s);
 
 	switch (messageTag(msg))
 	{
-		/* pagestore_client -> pagestore */
+			/* pagestore_client -> pagestore */
 		case T_ZenithExistsRequest:
-		{
-			ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
+			{
+				ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithExistsRequest\"");
-			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
-							 msg_req->rnode.spcNode,
-							 msg_req->rnode.dbNode,
-							 msg_req->rnode.relNode);
-			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
-			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
-			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
-			appendStringInfoChar(&s, '}');
-			break;
-		}
+				appendStringInfoString(&s, "{\"type\": \"ZenithExistsRequest\"");
+				appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+								 msg_req->rnode.spcNode,
+								 msg_req->rnode.dbNode,
+								 msg_req->rnode.relNode);
+				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 
 		case T_ZenithNblocksRequest:
-		{
-			ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
+			{
+				ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithNblocksRequest\"");
-			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
-							 msg_req->rnode.spcNode,
-							 msg_req->rnode.dbNode,
-							 msg_req->rnode.relNode);
-			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
-			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
-			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
-			appendStringInfoChar(&s, '}');
-			break;
-		}
+				appendStringInfoString(&s, "{\"type\": \"ZenithNblocksRequest\"");
+				appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+								 msg_req->rnode.spcNode,
+								 msg_req->rnode.dbNode,
+								 msg_req->rnode.relNode);
+				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 
 		case T_ZenithGetPageRequest:
-		{
-			ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
+			{
+				ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithGetPageRequest\"");
-			appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
-							 msg_req->rnode.spcNode,
-							 msg_req->rnode.dbNode,
-							 msg_req->rnode.relNode);
-			appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
-			appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
-			appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
-			appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
-			appendStringInfoChar(&s, '}');
-			break;
-		}
+				appendStringInfoString(&s, "{\"type\": \"ZenithGetPageRequest\"");
+				appendStringInfo(&s, ", \"rnode\": \"%u/%u/%u\"",
+								 msg_req->rnode.spcNode,
+								 msg_req->rnode.dbNode,
+								 msg_req->rnode.relNode);
+				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+				appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 
-		/* pagestore -> pagestore_client */
+			/* pagestore -> pagestore_client */
 		case T_ZenithExistsResponse:
-		{
-			ZenithExistsResponse *msg_resp = (ZenithExistsResponse *) msg;
+			{
+				ZenithExistsResponse *msg_resp = (ZenithExistsResponse *) msg;
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithExistsResponse\"");
-			appendStringInfo(&s, ", \"exists\": %d}",
-				msg_resp->exists
-			);
-			appendStringInfoChar(&s, '}');
+				appendStringInfoString(&s, "{\"type\": \"ZenithExistsResponse\"");
+				appendStringInfo(&s, ", \"exists\": %d}",
+								 msg_resp->exists
+					);
+				appendStringInfoChar(&s, '}');
 
-			break;
-		}
+				break;
+			}
 		case T_ZenithNblocksResponse:
-		{
-			ZenithNblocksResponse *msg_resp = (ZenithNblocksResponse *) msg;
+			{
+				ZenithNblocksResponse *msg_resp = (ZenithNblocksResponse *) msg;
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithNblocksResponse\"");
-			appendStringInfo(&s, ", \"n_blocks\": %u}",
-				msg_resp->n_blocks
-			);
-			appendStringInfoChar(&s, '}');
+				appendStringInfoString(&s, "{\"type\": \"ZenithNblocksResponse\"");
+				appendStringInfo(&s, ", \"n_blocks\": %u}",
+								 msg_resp->n_blocks
+					);
+				appendStringInfoChar(&s, '}');
 
-			break;
-		}
+				break;
+			}
 		case T_ZenithGetPageResponse:
-		{
+			{
 #if 0
-			ZenithGetPageResponse *msg_resp = (ZenithGetPageResponse *) msg;
+				ZenithGetPageResponse *msg_resp = (ZenithGetPageResponse *) msg;
 #endif
 
-			appendStringInfoString(&s, "{\"type\": \"ZenithGetPageResponse\"");
-			appendStringInfo(&s, ", \"page\": \"XXX\"}");
-			appendStringInfoChar(&s, '}');
-			break;
-		}
+				appendStringInfoString(&s, "{\"type\": \"ZenithGetPageResponse\"");
+				appendStringInfo(&s, ", \"page\": \"XXX\"}");
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 		case T_ZenithErrorResponse:
-		{
-			ZenithErrorResponse *msg_resp = (ZenithErrorResponse *) msg;
+			{
+				ZenithErrorResponse *msg_resp = (ZenithErrorResponse *) msg;
 
-			/* FIXME: escape double-quotes in the message */
-			appendStringInfoString(&s, "{\"type\": \"ZenithErrorResponse\"");
-			appendStringInfo(&s, ", \"message\": \"%s\"}", msg_resp->message);
-			appendStringInfoChar(&s, '}');
-			break;
-		}
+				/* FIXME: escape double-quotes in the message */
+				appendStringInfoString(&s, "{\"type\": \"ZenithErrorResponse\"");
+				appendStringInfo(&s, ", \"message\": \"%s\"}", msg_resp->message);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 
 		default:
 			appendStringInfo(&s, "{\"type\": \"unknown 0x%02x\"", msg->tag);
@@ -328,7 +329,7 @@ log_newpage_copy(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 	PGAlignedBlock copied_buffer;
 
 	/* set the flag in the original page, like log_newpage() does. */
-	((PageHeader)page)->pd_flags |= PD_WAL_LOGGED;
+	((PageHeader) page)->pd_flags |= PD_WAL_LOGGED;
 
 	memcpy(copied_buffer.data, page, BLCKSZ);
 	return log_newpage(rnode, forkNum, blkno, copied_buffer.data, page_std);
@@ -338,19 +339,20 @@ log_newpage_copy(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
 {
-	XLogRecPtr lsn = PageGetLSN(buffer);
+	XLogRecPtr	lsn = PageGetLSN(buffer);
 
 	if (ShutdownRequestPending)
 		return;
 
 	/*
-	 * If the page was not WAL-logged before eviction then we can lose its modification.
-	 * PD_WAL_LOGGED bit is used to mark pages which are wal-logged.
+	 * If the page was not WAL-logged before eviction then we can lose its
+	 * modification. PD_WAL_LOGGED bit is used to mark pages which are
+	 * wal-logged.
 	 *
 	 * See also comments to PD_WAL_LOGGED.
 	 *
-	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the whole index .
-	 * That's duplicative with the WAL-logging that we do here.
+	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the
+	 * whole index. That's duplicative with the WAL-logging that we do here.
 	 * See log_newpage_range() calls.
 	 *
 	 * FIXME: Redoing this record will set the LSN on the page. That could
@@ -359,7 +361,8 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	if (forknum == FSM_FORKNUM && !RecoveryInProgress())
 	{
 		/* FSM is never WAL-logged and we don't care. */
-		XLogRecPtr recptr;
+		XLogRecPtr	recptr;
+
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
@@ -368,18 +371,19 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32)lsn);
+			 forknum, (uint32) lsn);
 	}
 	else if (forknum == VISIBILITYMAP_FORKNUM && !RecoveryInProgress())
 	{
 		/*
-		 * Always WAL-log vm.
-		 * We should never miss clearing visibility map bits.
+		 * Always WAL-log vm. We should never miss clearing visibility map
+		 * bits.
 		 *
-		 * TODO Is it too bad for performance?
-		 * Hopefully we do not evict actively used vm too often.
+		 * TODO Is it too bad for performance? Hopefully we do not evict
+		 * actively used vm too often.
 		 */
-		XLogRecPtr recptr;
+		XLogRecPtr	recptr;
+
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
@@ -389,45 +393,48 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32)lsn);
+			 forknum, (uint32) lsn);
 	}
-	else if (!(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED)
-		&& !RecoveryInProgress())
+	else if (!(((PageHeader) buffer)->pd_flags & PD_WAL_LOGGED)
+			 && !RecoveryInProgress())
 	{
-		XLogRecPtr recptr;
+		XLogRecPtr	recptr;
+
 		/*
 		 * We assume standard page layout here.
 		 *
 		 * But at smgr level we don't really know what kind of a page this is.
-		 * We have filtered visibility map pages and fsm pages above.
-		 * TODO Do we have any special page types?
+		 * We have filtered visibility map pages and fsm pages above. TODO Do
+		 * we have any special page types?
 		 */
 
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
 
-		/* If we wal-log hint bits, someone could concurrently update page
-		 * and reset PD_WAL_LOGGED again, so this assert is not relevant anymore.
+		/*
+		 * If we wal-log hint bits, someone could concurrently update page and
+		 * reset PD_WAL_LOGGED again, so this assert is not relevant anymore.
 		 *
-		 * See comment to FlushBuffer().
-		 * The caller must hold a pin on the buffer and have share-locked the
-		 * buffer contents.  (Note: a share-lock does not prevent updates of
-		 * hint bits in the buffer, so the page could change while the write
-		 * is in progress, but we assume that that will not invalidate the data
-		 * written.)
+		 * See comment to FlushBuffer(). The caller must hold a pin on the
+		 * buffer and have share-locked the buffer contents.  (Note: a
+		 * share-lock does not prevent updates of hint bits in the buffer, so
+		 * the page could change while the write is in progress, but we assume
+		 * that that will not invalidate the data written.)
 		 */
-		Assert(((PageHeader)buffer)->pd_flags & PD_WAL_LOGGED); /* Should be set by log_newpage */
+		Assert(((PageHeader) buffer)->pd_flags & PD_WAL_LOGGED);	/* Should be set by
+																	 * log_newpage */
 
 		/*
-		 * Need to flush it too, so that it gets sent to the Page Server before we
-		 * might need to read it back. It should get flushed eventually anyway, at
-		 * least if there is some other WAL activity, so this isn't strictly
-		 * necessary for correctness. But if there is no other WAL activity, the
-		 * page read might get stuck waiting for the record to be streamed out
-		 * for an indefinite time.
+		 * Need to flush it too, so that it gets sent to the Page Server
+		 * before we might need to read it back. It should get flushed
+		 * eventually anyway, at least if there is some other WAL activity, so
+		 * this isn't strictly necessary for correctness. But if there is no
+		 * other WAL activity, the page read might get stuck waiting for the
+		 * record to be streamed out for an indefinite time.
 		 *
-		 * FIXME: Flushing the WAL is expensive. We should track the last "evicted"
-		 * LSN instead, and update it here. Or just kick the bgwriter to do the
-		 * flush, there is no need for us to block here waiting for it to finish.
+		 * FIXME: Flushing the WAL is expensive. We should track the last
+		 * "evicted" LSN instead, and update it here. Or just kick the
+		 * bgwriter to do the flush, there is no need for us to block here
+		 * waiting for it to finish.
 		 */
 		XLogFlush(recptr);
 		lsn = recptr;
@@ -436,14 +443,16 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32)lsn);
-	} else {
+			 forknum, (uint32) lsn);
+	}
+	else
+	{
 		elog(SmgrTrace, "Page %u of relation %u/%u/%u.%u is alread wal logged at lsn=%X",
 			 blocknum,
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32)lsn);
+			 forknum, (uint32) lsn);
 	}
 	SetLastWrittenPageLSN(lsn);
 }
@@ -472,14 +481,15 @@ zenith_init(void)
 static XLogRecPtr
 zm_adjust_lsn(XLogRecPtr lsn)
 {
-	/* If lsn points to the beging of first record on page or segment,
-	 * then "return" it back to the page origin
+	/*
+	 * If lsn points to the beging of first record on page or segment, then
+	 * "return" it back to the page origin
 	 */
-	if ((lsn & (XLOG_BLCKSZ-1)) == SizeOfXLogShortPHD)
+	if ((lsn & (XLOG_BLCKSZ - 1)) == SizeOfXLogShortPHD)
 	{
 		lsn -= SizeOfXLogShortPHD;
 	}
-	else if ((lsn & (wal_segment_size-1)) == SizeOfXLogLongPHD)
+	else if ((lsn & (wal_segment_size - 1)) == SizeOfXLogLongPHD)
 	{
 		lsn -= SizeOfXLogLongPHD;
 	}
@@ -492,13 +502,13 @@ zm_adjust_lsn(XLogRecPtr lsn)
 static XLogRecPtr
 zenith_get_request_lsn(bool *latest)
 {
-	XLogRecPtr lsn;
+	XLogRecPtr	lsn;
 
 	if (RecoveryInProgress())
 	{
 		lsn = GetXLogReplayRecPtr(NULL);
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
-			(uint32) ((lsn) >> 32), (uint32) (lsn));
+			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 		lsn = InvalidXLogRecPtr;
 	}
 	else if (am_walsender)
@@ -508,7 +518,7 @@ zenith_get_request_lsn(bool *latest)
 	}
 	else
 	{
-		XLogRecPtr flushlsn;
+		XLogRecPtr	flushlsn;
 
 		/*
 		 * Use the latest LSN that was evicted from the buffer cache. Any
@@ -518,14 +528,15 @@ zenith_get_request_lsn(bool *latest)
 		lsn = GetLastWrittenPageLSN();
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
-			(uint32) ((lsn) >> 32), (uint32) (lsn));
+			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 
 		lsn = zm_adjust_lsn(lsn);
 
 		/*
-		 * Is it possible that the last-written LSN is ahead of last flush LSN? Probably not,
-		 * we shouldn't evict a page from the buffer cache before all its modifications have
-		 * been safely flushed. That's the "WAL before data" rule. But better safe than sorry.
+		 * Is it possible that the last-written LSN is ahead of last flush
+		 * LSN? Probably not, we shouldn't evict a page from the buffer cache
+		 * before all its modifications have been safely flushed. That's the
+		 * "WAL before data" rule. But better safe than sorry.
 		 */
 		flushlsn = GetFlushRecPtr();
 		if (lsn > flushlsn)
@@ -538,8 +549,8 @@ zenith_get_request_lsn(bool *latest)
 	}
 
 	/*
-	 * FIXME: In read-only mode, we would need to set *latest=false here. But we don't
-	 * support read-only mode at the moment
+	 * FIXME: In read-only mode, we would need to set *latest=false here. But
+	 * we don't support read-only mode at the moment
 	 */
 	*latest = true;
 	return lsn;
@@ -566,10 +577,12 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum
 		};
+
 		resp = page_server->request((ZenithRequest *) &request);
 	}
 
-	switch (resp->tag) {
+	switch (resp->tag)
+	{
 		case T_ZenithExistsResponse:
 			exists = ((ZenithExistsResponse *) resp)->exists;
 			break;
@@ -583,7 +596,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 							reln->smgr_rnode.node.relNode,
 							forkNum,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
-					 errdetail("page server returned error: %s", 
+					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
 			break;
 
@@ -653,10 +666,10 @@ void
 zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
-	XLogRecPtr lsn;
+	XLogRecPtr	lsn;
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
-	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno+1);
+	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);
 	elog(SmgrTrace, "smgrextend called for %u/%u/%u.%u blk %u, page LSN: %X/%08X",
@@ -721,7 +734,7 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
  */
 void
 zenith_writeback(SMgrRelation reln, ForkNumber forknum,
-					  BlockNumber blocknum, BlockNumber nblocks)
+				 BlockNumber blocknum, BlockNumber nblocks)
 {
 	/* not implemented */
 	elog(SmgrTrace, "[ZENITH_SMGR] writeback noop");
@@ -741,7 +754,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 {
 	ZenithResponse *resp;
 	bool		latest;
-	XLogRecPtr request_lsn;
+	XLogRecPtr	request_lsn;
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -753,10 +766,12 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.forknum = forkNum,
 			.blkno = blkno
 		};
+
 		resp = page_server->request((ZenithRequest *) &request);
 	}
 
-	switch (resp->tag) {
+	switch (resp->tag)
+	{
 		case T_ZenithGetPageResponse:
 			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
 			break;
@@ -771,7 +786,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 							reln->smgr_rnode.node.relNode,
 							forkNum,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
-					 errdetail("page server returned error: %s", 
+					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
 			break;
 
@@ -782,22 +797,24 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	pfree(resp);
 
 	/* Clear PD_WAL_LOGGED bit stored in WAL record */
-	((PageHeader)buffer)->pd_flags &= ~PD_WAL_LOGGED;
+	((PageHeader) buffer)->pd_flags &= ~PD_WAL_LOGGED;
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
 	{
-		char pageserver_masked[BLCKSZ];
-		char mdbuf[BLCKSZ];
-		char mdbuf_masked[BLCKSZ];
+		char		pageserver_masked[BLCKSZ];
+		char		mdbuf[BLCKSZ];
+		char		mdbuf_masked[BLCKSZ];
 
 		mdread(reln, forkNum, blkno, mdbuf);
 
 		memcpy(pageserver_masked, buffer, BLCKSZ);
 		memcpy(mdbuf_masked, mdbuf, BLCKSZ);
 
-		if (PageIsNew(mdbuf)) {
-			if (!PageIsNew(pageserver_masked)) {
+		if (PageIsNew(mdbuf))
+		{
+			if (!PageIsNew(pageserver_masked))
+			{
 				elog(PANIC, "page is new in MD but not in Page Server at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n%s\n",
 					 blkno,
 					 reln->smgr_rnode.node.spcNode,
@@ -808,23 +825,25 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					 hexdump_page(buffer));
 			}
 		}
-		else if (PageIsNew(buffer)) {
+		else if (PageIsNew(buffer))
+		{
 			elog(PANIC, "page is new in Page Server but not in MD at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n%s\n",
-					 blkno,
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
-					 reln->smgr_rnode.node.relNode,
-					 forkNum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
-					 hexdump_page(mdbuf));
+				 blkno,
+				 reln->smgr_rnode.node.spcNode,
+				 reln->smgr_rnode.node.dbNode,
+				 reln->smgr_rnode.node.relNode,
+				 forkNum,
+				 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+				 hexdump_page(mdbuf));
 		}
 		else if (PageGetSpecialSize(mdbuf) == 0)
 		{
-			// assume heap
+			/* assume heap */
 			RmgrTable[RM_HEAP_ID].rm_mask(mdbuf_masked, blkno);
 			RmgrTable[RM_HEAP_ID].rm_mask(pageserver_masked, blkno);
 
-			if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0) {
+			if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0)
+			{
 				elog(PANIC, "heap buffers differ at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n------ MD ------\n%s\n------ Page Server ------\n%s\n",
 					 blkno,
 					 reln->smgr_rnode.node.spcNode,
@@ -840,11 +859,12 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		{
 			if (((BTPageOpaqueData *) PageGetSpecialPointer(mdbuf))->btpo_cycleid < MAX_BT_CYCLE_ID)
 			{
-				// assume btree
+				/* assume btree */
 				RmgrTable[RM_BTREE_ID].rm_mask(mdbuf_masked, blkno);
 				RmgrTable[RM_BTREE_ID].rm_mask(pageserver_masked, blkno);
 
-				if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0) {
+				if (memcmp(mdbuf_masked, pageserver_masked, BLCKSZ) != 0)
+				{
 					elog(PANIC, "btree buffers differ at blk %u in rel %u/%u/%u fork %u (request LSN %X/%08X):\n------ MD ------\n%s\n------ Page Server ------\n%s\n",
 						 blkno,
 						 reln->smgr_rnode.node.spcNode,
@@ -875,7 +895,7 @@ hexdump_page(char *page)
 			appendStringInfo(&result, " ");
 		if (i % 40 == 0)
 			appendStringInfo(&result, "\n");
-		appendStringInfo(&result, "%02x", (unsigned char)(page[i]));
+		appendStringInfo(&result, "%02x", (unsigned char) (page[i]));
 	}
 
 	return result.data;
@@ -893,7 +913,7 @@ void
 zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			 char *buffer, bool skipFsync)
 {
-	XLogRecPtr lsn;
+	XLogRecPtr	lsn;
 
 	zenith_wallog_page(reln, forknum, blocknum, buffer);
 
@@ -938,7 +958,8 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		resp = page_server->request((ZenithRequest *) &request);
 	}
 
-	switch (resp->tag) {
+	switch (resp->tag)
+	{
 		case T_ZenithNblocksResponse:
 			n_blocks = ((ZenithNblocksResponse *) resp)->n_blocks;
 			break;
@@ -952,7 +973,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 							reln->smgr_rnode.node.relNode,
 							forknum,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
-					 errdetail("page server returned error: %s", 
+					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
 			break;
 
@@ -979,17 +1000,17 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 void
 zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
-	XLogRecPtr lsn;
+	XLogRecPtr	lsn;
 
 	set_cached_relsize(reln->smgr_rnode.node, forknum, nblocks);
 
 	/*
-	 * Truncating a relation drops all its buffers from the buffer cache without
-	 * calling smgrwrite() on them. But we must account for that in our tracking
-	 * of last-written-LSN all the same: any future smgrnblocks() request must
-	 * return the new size after the truncation. We don't know what the LSN of
-	 * the truncation record was, so be conservative and use the most recently
-	 * inserted WAL record's LSN.
+	 * Truncating a relation drops all its buffers from the buffer cache
+	 * without calling smgrwrite() on them. But we must account for that in
+	 * our tracking of last-written-LSN all the same: any future smgrnblocks()
+	 * request must return the new size after the truncation. We don't know
+	 * what the LSN of the truncation record was, so be conservative and use
+	 * the most recently inserted WAL record's LSN.
 	 */
 	lsn = GetXLogInsertRecPtr();
 

@@ -42,7 +42,7 @@ void		_PG_init(void);
 bool		connected = false;
 PGconn	   *pageserver_conn;
 
-static ZenithResponse * zenith_call(ZenithRequest *request);
+static ZenithResponse *zenith_call(ZenithRequest *request);
 page_server_api api = {
 	.request = zenith_call
 };
@@ -50,32 +50,34 @@ page_server_api api = {
 static void
 zenith_connect()
 {
-	char			 *query;
-	int				  ret;
-	char			 *auth_token;
-	char			 *err = NULL;
+	char	   *query;
+	int			ret;
+	char	   *auth_token;
+	char	   *err = NULL;
 	PQconninfoOption *conn_options;
 	PQconninfoOption *conn_option;
-	int 			 noptions = 0;
+	int			noptions = 0;
 
-    // this is heavily inspired by psql/command.c::do_connect
-	conn_options = PQconninfoParse(
-		page_server_connstring,
-	 	&err
-	);
+	/* this is heavily inspired by psql/command.c::do_connect */
+	conn_options = PQconninfoParse(page_server_connstring, &err);
 
-	if (conn_options == NULL) {
+	if (conn_options == NULL)
+	{
 		/* The error string is malloc'd, so we must free it explicitly */
 		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+
 		PQfreemem(err);
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
-					errmsg("invalid connection string syntax: %s", errcopy)));
+				 errmsg("invalid connection string syntax: %s", errcopy)));
 	}
 
-	// Trying to populate pageserver connection string with auth token from environment.
-	// We are looking for password in with placeholder value like $ENV_VAR_NAME, so if password field is present 
-	// and starts with $ we try to fetch environment variable value and fail loudly if it is not set
+	/*
+	 * Trying to populate pageserver connection string with auth token from
+	 * environment. We are looking for password in with placeholder value like
+	 * $ENV_VAR_NAME, so if password field is present and starts with $ we try
+	 * to fetch environment variable value and fail loudly if it is not set.
+	 */
 	for (conn_option = conn_options; conn_option->keyword != NULL; conn_option++)
 	{
 		noptions++;
@@ -83,50 +85,50 @@ zenith_connect()
 		{
 			if (conn_option->val != NULL && conn_option->val[0] != '\0')
 			{
-				// ensure that this is a template
-				if (strncmp(conn_option->val, "$", 1) != 0) {
-					ereport(
-						ERROR,
-						(
-							errcode(ERRCODE_CONNECTION_EXCEPTION),
-							errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])
-						)
-					);
-				}
-		
+				/* ensure that this is a template */
+				if (strncmp(conn_option->val, "$", 1) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_CONNECTION_EXCEPTION),
+							 errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])));
+
 				zenith_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
 				auth_token = getenv(&conn_option->val[1]);
-				if (!auth_token) {
-					ereport(
-						ERROR,
-						(
-							errcode(ERRCODE_CONNECTION_EXCEPTION),
-							errmsg("cannot get auth token, environment variable %s is not set", &conn_option->val[1])
-						)
-					);
-				} else {
+				if (!auth_token)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_CONNECTION_EXCEPTION),
+							 errmsg("cannot get auth token, environment variable %s is not set", &conn_option->val[1])));
+				}
+				else
+				{
 					zenith_log(LOG, "using auth token from environment passed via env");
 
-				// inspired by PQconninfoFree and conninfo_storeval
-				// so just free the old one and replace with freshly malloc'ed one
-				free(conn_option->val);
-				conn_option->val = strdup(auth_token);
+					/*
+					 * inspired by PQconninfoFree and conninfo_storeval so
+					 * just free the old one and replace with freshly
+					 * malloc'ed one
+					 */
+					free(conn_option->val);
+					conn_option->val = strdup(auth_token);
 				}
 			}
 		}
 	}
 
-	// copy values from PQconninfoOption to key/value arrays because PQconnectdbParams accepts options this way
+	/*
+	 * copy values from PQconninfoOption to key/value arrays because
+	 * PQconnectdbParams accepts options this way
+	 */
 	const char **keywords = malloc((noptions + 1) * sizeof(*keywords));
 	const char **values = malloc((noptions + 1) * sizeof(*values));
-	int			 i = 0;
-	
+	int			i = 0;
+
 	for (i = 0; i < noptions; i++)
 	{
 		keywords[i] = conn_options[i].keyword;
 		values[i] = conn_options[i].val;
 	}
-	// add array terminator
+	/* add array terminator */
 	keywords[i] = NULL;
 	values[i] = NULL;
 
@@ -148,7 +150,7 @@ zenith_connect()
 	}
 
 	/* Ask the Page Server to connect to us, and stream WAL from us. */
-	if (callmemaybe_connstring && callmemaybe_connstring[0] 
+	if (callmemaybe_connstring && callmemaybe_connstring[0]
 		&& zenith_tenant
 		&& zenith_timeline)
 	{
