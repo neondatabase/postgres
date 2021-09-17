@@ -156,7 +156,9 @@ WalRedoMain(int argc, char *argv[],
 {
 	int			firstchar;
 	StringInfoData input_message;
+#ifdef HAVE_LIBSECCOMP
 	bool		enable_seccomp;
+#endif
 
 	/* Initialize startup process environment if necessary. */
 	InitStandaloneProcess(argv[0]);
