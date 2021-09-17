@@ -33,14 +33,20 @@ typedef struct
 
 typedef struct
 {
-	RelTag tag;
+	RelTag		tag;
 	BlockNumber size;
 } RelSizeEntry;
 
 static HTAB *relsize_hash;
 static LWLockId relsize_lock;
-static int relsize_hash_size;
+static int	relsize_hash_size;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
+
+/*
+ * Size of cache entry is 20 bytes. So 64 entry will take about 1.2 Mb,
+ * which seems to be a reasonable default.
+ */
+#define DEFAULT_RELSIZE_HASH_SIZE (64 * 1024)
 
 static void
 zenith_smgr_shmem_startup(void)
@@ -51,7 +57,7 @@ zenith_smgr_shmem_startup(void)
 		prev_shmem_startup_hook();
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	relsize_lock = (LWLockId)GetNamedLWLockTranche("zenith_relsize");
+	relsize_lock = (LWLockId) GetNamedLWLockTranche("zenith_relsize");
 	info.keysize = sizeof(RelTag);
 	info.entrysize = sizeof(RelSizeEntry);
 	relsize_hash = ShmemInitHash("zenith_relsize",
@@ -62,13 +68,14 @@ zenith_smgr_shmem_startup(void)
 }
 
 bool
-get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber* size)
+get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber *size)
 {
-	bool found = false;
+	bool		found = false;
+
 	if (relsize_hash_size > 0)
 	{
-		RelTag tag;
-		RelSizeEntry* entry;
+		RelTag		tag;
+		RelSizeEntry *entry;
 
 		tag.rnode = rnode;
 		tag.forknum = forknum;
@@ -89,8 +96,8 @@ set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 {
 	if (relsize_hash_size > 0)
 	{
-		RelTag tag;
-		RelSizeEntry* entry;
+		RelTag		tag;
+		RelSizeEntry *entry;
 
 		tag.rnode = rnode;
 		tag.forknum = forknum;
@@ -106,9 +113,9 @@ update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 {
 	if (relsize_hash_size > 0)
 	{
-		RelTag tag;
-		RelSizeEntry* entry;
-		bool found;
+		RelTag		tag;
+		RelSizeEntry *entry;
+		bool		found;
 
 		tag.rnode = rnode;
 		tag.forknum = forknum;
@@ -127,17 +134,12 @@ relsize_hash_init(void)
 							"Sets the maximum number of cached relation sizes for zenith",
 							NULL,
 							&relsize_hash_size,
-							/* 
-							 * Size of cache entry is 20 bytes.
-							 * So 64 entry will take about 1.2 Mb,
-							 * which seems to be a reasonable default.
-							 */
-							64*1024,
+							DEFAULT_RELSIZE_HASH_SIZE,
 							0,
 							INT_MAX,
 							PGC_POSTMASTER,
 							0,
-							NULL, NULL,	NULL);
+							NULL, NULL, NULL);
 
 	if (relsize_hash_size > 0)
 	{
