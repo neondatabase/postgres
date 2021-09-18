@@ -29,6 +29,14 @@ typedef uint64 XLogRecPtr;
 #define XLogRecPtrIsInvalid(r)	((r) == InvalidXLogRecPtr)
 
 /*
+ * Maximum possible XLogRecPtr value.  Currently used by back pressure
+ * mechanism to distinguish the unknown replica flush/write position.
+ * This significantly simplifies comparison and checks as we always
+ * look for the minimal value.
+ */
+#define UnknownXLogRecPtr	((XLogRecPtr) ~0)
+
+/*
  * First LSN to use for "fake" LSNs.
  *
  * Values smaller than this can be used for special per-AM purposes.
