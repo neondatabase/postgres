@@ -133,6 +133,23 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback * hs)
 	}
 }
 
+/*
+ * Get minimum of disk consistent LSNs of all safekeepers
+ */
+static XLogRecPtr
+CalculateDiskConsistentLsn(void)
+{
+	XLogRecPtr lsn = UnknownXLogRecPtr;
+	for (int i = 0; i < n_walkeepers; i++)
+	{
+		if (walkeeper[i].feedback.diskConsistentLsn < lsn)
+		{
+			lsn = walkeeper[i].feedback.diskConsistentLsn;
+		}
+	}
+	return lsn;
+}
+
 /* Initializes the internal event set, provided that it is currently null */
 static void
 InitEventSet(void)
@@ -339,16 +356,27 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr	minQuorumLsn;
+	XLogRecPtr	diskConsistentLsn;
 	WalMessage *msgQueueAck;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-	if (minQuorumLsn > lastFeedback.flushLsn)
+	diskConsistentLsn = CalculateDiskConsistentLsn();
+
+	if (minQuorumLsn > lastFeedback.flushLsn || diskConsistentLsn != lastFeedback.diskConsistentLsn)
 	{
-		lastFeedback.flushLsn = minQuorumLsn;
+
+		if (minQuorumLsn > lastFeedback.flushLsn)
+			lastFeedback.flushLsn = minQuorumLsn;
+
+		lastFeedback.diskConsistentLsn = diskConsistentLsn;
+
 		/* advance the replication slot */
 		if (!syncSafekeepers)
-			ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
+			ProcessStandbyReply(lastFeedback.diskConsistentLsn,
+								lastFeedback.flushLsn,
+								InvalidXLogRecPtr, GetCurrentTimestamp(), false);
 	}
+
 	CombineHotStanbyFeedbacks(&hsFeedback);
 	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
 	{
@@ -1055,6 +1083,17 @@ WalProposerPoll(void)
 		{
 			ResetLatch(MyLatch);
 			break;
+		}
+		if (rc == 0) /* timeout expired: poll state */
+		{
+			/*
+			 * If no WAL was generated during timeout (and we have already
+			 * collected the quorum), then send pool message
+			 */
+			if (lastSentLsn != InvalidXLogRecPtr)
+			{
+				BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+			}
 		}
 	}
 }
