@@ -51,16 +51,16 @@
 #include "access/xlog_internal.h"
 #include "catalog/pg_class.h"
 #include "pagestore_client.h"
-#include "storage/relfilenode.h"
+#include "pagestore_client.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
 #include "postmaster/interrupt.h"
+#include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/md.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "replication/walsender.h"
 #include "catalog/pg_tablespace_d.h"
 
 /*
@@ -781,7 +781,6 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	}
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
-
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);

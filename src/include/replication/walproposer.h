@@ -294,6 +294,8 @@ typedef struct AppendResponse
 	// Safekeeper reports back his awareness about which WAL is committed, as
 	// this is a criterion for walproposer --sync mode exit
 	XLogRecPtr commitLsn;
+	// Part of WALL applied and written to the disk by all pageservers
+	XLogRecPtr diskConsistentLsn;
 	HotStandbyFeedback hs;
 } AppendResponse;
 
