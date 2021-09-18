@@ -637,10 +637,19 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 
 	while (fsm_nblocks_now < fsm_nblocks)
 	{
+		#if 1
+		Buffer buffer = ReadBufferExtended(rel, FSM_FORKNUM, P_NEW, RBM_ZERO_AND_LOCK, NULL);
+		Page page = BufferGetPage(buffer);
+		PageInit((Page)page, BLCKSZ, 0);
+		PageSetChecksumInplace(page, fsm_nblocks_now);
+		MarkBufferDirty(buffer);
+		UnlockReleaseBuffer(buffer);
+		Assert(smgrnblocks(rel->rd_smgr, FSM_FORKNUM) == fsm_nblocks_now+1);
+		#else
 		PageSetChecksumInplace((Page) pg.data, fsm_nblocks_now);
-
 		smgrextend(rel->rd_smgr, FSM_FORKNUM, fsm_nblocks_now,
 				   pg.data, false);
+		#endif
 		fsm_nblocks_now++;
 	}
 

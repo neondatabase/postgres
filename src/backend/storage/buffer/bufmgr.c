@@ -55,7 +55,7 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 
-
+bool zenith_transient_hint_bits;
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
 #define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
@@ -3910,6 +3910,8 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 		MarkLocalBufferDirty(buffer);
 		return;
 	}
+	if (zenith_transient_hint_bits)
+		return;
 
 	bufHdr = GetBufferDescriptor(buffer - 1);
 

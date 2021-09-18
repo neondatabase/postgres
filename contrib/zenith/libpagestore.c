@@ -339,6 +339,15 @@ _PG_init(void)
 							 0,
 							 NULL, NULL, NULL);
 
+	DefineCustomIntVariable("zenith.max_wal_sender_lag",
+							"maximal lag between compute node and page server",
+							NULL,
+							&zenith_max_wal_sender_lag,
+							1024, 1024, INT_MAX, /* 1GB: it should not be smaller than maximal size of WAL record */
+							PGC_POSTMASTER,
+							GUC_UNIT_MB,
+							NULL, NULL, NULL);
+
 	relsize_hash_init();
 
 	if (page_server != NULL)

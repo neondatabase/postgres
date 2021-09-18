@@ -18,7 +18,8 @@
 #include "access/xloginsert.h"
 #include "access/xlog_internal.h"
 #include "pagestore_client.h"
-#include "storage/relfilenode.h"
+#include "pagestore_client.h"
+#include "replication/walsender_private.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
 #include "postmaster/interrupt.h"
@@ -49,6 +50,11 @@ static char *hexdump_page(char *page);
 
 #define IS_LOCAL_REL(reln) (reln->smgr_rnode.node.dbNode != 0 && reln->smgr_rnode.node.relNode > FirstNormalObjectId)
 
+#define MB (1024*1024)
+
+/* Timeout in micriseconds for delayed backnd writes to avoid WAL overflow */
+#define ZENITH_WRITE_TIMEOUT 100000
+
 const int SmgrTrace = DEBUG5;
 
 bool loaded = false;
@@ -61,6 +67,7 @@ char *callmemaybe_connstring;
 char *zenith_timeline;
 char *zenith_tenant;
 bool wal_redo = false;
+int  zenith_max_wal_sender_lag;
 
 char const *const ZenithMessageStr[] =
 {
@@ -71,6 +78,22 @@ char const *const ZenithMessageStr[] =
 	"ZenithReadResponse",
 	"ZenithNblocksResponse",
 };
+
+
+static XLogRecPtr
+GetMinWalSenderLsn(void)
+{
+	XLogRecPtr min_lsn = (XLogRecPtr)-1 >> 1; // make it possible to add zenith_max_wal_sender_lag without overflow
+	for (int i = 0; i < max_wal_senders; i++)
+	{
+		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
+		XLogRecPtr written = walsnd->write; // assume it is atomic
+		if (walsnd->state == WALSNDSTATE_STREAMING && written < min_lsn) {
+			min_lsn = written;
+		}
+	}
+	return min_lsn;
+}
 
 StringInfoData
 zm_pack(ZenithMessage *msg)
@@ -267,6 +290,12 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 
 	if (ShutdownRequestPending)
 		return;
+
+	// Suspend writes until pageserver catch-up
+	while (GetFlushRecPtr() >  GetMinWalSenderLsn() + (XLogRecPtr)zenith_max_wal_sender_lag*MB)
+	{
+		pg_usleep(ZENITH_WRITE_TIMEOUT);
+	}
 
 	/*
 	 * If the page was not WAL-logged before eviction then we can lose its modification.
@@ -479,6 +508,10 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 {
 	bool		ok;
 	ZenithResponse *resp;
+	BlockNumber n_blocks;
+
+	if (get_cached_relsize(reln->smgr_rnode.node, forkNum, &n_blocks))
+		return true;
 
 	resp = page_server->request((ZenithRequest) {
 		.tag = T_ZenithExistsRequest,
@@ -554,7 +587,9 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 {
 	XLogRecPtr lsn;
 
-	zenith_wallog_page(reln, forkNum, blkno, buffer);
+	if (!PageIsNew(buffer))
+		zenith_wallog_page(reln, forkNum, blkno, buffer);
+
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno+1);
 
 	lsn = PageGetLSN(buffer);
@@ -648,15 +683,14 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				 GetCurrentTimestamp(), blkno, reln->smgr_rnode.node.relNode);
 
 	resp = page_server->request((ZenithRequest) {
-		.tag = T_ZenithReadRequest,
-		.page_key = {
-			.rnode = reln->smgr_rnode.node,
-			.forknum = forkNum,
-			.blkno = blkno
-		},
-		.lsn = request_lsn
-	});
-
+			.tag = T_ZenithReadRequest,
+				.page_key = {
+				.rnode = reln->smgr_rnode.node,
+				.forknum = forkNum,
+				.blkno = blkno
+			},
+				.lsn = request_lsn
+				});
 	if (!resp->ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_IO_ERROR),
