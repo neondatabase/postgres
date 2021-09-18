@@ -29,9 +29,11 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "replication/origin.h"
+#include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 #include "utils/memutils.h"
+#include "utils/wait_event.h"
 
 /* Buffer size required to store a compressed version of backup block image */
 #define PGLZ_MAX_BLCKSZ PGLZ_MAX_OUTPUT(BLCKSZ)
@@ -60,6 +62,10 @@ typedef struct
 	/* buffer to store a compressed version of backup block image */
 	char		compressed_page[PGLZ_MAX_BLCKSZ];
 } registered_buffer;
+
+/* GUCs */
+int			max_replication_write_lag;
+int			max_replication_flush_lag;
 
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
@@ -115,6 +121,9 @@ static XLogRecData *XLogRecordAssemble(RmgrId rmid, uint8 info,
 static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 									uint16 hole_length, char *dest, uint16 *dlen);
 
+/* Timeout in milliseconds for delaying backend WAL inserts to avoid WAL overflow */
+#define BACK_PRESSURE_TIMEOUT 100
+#define MB ((XLogRecPtr)1024*1024)
 /*
  * Begin constructing a WAL record. This must be called before the
  * XLogRegister* functions and XLogInsert().
@@ -132,6 +141,40 @@ XLogBeginInsert(void)
 
 	if (begininsert_called)
 		elog(ERROR, "XLogBeginInsert was already called");
+
+	if (max_replication_write_lag != 0 || max_replication_flush_lag != 0)
+	{
+		uint64 slept = 0;
+
+		/* Suspend writes until replicas catch up */
+		while (true)
+		{
+			XLogRecPtr replicaWriteLsn;
+			XLogRecPtr replicaFlushLsn;
+			XLogRecPtr myFlushLsn = GetFlushRecPtr();
+
+			GetMinReplicaLsn(&replicaWriteLsn, &replicaFlushLsn);
+
+			if ((replicaWriteLsn != UnknownXLogRecPtr
+				 && myFlushLsn > replicaWriteLsn + max_replication_write_lag*MB) ||
+				(replicaFlushLsn != UnknownXLogRecPtr
+				 && myFlushLsn > replicaFlushLsn + max_replication_flush_lag*MB))
+			{
+				(void) WaitLatch(MyLatch,
+								 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+								 BACK_PRESSURE_TIMEOUT,
+								 WAIT_EVENT_BACK_PRESSURE);
+				ResetLatch(MyLatch);
+				slept += BACK_PRESSURE_TIMEOUT;
+			}
+			else
+				break;
+		}
+
+		// XXX: INFO will cause a lot of regression tests to fail.
+		if (slept > 0)
+			elog(DEBUG1, "slept for " UINT64_FORMAT " ms while waiting for all replicas to catch up", slept);
+	}
 
 	begininsert_called = true;
 }

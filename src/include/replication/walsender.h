@@ -12,6 +12,7 @@
 #ifndef _WALSENDER_H
 #define _WALSENDER_H
 
+#include "access/xlog.h"
 #include <signal.h>
 
 /*
@@ -47,7 +48,7 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
-
+extern void GetMinReplicaLsn(XLogRecPtr* write, XLogRecPtr* flush);
 /*
  * Remember that we want to wakeup walsenders later
  *
