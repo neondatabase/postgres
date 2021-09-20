@@ -43,8 +43,8 @@ static int	relsize_hash_size;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 
 /*
- * Size of cache entry is 20 bytes. So 64 entry will take about 1.2 Mb,
- * which seems to be a reasonable default.
+ * Size of a cache entry is 20 bytes. So this default will take about 1.2 MB,
+ * which seems reasonable.
  */
 #define DEFAULT_RELSIZE_HASH_SIZE (64 * 1024)
 
