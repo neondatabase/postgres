@@ -273,16 +273,32 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 	 *  (> 0) if it was successful; that value is the amount transferred.
 	 *
 	 * The protocol we use between walproposer and walkeeper means that we
-	 * (i.e. walproposer) won't ever receive a message saying that the copy
-	 * is done. */
+	 * *usually* wouldn't expect to see that the copy is done, but this can
+	 * sometimes be triggered by the server returning an ErrorResponse (which
+	 * also happens to have the effect that the copy is done).
+	 */
 	switch (result = PQgetCopyData(conn->pg_conn, buf, true))
 	{
 		case 0:
 			return PG_ASYNC_READ_TRY_AGAIN;
 		case -1:
-			/* As mentioned above; this shouldn't happen */
-			elog(FATAL, "unexpected return -1 from PQgetCopyData");
-			break;
+		{
+			/*
+			 * If we get -1, it's probably because of a server error; the
+			 * walkeeper won't normally send a CopyDone message.
+			 *
+			 * We can check PQgetResult to make sure that the server failed;
+			 * it'll always result in PGRES_FATAL_ERROR
+			 */
+			ExecStatusType status = PQresultStatus(PQgetResult(conn->pg_conn));
+
+			if (status != PGRES_FATAL_ERROR)
+				elog(FATAL, "unexpected result status %d after failed PQgetCopyData", status);
+
+			/* If there was actually an error, it'll be properly reported by
+			 * calls to PQerrorMessage -- we don't have to do anything else */
+			return PG_ASYNC_READ_FAIL;
+		}
 		case -2:
 			return PG_ASYNC_READ_FAIL;
 		default:
