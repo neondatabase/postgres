@@ -194,4 +194,10 @@ extern bool get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumbe
 extern void set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
 extern void update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
 
+/* functions for local file cache */
+extern void lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno, char *buffer);
+extern bool lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno, char *buffer);
+extern void lfc_init(void);
+
+
 #endif

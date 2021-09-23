@@ -679,6 +679,8 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		 forkNum, blkno,
 		 (uint32) (lsn >> 32), (uint32) lsn);
 
+	lfc_write(reln, forkNum, blkno, buffer);
+
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
 		mdextend(reln, forkNum, blkno, buffer, skipFsync);
@@ -755,6 +757,10 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	ZenithResponse *resp;
 	bool		latest;
 	XLogRecPtr	request_lsn;
+
+	/* Try to read from local file cache */
+	if (lfc_read(reln, forkNum, blkno, buffer))
+		return;
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -924,6 +930,8 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 reln->smgr_rnode.node.relNode,
 		 forknum, blocknum,
 		 (uint32) (lsn >> 32), (uint32) lsn);
+
+	lfc_write(reln, forknum, blocknum, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
