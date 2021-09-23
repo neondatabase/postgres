@@ -27,6 +27,23 @@
 #include "utils/timestamp.h"
 #include "pagestore_client.h"
 
+/*
+ * Prefetch is using fixed size ring buffer and postgres hash table. Both are located in shared memory.
+ * Backends are adding new entries to the ring buffer and prefetch background worker is taken them from ring buffer.
+ * When smgrprefetch() is called, we try to locate entry in hash table. If it is not present yet, then we add entry to ring buffer.
+ * We do no check overflow of ring buffer: if entry was not yet proceeded by prefetch worker, then we just replace it because
+ * this request is considered as deteriorated.
+ *
+ * When smgrread is called, we first try to locate entry in prefetch hash table. If request is present in hash table, then it can be in
+ * one of three states:
+ * 1. Not yet proceeded (sent to page server)
+ * 2. Sent to page server, but response is not yet received.
+ * 3. Proceeded: prefetched page is placed in ring buffer
+ * In the first case we just cancel prefetch request and let backend request page from page server itself.
+ * In the second case we wait until request is completed.
+ * And in the third case copy data from ring buffer to the destination and immediately return
+ */
+
 typedef enum {
 	QUEUED,
 	IN_PROGRESS,
@@ -37,15 +54,15 @@ typedef enum {
 typedef struct PrefetchEntry {
 	BufferTag     tag;
 	XLogRecPtr    lsn;
-	uint32        index;  /* index of entry i prefetch cyclic buffer */
+	uint32        index;  /* index of entry in prefetch ring buffer */
 	PrefetchState state;
-	Latch*        wait_latch; /* latch to be signaled when block is fetched */
+	Latch*        waiting_backend; /* latch to be signaled when block is fetched */
 } PrefetchEntry;
 
 typedef struct PrefetchControl {
-	size_t curr; /* position in cyclic buffer */
-	Latch* go_latch; /* latch to wakeup prefetcher */
-	PrefetchEntry* entries[1]; /* cyclic buffer with size == prefetch_buffer_size */
+	size_t curr; /* position in ring buffer */
+	Latch* waiting_prefetcher; /* latch to wakeup prefetcher */
+	PrefetchEntry* entries[FLEXIBLE_ARRAY_MEMBER]; /* ring buffer with size == prefetch_buffer_size */
 } PrefetchControl;
 
 static int prefetch_buffer_size;
@@ -54,7 +71,7 @@ static char* prefetch_buffer;
 static HTAB* prefetch_hash;
 static LWLockId prefetch_lock;
 static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
-static bool prefetch_cancel;
+static volatile bool prefetch_cancel;
 
 size_t n_prefetch_requests;
 size_t n_prefetch_hits;
@@ -70,7 +87,7 @@ zenith_prefetch_shmem_startup(void)
     }
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	prefetch_buffer = ShmemInitStruct("zenithr_prefetch",
+	prefetch_buffer = ShmemInitStruct("zenith_prefetch",
 									  sizeof(PrefetchControl) +
 									  (BLCKSZ+sizeof(PrefetchEntry*))*prefetch_buffer_size,
 									  &found);
@@ -86,10 +103,18 @@ zenith_prefetch_shmem_startup(void)
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
 		prefetch_control->curr = 0;
-		prefetch_control->go_latch = NULL;
+		prefetch_control->waiting_prefetcher = NULL;
 		memset(prefetch_control->entries, 0, prefetch_buffer_size*sizeof(PrefetchEntry*));
 	}
 	LWLockRelease(AddinShmemInitLock);
+}
+
+static size_t
+zenith_shmem_size(void)
+{
+	return (size_t)prefetch_buffer_size*(BLCKSZ+sizeof(PrefetchEntry*))
+		+ sizeof(PrefetchControl)
+		+ hash_estimate_size(prefetch_buffer_size, sizeof(PrefetchEntry));
 }
 
 void
@@ -100,7 +125,7 @@ zenith_prefetch_init(void)
 	 * shared_preload_libraries.
 	 */
 	if (!process_shared_preload_libraries_in_progress)
-		elog(ERROR, "Zenith module should be loaed via shared_preload_libraries");
+		elog(ERROR, "Zenith module should be loaded via shared_preload_libraries");
 
 	DefineCustomIntVariable("zenith.prefetch_buffer_size",
                             "Size of zenith prefetch buffer",
@@ -118,9 +143,7 @@ zenith_prefetch_init(void)
 	if (prefetch_buffer_size == 0)
 		return;
 
-	RequestAddinShmemSpace((size_t)prefetch_buffer_size*(BLCKSZ+sizeof(PrefetchEntry*))
-						   + sizeof(PrefetchControl)
-						   + hash_estimate_size(prefetch_buffer_size, sizeof(PrefetchEntry)));
+	RequestAddinShmemSpace(zenith_shmem_size());
 	RequestNamedLWLockTranche("zenith_prefetch", 1);
 
 	prev_shmem_startup_hook = shmem_startup_hook;
@@ -147,14 +170,15 @@ bool zenith_find_prefetched_buffer(SMgrRelation reln, ForkNumber forknum, BlockN
 		if (entry != NULL) {
 			if (entry->state == QUEUED || entry->lsn < lsn)
 			{
+				Latch* waiting_backend = entry->waiting_backend;
 				/* We have not sent this prefetch request and page is already requested.
 				 * So just concel this prefetch request.
 				 */
 				prefetch_control->entries[entry->index] = NULL;
 				hash_search(prefetch_hash, &tag, HASH_REMOVE, NULL);
-				if (entry->wait_latch)
-					SetLatch(entry->wait_latch);
 				LWLockRelease(prefetch_lock);
+				if (waiting_backend)
+					SetLatch(waiting_backend);
 				return false;
 			}
 			if (entry->state == COMPLETED) {
@@ -173,8 +197,8 @@ bool zenith_find_prefetched_buffer(SMgrRelation reln, ForkNumber forknum, BlockN
 							 GetCurrentTimestamp(), blocknum, tag.rnode.relNode);
 
 				/* Two concurrent reads of the same buffers are not possible */
-				Assert(entry->wait_latch == NULL || entry->wait_latch == MyLatch);
-				entry->wait_latch = MyLatch;
+				Assert(entry->waiting_backend == NULL || entry->waiting_backend == MyLatch);
+				entry->waiting_backend = MyLatch;
 
 				LWLockRelease(prefetch_lock);
 
@@ -206,21 +230,26 @@ start_prefetch_worker()
 	strcpy(worker.bgw_function_name, "zenith_prefetch_main");
 	strcpy(worker.bgw_library_name, "zenith");
 	worker.bgw_notify_pid = MyProcPid;
+
+	/* We assign here our latch to waiting_prefetch to let prefetch background worker to wakeup use when it setarted */
+	prefetch_control->waiting_prefetcher = MyLatch;
+
 	if (!RegisterDynamicBackgroundWorker(&worker, &handle))
 	{
+		prefetch_control->waiting_prefetcher = NULL;
 		elog(ERROR, "zenith: failed to start prefetch background worker");
 	}
 	if (WaitForBackgroundWorkerStartup(handle, &bgw_pid) != BGWH_STARTED)
 	{
+		prefetch_control->waiting_prefetcher = NULL;
 		elog(ERROR, "zenith: startup of prefetch background worker is failed");
 	}
-	for (int n_attempts = 0; prefetch_control->go_latch == NULL && n_attempts < 100; n_attempts++)
+	while (prefetch_control->waiting_prefetcher == MyLatch)
 	{
-		pg_usleep(10000); /* wait background worker to be registered in procarray */
-	}
-	if (prefetch_control->go_latch == NULL)
-	{
-		elog(ERROR, "zenith: background prefetch worker %d is crashed", bgw_pid);
+		(void)WaitLatch(MyLatch,
+						WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
+						PG_WAIT_EXTENSION);
+		ResetLatch(MyLatch);
 	}
 }
 
@@ -253,12 +282,12 @@ zenith_prefetch_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blockn
 		if (victim != NULL)
 		{
 			/* remove old entry */
-			if (victim->wait_latch)
-				SetLatch(victim->wait_latch);
+			if (victim->waiting_backend)
+				SetLatch(victim->waiting_backend);
 			hash_search(prefetch_hash, &victim->tag, HASH_REMOVE, NULL);
 		}
 		entry->state = QUEUED;
-		entry->wait_latch = NULL;
+		entry->waiting_backend = NULL;
 		entry->lsn = lsn;
 		entry->index = curr;
 		prefetch_control->entries[curr] = entry;
@@ -267,13 +296,13 @@ zenith_prefetch_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blockn
 		prefetch_log("%lu: prefetch request for block %d of relation %d",
 					 GetCurrentTimestamp(), blocknum, tag.rnode.relNode);
 
-		if (prefetch_control->go_latch == NULL)
+		if (prefetch_control->waiting_prefetcher == NULL)
 		{
 			/* lazy start of prefetch background worker */
 			start_prefetch_worker();
 		}
 		LWLockRelease(prefetch_lock);
-		SetLatch(prefetch_control->go_latch);
+		SetLatch(prefetch_control->waiting_prefetcher);
 	} else
 		LWLockRelease(prefetch_lock);
 }
@@ -292,6 +321,7 @@ zenith_prefetch_main(Datum arg)
 {
 	size_t curr = 0;
 	PrefetchEntry* prefetch_entries = (PrefetchEntry*)palloc(prefetch_buffer_size*sizeof(PrefetchEntry));
+	Latch *backend_latch = prefetch_control->waiting_prefetcher;
 
 	pqsignal(SIGINT,  zenith_prefetch_cancel);
 	pqsignal(SIGQUIT, zenith_prefetch_cancel);
@@ -300,7 +330,8 @@ zenith_prefetch_main(Datum arg)
 	/* We're now ready to receive signals */
 	BackgroundWorkerUnblockSignals();
 
-	prefetch_control->go_latch = MyLatch;
+	prefetch_control->waiting_prefetcher = MyLatch;
+	SetLatch(backend_latch);
 
 	while (!prefetch_cancel)
 	{
@@ -359,12 +390,17 @@ zenith_prefetch_main(Datum arg)
 			resp = page_server->receive();
 			LWLockAcquire(prefetch_lock, LW_EXCLUSIVE);
 
+			/*
+			 * While we are waiting response from page server,
+			 * entry in ring buffer can be reused by new request.
+			 * So we need to check under lock if request is still alive.
+			 */
 			entry = prefetch_control->entries[from];
 			if (entry != NULL
 				&& entry->lsn == prefetch_entries[from].lsn
-				&& memcmp(&entry->tag, &prefetch_entries[from].tag, sizeof(entry->tag)) == 0)
+				&& BUFFERTAGS_EQUAL(entry->tag, prefetch_entries[from].tag))
 			{
-				/* entry was not replaced in cyclic buffer */
+				/* entry was not replaced in ring buffer */
 				Assert(entry->state == IN_PROGRESS);
 
 				if (!resp->ok)
@@ -387,10 +423,10 @@ zenith_prefetch_main(Datum arg)
 					((PageHeader)resp->page)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
 					memcpy(prefetch_buffer + entry->index*BLCKSZ, resp->page, BLCKSZ);
 				}
-				if (entry->wait_latch)
+				if (entry->waiting_backend)
 				{
-					SetLatch(entry->wait_latch);
-					entry->wait_latch = NULL;
+					SetLatch(entry->waiting_backend);
+					entry->waiting_backend = NULL;
 				}
 			}
 			pfree(resp);
