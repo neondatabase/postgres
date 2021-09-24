@@ -98,7 +98,7 @@ zenith_prefetch_shmem_startup(void)
 		prefetch_lock = (LWLockId)GetNamedLWLockTranche("zenith_prefetch");
 		info.keysize = sizeof(BufferTag);
 		info.entrysize = sizeof(PrefetchEntry);
-		prefetch_hash = ShmemInitHash("zenith_prefetch",
+		prefetch_hash = ShmemInitHash("zenith_prefetch_hash",
 									  prefetch_buffer_size, prefetch_buffer_size,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
