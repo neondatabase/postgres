@@ -109,6 +109,7 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(exit_group),
 		PG_SCMP_ALLOW(pselect6),
 		PG_SCMP_ALLOW(read),
+		PG_SCMP_ALLOW(fstat), /* needed by fread() */
 		PG_SCMP_ALLOW(select),
 		PG_SCMP_ALLOW(write),
 
@@ -433,84 +434,45 @@ pprint_tag(BufferTag *tag)
  *	EOF is returned if end-of-file input is seen; time to shut down.
  * ----------------
  */
-
-/*
- * Wait until there is data in stdin. Prints a log message every 10 s whil
- * waiting.
- */
-static void
-wait_with_timeout(void)
-{
-	for (;;)
-	{
-		struct timeval timeout = {10, 0};
-		fd_set		fds;
-		int			ret;
-
-		FD_ZERO(&fds);
-		FD_SET(STDIN_FILENO, &fds);
-
-		ret = select(1, &fds, NULL, NULL, &timeout);
-		if (ret != 0)
-			break;
-		elog(DEBUG1, "still alive");
-	}
-}
-
 static int
 ReadRedoCommand(StringInfo inBuf)
 {
-	char		c;
+	char		hdr[1 + sizeof(int32)];
 	int			qtype;
 	int32		len;
-	int			nread;
 
-	/* FIXME: Use unbuffered I/O here, because the WAL redo process was getting
-	 * stuck with buffered I/O. I'm not sure why, or whether the bug was somewhere
-	 * in here or in the calling page server side.
-	 */
-	wait_with_timeout();
-	if (read(STDIN_FILENO, &c, 1) == 0)
-		return EOF;
-	qtype = c;
-
-	/*
-	 * Like in the FE/BE protocol, all messages have a length word next
-	 * after the type code; we can read the message contents independently of
-	 * the type.
-	 */
-	if (read(STDIN_FILENO, &len, 4) != 4)
+	/* Read message type and message length */
+	if (fread(hdr, 1, sizeof(hdr), stdin) != sizeof(hdr))
 	{
-		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("could not read message length")));
+		if (ferror(stdin) != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("could not read message header")));
+		return EOF;
 	}
-
+	qtype = hdr[0];
+	memcpy(&len, &hdr[1], sizeof(int32));
 	len = pg_ntoh32(len);
 
 	if (len < 4)
-	{
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg("invalid message length")));
-		return EOF;
-	}
 
 	len -= 4;					/* discount length itself */
 
+	/* Read the message payload */
 	enlargeStringInfo(inBuf, len);
-	nread = 0;
-	while (nread < len) {
-		int n = read(STDIN_FILENO, inBuf->data + nread, len - nread);
-		if (n == -1)
+	if (fread(inBuf->data, 1, len, stdin) != len)
+	{
+		if (ferror(stdin) != 0)
 			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("read error: %m")));
-		if (n == 0)
+					(errcode(ERRCODE_CONNECTION_FAILURE),
+					 errmsg("could not read message")));
+		else
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("unexpected EOF")));
-		nread += n;
 	}
 	inBuf->len = len;
 	inBuf->data[len] = '\0';
