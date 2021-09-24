@@ -56,7 +56,8 @@
 typedef struct FileCacheEntry
 {
 	BufferTag key;
-	uint32    off;
+	uint32    offset;
+	uint32    access_count;
 	uint32    bitmap[CHUNK_SIZE/32];
 	/* LRU list */
 	struct FileCacheEntry* next;
@@ -94,7 +95,6 @@ lfc_unlink(FileCacheEntry* entry)
 {
 	entry->next->prev = entry->prev;
 	entry->prev->next = entry->next;
-	lfc_prune(entry);
 }
 
 /*
@@ -222,7 +222,8 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		return false;
 	}
 	/* Unlink entry from LRU list to pin it for the duration of IO operation */
-	lfc_unlink(entry);
+	if (entry->access_count++ == 0)
+		lfc_unlink(entry);
 	LWLockRelease(lfc_lock);
 
 	/* Open cache file if not done yet */
@@ -236,7 +237,7 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		}
 	}
 
-	rc = pread(lfc_desc, buffer, BLCKSZ, ((off_t)entry->off*CHUNK_SIZE + chunk_offs)*BLCKSZ);
+	rc = pread(lfc_desc, buffer, BLCKSZ, ((off_t)entry->offset*CHUNK_SIZE + chunk_offs)*BLCKSZ);
 	if (rc != BLCKSZ)
 	{
 		elog(INFO, "Failed to read file cache: %m");
@@ -246,7 +247,9 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	/* Place entry to the head of LRU list */
 	LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
-	lfc_link(&lfc_ctl->lru, entry);
+	Assert(entry->access_count > 0);
+	if (--entry->access_count == 0)
+		lfc_link(&lfc_ctl->lru, entry);
 	LWLockRelease(lfc_lock);
 
 	return true;
@@ -258,7 +261,7 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
  */
 void
 lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
-				 char *buffer)
+		  char *buffer)
 {
 	BufferTag tag;
 	FileCacheEntry* entry;
@@ -279,7 +282,8 @@ lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	if (found)
 	{
 		/* Unlink entry from LRU list to pin it for the duration of IO operation */
-		lfc_unlink(entry);
+		if (entry->access_count++ == 0)
+			lfc_unlink(entry);
 	}
 	else
 	{
@@ -295,12 +299,15 @@ lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		{
 			/* Cache overflow: evict least recently used chunk */
 			FileCacheEntry* victim = lfc_ctl->lru.prev;
+			Assert(victim->access_count == 0);
 			lfc_unlink(victim);
-			entry->off = victim->off; /* grab victim's chunk */
+			entry->offset = victim->offset; /* grab victim's chunk */
 			hash_search(lfc_hash, &victim->key, HASH_REMOVE, NULL);
+			elog(LOG, "Swap file cache page");
 		}
 		else
-			entry->off = lfc_ctl->size++; /* allocate new chunk at end of file */
+			entry->offset = lfc_ctl->size++; /* allocate new chunk at end of file */
+		entry->access_count = 1;
 		memset(entry->bitmap, 0, sizeof entry->bitmap);
 	}
 	entry->bitmap[chunk_offs >> 5] |= (1 << (chunk_offs & 31));
@@ -318,7 +325,7 @@ lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		}
 	}
 
-	rc = pwrite(lfc_desc, buffer, BLCKSZ, ((off_t)entry->off*CHUNK_SIZE + chunk_offs)*BLCKSZ);
+	rc = pwrite(lfc_desc, buffer, BLCKSZ, ((off_t)entry->offset*CHUNK_SIZE + chunk_offs)*BLCKSZ);
 	if (rc != BLCKSZ)
 	{
 		elog(INFO, "Failed to write file cache: %m");
@@ -328,6 +335,8 @@ lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	/* Place entry to the head of LRU list */
 	LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
-	lfc_link(&lfc_ctl->lru, entry);
+	Assert(entry->access_count > 0);
+	if (--entry->access_count == 0)
+		lfc_link(&lfc_ctl->lru, entry);
 	LWLockRelease(lfc_lock);
 }

@@ -760,7 +760,11 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	/* Try to read from local file cache */
 	if (lfc_read(reln, forkNum, blkno, buffer))
+	{
+		/* Clear PD_WAL_LOGGED bit stored in WAL record */
+		((PageHeader) buffer)->pd_flags &= ~PD_WAL_LOGGED;
 		return;
+	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -780,6 +784,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	{
 		case T_ZenithGetPageResponse:
 			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
+			lfc_write(reln, forkNum, blkno, buffer);
 			break;
 
 		case T_ZenithErrorResponse:
