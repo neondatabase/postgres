@@ -144,6 +144,9 @@ lfc_shmem_startup(void)
 								 HASH_ELEM | HASH_BLOBS);
 		lfc_ctl->size = 0;
 		lfc_prune(&lfc_ctl->lru);
+
+		/* Remove file cache on restart */
+		(void)unlink(lfc_file_path);
 	}
 	LWLockRelease(AddinShmemInitLock);
 }
