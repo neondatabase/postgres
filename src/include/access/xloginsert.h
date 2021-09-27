@@ -63,4 +63,10 @@ extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void InitXLogInsert(void);
 
+struct XLogInsertContext;
+typedef struct XLogInsertContext XLogInsertContext;
+
+extern XLogInsertContext* XLogSuspendInsert(void);
+extern void XLogResumeInsert(XLogInsertContext* ctx);
+
 #endif							/* XLOGINSERT_H */

@@ -74,6 +74,7 @@ static XLogRecData *mainrdata_head;
 static XLogRecData *mainrdata_last = (XLogRecData *) &mainrdata_head;
 static uint32 mainrdata_len;	/* total # of bytes in chain */
 
+
 /* flags for the in-progress insertion */
 static uint8 curinsert_flags = 0;
 
@@ -104,6 +105,18 @@ static XLogRecData *rdatas;
 static int	num_rdatas;			/* entries currently used */
 static int	max_rdatas;			/* allocated size */
 
+typedef struct XLogInsertContext
+{
+	int	max_registered_block_id;
+	XLogRecData *mainrdata_head;
+	XLogRecData *mainrdata_last;
+	uint32 mainrdata_len;
+	int	num_rdatas;
+	uint8 curinsert_flags;
+} XLogInsertContext;
+
+
+
 static bool begininsert_called = false;
 
 /* Memory context to hold the registered buffer and data references. */
@@ -125,6 +138,8 @@ XLogBeginInsert(void)
 	Assert(max_registered_block_id == 0);
 	Assert(mainrdata_last == (XLogRecData *) &mainrdata_head);
 	Assert(mainrdata_len == 0);
+
+	Assert(!begininsert_called);
 
 	/* cross-check on whether we should be here or not */
 	if (!XLogInsertAllowed())
@@ -1237,4 +1252,68 @@ InitXLogInsert(void)
 	if (hdr_scratch == NULL)
 		hdr_scratch = MemoryContextAllocZero(xloginsert_cxt,
 											 HEADER_SCRATCH_SIZE);
+}
+
+/*
+ * ZENITH: Save XLogInsert context.
+ * It is needed if we want to construct WAL record inside zenith_wallog_page which
+ * may be called in the context of construction anoter WAL record.
+ *
+ * Returns allocated context or NULL if there is no WAL record construction in progress.
+ */
+XLogInsertContext*
+XLogSuspendInsert(void)
+{
+	if (begininsert_called)
+	{
+		XLogInsertContext* ctx = (XLogInsertContext*)palloc(sizeof(XLogInsertContext)
+															+ max_registered_block_id*sizeof(registered_buffer)
+															+ num_rdatas*sizeof(XLogRecData));
+		ctx->max_registered_block_id = max_registered_block_id;
+		ctx->mainrdata_head = mainrdata_head;
+		ctx->mainrdata_last = mainrdata_last;
+		ctx->mainrdata_len = mainrdata_len;
+		ctx->num_rdatas = num_rdatas;
+		ctx->curinsert_flags = curinsert_flags;
+
+		memcpy(ctx+1, registered_buffers, max_registered_block_id*sizeof(registered_buffer));
+		memcpy((registered_buffer*)(ctx+1) + max_registered_block_id, rdatas, num_rdatas*sizeof(XLogRecData));
+
+		num_rdatas = 0;
+		max_registered_block_id = 0;
+		mainrdata_len = 0;
+		mainrdata_last = (XLogRecData *) &mainrdata_head;
+		curinsert_flags = 0;
+		begininsert_called = false;
+
+		return ctx;
+	}
+	return NULL;
+}
+
+/*
+ * ZENITH: restore XLogInsert context, previously savedby XLogSuspendInsert.
+ * If ctx==NULL, then this function does nothing
+ */
+void
+XLogResumeInsert(XLogInsertContext* ctx)
+{
+	if (ctx != NULL)
+	{
+
+		Assert(!begininsert_called);
+
+		max_registered_block_id = ctx->max_registered_block_id;
+		mainrdata_head = ctx->mainrdata_head;
+		mainrdata_last = ctx->mainrdata_last;
+		mainrdata_len = ctx->mainrdata_len;
+		num_rdatas = ctx->num_rdatas;
+		curinsert_flags = ctx->curinsert_flags;
+		begininsert_called = true;
+
+		memcpy(registered_buffers, ctx+1, max_registered_block_id*sizeof(registered_buffer));
+		memcpy(rdatas, (registered_buffer*)(ctx+1) + max_registered_block_id, num_rdatas*sizeof(XLogRecData));
+
+		pfree(ctx);
+	}
 }

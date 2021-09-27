@@ -340,6 +340,7 @@ static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
 {
 	XLogRecPtr	lsn = PageGetLSN(buffer);
+	XLogInsertContext* outer_insert = NULL;
 
 	if (ShutdownRequestPending)
 		return;
@@ -363,6 +364,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		/* FSM is never WAL-logged and we don't care. */
 		XLogRecPtr	recptr;
 
+		outer_insert = XLogSuspendInsert();
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
@@ -384,6 +386,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 */
 		XLogRecPtr	recptr;
 
+		outer_insert = XLogSuspendInsert();
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
@@ -408,6 +411,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		 * we have any special page types?
 		 */
 
+		outer_insert = XLogSuspendInsert();
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
 
 		/*
@@ -454,6 +458,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 			 reln->smgr_rnode.node.relNode,
 			 forknum, (uint32) lsn);
 	}
+	XLogResumeInsert(outer_insert);
 	SetLastWrittenPageLSN(lsn);
 }
 
@@ -761,11 +766,9 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	/* Try to read from local file cache */
 	if (lfc_read(reln, forkNum, blkno, buffer))
 	{
-		/* Clear PD_WAL_LOGGED bit stored in WAL record */
 		((PageHeader) buffer)->pd_flags &= ~PD_WAL_LOGGED;
 		return;
 	}
-
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithGetPageRequest request = {
@@ -784,7 +787,6 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	{
 		case T_ZenithGetPageResponse:
 			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
-			lfc_write(reln, forkNum, blkno, buffer);
 			break;
 
 		case T_ZenithErrorResponse:
@@ -809,6 +811,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	/* Clear PD_WAL_LOGGED bit stored in WAL record */
 	((PageHeader) buffer)->pd_flags &= ~PD_WAL_LOGGED;
+	lfc_write(reln, forkNum, blkno, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
