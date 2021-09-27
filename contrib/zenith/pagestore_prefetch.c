@@ -60,7 +60,7 @@ typedef struct PrefetchEntry {
 } PrefetchEntry;
 
 typedef struct PrefetchControl {
-	size_t curr; /* position in ring buffer */
+	size_t write_pos; /* write position in ring buffer */
 	Latch* waiting_prefetcher; /* latch to wakeup prefetcher */
 	PrefetchEntry* entries[FLEXIBLE_ARRAY_MEMBER]; /* ring buffer with size == prefetch_buffer_size */
 } PrefetchControl;
@@ -102,7 +102,7 @@ zenith_prefetch_shmem_startup(void)
 									  prefetch_buffer_size, prefetch_buffer_size,
 									  &info,
 									  HASH_ELEM | HASH_BLOBS);
-		prefetch_control->curr = 0;
+		prefetch_control->write_pos = 0;
 		prefetch_control->waiting_prefetcher = NULL;
 		memset(prefetch_control->entries, 0, prefetch_buffer_size*sizeof(PrefetchEntry*));
 	}
@@ -277,8 +277,8 @@ zenith_prefetch_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blockn
 
 	if (!found)
 	{
-		size_t curr = prefetch_control->curr;
-		PrefetchEntry* victim = prefetch_control->entries[curr];
+		size_t write_pos = prefetch_control->write_pos;
+		PrefetchEntry* victim = prefetch_control->entries[write_pos];
 		if (victim != NULL)
 		{
 			/* remove old entry */
@@ -289,9 +289,9 @@ zenith_prefetch_buffer(SMgrRelation reln, ForkNumber forknum, BlockNumber blockn
 		entry->state = QUEUED;
 		entry->waiting_backend = NULL;
 		entry->lsn = lsn;
-		entry->index = curr;
-		prefetch_control->entries[curr] = entry;
-		prefetch_control->curr = (curr + 1) % prefetch_buffer_size;
+		entry->index = write_pos;
+		prefetch_control->entries[write_pos] = entry;
+		prefetch_control->write_pos = (write_pos + 1) % prefetch_buffer_size;
 		n_prefetch_requests += 1;
 		prefetch_log("%lu: prefetch request for block %d of relation %d",
 					 GetCurrentTimestamp(), blocknum, tag.rnode.relNode);
@@ -319,7 +319,7 @@ zenith_prefetch_cancel(int sig)
 void
 zenith_prefetch_main(Datum arg)
 {
-	size_t curr = 0;
+	size_t read_pos = 0;
 	PrefetchEntry* prefetch_entries = (PrefetchEntry*)palloc(prefetch_buffer_size*sizeof(PrefetchEntry));
 	Latch *backend_latch = prefetch_control->waiting_prefetcher;
 
@@ -341,8 +341,8 @@ zenith_prefetch_main(Datum arg)
 		ResetLatch(MyLatch);
 
 		LWLockAcquire(prefetch_lock, LW_EXCLUSIVE);
-		till = prefetch_control->curr;
-		for (from = curr; !prefetch_cancel && from != till;  from = (from + 1) % prefetch_buffer_size)
+		till = prefetch_control->write_pos;
+		for (from = read_pos; !prefetch_cancel && from != till;  from = (from + 1) % prefetch_buffer_size)
 		{
 			PrefetchEntry* entry = prefetch_control->entries[from];
 
@@ -377,7 +377,7 @@ zenith_prefetch_main(Datum arg)
 				max_merged_prefetch_requests = n_prefetched;
 		}
 
-		for (from = curr; !prefetch_cancel && from != till;  from = (from + 1) % prefetch_buffer_size)
+		for (from = read_pos; !prefetch_cancel && from != till;  from = (from + 1) % prefetch_buffer_size)
 		{
 			ZenithResponse *resp;
 			PrefetchEntry* entry;
@@ -431,7 +431,7 @@ zenith_prefetch_main(Datum arg)
 			}
 			pfree(resp);
 		}
-		curr = till;
+		read_pos = till;
 		LWLockRelease(prefetch_lock);
 	}
 }
