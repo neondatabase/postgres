@@ -94,6 +94,7 @@ static void PushPage(StringInfo input_message);
 static void ApplyRecord(StringInfo input_message);
 static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
+static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
 
@@ -109,7 +110,6 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(exit_group),
 		PG_SCMP_ALLOW(pselect6),
 		PG_SCMP_ALLOW(read),
-		PG_SCMP_ALLOW(fstat), /* needed by fread() */
 		PG_SCMP_ALLOW(select),
 		PG_SCMP_ALLOW(write),
 
@@ -352,6 +352,8 @@ WalRedoMain(int argc, char *argv[],
 				 * EOF means we're done. Perform normal shutdown.
 				 */
 			case EOF:
+				ereport(LOG,
+						(errmsg("received EOF on stdin, shutting down")));
 
 #ifdef HAVE_LIBSECCOMP
 				/*
@@ -437,19 +439,27 @@ pprint_tag(BufferTag *tag)
 static int
 ReadRedoCommand(StringInfo inBuf)
 {
+	ssize_t		ret;
 	char		hdr[1 + sizeof(int32)];
 	int			qtype;
 	int32		len;
 
 	/* Read message type and message length */
-	if (fread(hdr, 1, sizeof(hdr), stdin) != sizeof(hdr))
+	ret = buffered_read(hdr, sizeof(hdr));
+	if (ret != sizeof(hdr))
 	{
-		if (ferror(stdin) != 0)
+		if (ret == 0)
+			return EOF;
+		else if (ret < 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("could not read message header")));
-		return EOF;
+					 errmsg("could not read message header: %m")));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("unexpected EOF")));
 	}
+
 	qtype = hdr[0];
 	memcpy(&len, &hdr[1], sizeof(int32));
 	len = pg_ntoh32(len);
@@ -463,12 +473,13 @@ ReadRedoCommand(StringInfo inBuf)
 
 	/* Read the message payload */
 	enlargeStringInfo(inBuf, len);
-	if (fread(inBuf->data, 1, len, stdin) != len)
+	ret = buffered_read(inBuf->data, len);
+	if (ret != len)
 	{
-		if (ferror(stdin) != 0)
+		if (ret < 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("could not read message")));
+					 errmsg("could not read message: %m")));
 		else
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -678,4 +689,61 @@ GetPage(StringInfo input_message)
 	smgrinit(); //reset inmem smgr state
 
 	elog(TRACE, "Page sent back for block %u", blknum);
+}
+
+
+/* Buffer used by buffered_read() */
+static char stdin_buf[16 * 1024];
+static size_t stdin_len = 0;	/* # of bytes in buffer */
+static size_t stdin_ptr = 0;	/* # of bytes already consumed */
+
+/*
+ * Like read() on stdin, but buffered.
+ *
+ * We cannot use libc's buffered fread(), because it uses syscalls that we
+ * have disabled with seccomp(). Depending on the platform, it can call
+ * 'fstat' or 'newfstatat'. 'fstat' is probably harmless, but 'newfstatat'
+ * seems problematic because it allows interrogating files by path name.
+ *
+ * The return value is the number of bytes read. On error, -1 is returned, and
+ * errno is set appropriately. Unlike read(), this fills the buffer completely
+ * unless an error happens or EOF is reached.
+ */
+static ssize_t
+buffered_read(void *buf, size_t count)
+{
+	char	   *dst = buf;
+
+	while (count > 0)
+	{
+		size_t		nthis;
+
+		if (stdin_ptr == stdin_len)
+		{
+			ssize_t		ret;
+
+			ret = read(STDIN_FILENO, stdin_buf, sizeof(stdin_buf));
+			if (ret < 0)
+			{
+				/* don't do anything here that could set 'errno' */
+				return ret;
+			}
+			if (ret == 0)
+			{
+				/* EOF */
+				break;
+			}
+			stdin_len = (size_t) ret;
+			stdin_ptr = 0;
+		}
+		nthis = Min(stdin_len - stdin_ptr, count);
+
+		memcpy(dst, &stdin_buf[stdin_ptr], nthis);
+
+		stdin_ptr += nthis;
+		count -= nthis;
+		dst += nthis;
+	}
+
+	return (dst - (char *) buf);
 }
