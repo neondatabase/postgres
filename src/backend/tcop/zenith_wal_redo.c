@@ -425,6 +425,45 @@ pprint_tag(BufferTag *tag)
  * ----------------------------------------------------------------
  */
 
+
+#define PIPE_BUFFER_SIZE (64*1024)
+
+/*
+ * Buffer read of input pipe.
+ * We are not using fread because it is using some other system exept read()
+ */
+static bool
+read_stdin(char* dst, size_t size)
+{
+	static char buf[PIPE_BUFFER_SIZE];
+	static size_t available;
+	static size_t curr;
+
+	while (size != 0)
+	{
+		if (curr < available)
+		{
+			size_t n = Min(available - curr, size);
+			memcpy(dst, &buf[curr], n);
+			curr += n;
+			size -= n;
+		}
+		else
+		{
+			ssize_t rc = read(0, buf, PIPE_BUFFER_SIZE);
+			if (rc < 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_CONNECTION_FAILURE),
+						 errmsg("could not read message: %m")));
+			else if (rc == 0) /* EOF */
+				return false;
+			available = rc;
+			curr = 0;
+		}
+	}
+	return true;
+}
+
 /*
  * Read next command from the client.
  *
@@ -442,14 +481,9 @@ ReadRedoCommand(StringInfo inBuf)
 	int32		len;
 
 	/* Read message type and message length */
-	if (fread(hdr, 1, sizeof(hdr), stdin) != sizeof(hdr))
-	{
-		if (ferror(stdin) != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("could not read message header")));
+	if (!read_stdin(hdr, sizeof(hdr)))
 		return EOF;
-	}
+
 	qtype = hdr[0];
 	memcpy(&len, &hdr[1], sizeof(int32));
 	len = pg_ntoh32(len);
@@ -463,16 +497,11 @@ ReadRedoCommand(StringInfo inBuf)
 
 	/* Read the message payload */
 	enlargeStringInfo(inBuf, len);
-	if (fread(inBuf->data, 1, len, stdin) != len)
+	if (!read_stdin(inBuf->data, len))
 	{
-		if (ferror(stdin) != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_CONNECTION_FAILURE),
-					 errmsg("could not read message")));
-		else
-			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("unexpected EOF")));
+		ereport(ERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("unexpected EOF")));
 	}
 	inBuf->len = len;
 	inBuf->data[len] = '\0';
