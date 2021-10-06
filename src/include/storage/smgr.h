@@ -43,6 +43,9 @@ typedef struct SMgrRelationData
 	/* rnode is the hashtable lookup key, so it must be first! */
 	RelFileNodeBackend smgr_rnode;	/* relation physical identifier */
 
+	/* copy of pg_class.relpersistence, or 0 if not known */
+	char		smgr_relpersistence;
+
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
 
@@ -115,6 +118,10 @@ typedef struct f_smgr
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+
+	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
+	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
+	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -132,7 +139,7 @@ extern const f_smgr *smgr_standard(BackendId backend, RelFileNode rnode);
 extern const f_smgr *smgr(BackendId backend, RelFileNode rnode);
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend);
+extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend, char relpersistence);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);
@@ -158,5 +165,9 @@ extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
 						 int nforks, BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
+
+extern void smgr_start_unlogged_build(SMgrRelation reln);
+extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
+extern void smgr_end_unlogged_build(SMgrRelation reln);
 
 #endif							/* SMGR_H */
