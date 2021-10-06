@@ -215,7 +215,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(bufHdr->tag.rnode, MyBackendId);
+		oreln = smgropen(bufHdr->tag.rnode, MyBackendId, RELPERSISTENCE_TEMP);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
