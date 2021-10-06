@@ -3,6 +3,37 @@
  * pagestore_smgr.c
  *
  *
+ *
+ * Temporary and unlogged rels
+ * ---------------------------
+ *
+ * Temporary and unlogged tables are stored locally, by md.c. The functions
+ * here just pass the calls through to corresponding md.c functions.
+ *
+ * Index build operations that use the buffer cache are also handled locally,
+ * just like unlogged tables. Such operations must be marked by calling
+ * smgr_start_unlogged_build() and friends.
+ *
+ * In order to know what relations are permanent and which ones are not, we
+ * have added a 'smgr_relpersistence' field to SmgrRelationData, and it is set
+ * by smgropen() callers, when they have the relcache entry at hand.  However,
+ * sometimes we need to open an SmgrRelation for a relation without the
+ * relcache. That is needed when we evict a buffer; we might not have the
+ * SmgrRelation for that relation open yet. To deal with that, the
+ * 'relpersistence' can be left to zero, meaning we don't know if it's
+ * permanent or not. Most operations are not allowed with relpersistence==0,
+ * but smgrwrite() does work, which is what we need for buffer eviction.  and
+ * smgrunlink() so that a backend doesn't need to have the relcache entry at
+ * transaction commit, where relations that were dropped in the transaction
+ * are unlinked.
+ *
+ * If smgrwrite() is called and smgr_relpersistence == 0, we check if the
+ * relation file exists locally or not. If it does exist, we assume it's an
+ * unlogged relation and write the page there. Otherwise it must be a
+ * permanent relation, WAL-logged and stored on the page server, and we ignore
+ * the write like we do for permanent relations.
+ *
+ *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -14,15 +45,18 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlog_internal.h"
+#include "catalog/pg_class.h"
 #include "pagestore_client.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
 #include "postmaster/interrupt.h"
 #include "storage/bufmgr.h"
+#include "storage/md.h"
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -40,7 +74,6 @@
 #ifdef DEBUG_COMPARE_LOCAL
 #include "access/nbtree.h"
 #include "storage/bufpage.h"
-#include "storage/md.h"
 #include "access/xlog_internal.h"
 
 static char *hexdump_page(char *page);
@@ -58,6 +91,18 @@ char	   *callmemaybe_connstring;
 char	   *zenith_timeline;
 char	   *zenith_tenant;
 bool		wal_redo = false;
+
+/* unlogged relation build states */
+typedef enum
+{
+	UNLOGGED_BUILD_NOT_IN_PROGRESS = 0,
+	UNLOGGED_BUILD_PHASE_1,
+	UNLOGGED_BUILD_PHASE_2,
+	UNLOGGED_BUILD_NOT_PERMANENT
+} UnloggedBuildPhase;
+
+static SMgrRelation unlogged_build_rel = NULL;
+static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
 
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
@@ -328,13 +373,22 @@ log_newpage_copy(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 {
 	PGAlignedBlock copied_buffer;
 
-	/* set the flag in the original page, like log_newpage() does. */
-	((PageHeader) page)->pd_flags |= PD_WAL_LOGGED;
-
 	memcpy(copied_buffer.data, page, BLCKSZ);
 	return log_newpage(rnode, forkNum, blkno, copied_buffer.data, page_std);
 }
 
+/*
+ * Is 'buffer' identical to a freshly initialized empty heap page?
+ */
+static bool
+PageIsEmptyHeapPage(char *buffer)
+{
+	PGAlignedBlock empty_page;
+
+	PageInit((Page) empty_page.data, BLCKSZ, 0);
+
+	return memcmp(buffer, empty_page.data, BLCKSZ) == 0;
+}
 
 static void
 zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, char *buffer)
@@ -345,18 +399,11 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		return;
 
 	/*
-	 * If the page was not WAL-logged before eviction then we can lose its
-	 * modification. PD_WAL_LOGGED bit is used to mark pages which are
-	 * wal-logged.
-	 *
-	 * See also comments to PD_WAL_LOGGED.
-	 *
-	 * FIXME: GIN/GiST/SP-GiST index build will scan and WAL-log again the
-	 * whole index. That's duplicative with the WAL-logging that we do here.
-	 * See log_newpage_range() calls.
-	 *
-	 * FIXME: Redoing this record will set the LSN on the page. That could
-	 * mess up the LSN-NSN interlock in GiST index build.
+	 * Whenever a VM or FSM page is evicted, WAL-log it. FSM and (some) VM
+	 * changes are not WAL-logged when the changes are made, so this is our
+	 * last chance to log them, otherwise they're lost. That's OK for
+	 * correctness, the non-logged updates are not critical. But we want to
+	 * have a reasonably up-to-date VM and FSM in the page server.
 	 */
 	if (forknum == FSM_FORKNUM && !RecoveryInProgress())
 	{
@@ -366,12 +413,13 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, false);
 		XLogFlush(recptr);
 		lsn = recptr;
-		elog(SmgrTrace, "FSM page %u of relation %u/%u/%u.%u was force logged. Evicted at lsn=%X",
-			 blocknum,
-			 reln->smgr_rnode.node.spcNode,
-			 reln->smgr_rnode.node.dbNode,
-			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32) lsn);
+		ereport(SmgrTrace,
+				(errmsg("FSM page %u of relation %u/%u/%u.%u was force logged. Evicted at lsn=%X/%X",
+						blocknum,
+						reln->smgr_rnode.node.spcNode,
+						reln->smgr_rnode.node.dbNode,
+						reln->smgr_rnode.node.relNode,
+						forknum, LSN_FORMAT_ARGS(lsn))));
 	}
 	else if (forknum == VISIBILITYMAP_FORKNUM && !RecoveryInProgress())
 	{
@@ -388,75 +436,81 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 		XLogFlush(recptr);
 		lsn = recptr;
 
-		elog(SmgrTrace, "Visibilitymap page %u of relation %u/%u/%u.%u was force logged at lsn=%X",
-			 blocknum,
-			 reln->smgr_rnode.node.spcNode,
-			 reln->smgr_rnode.node.dbNode,
-			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32) lsn);
+		ereport(SmgrTrace,
+				(errmsg("Visibilitymap page %u of relation %u/%u/%u.%u was force logged at lsn=%X/%X",
+						blocknum,
+						reln->smgr_rnode.node.spcNode,
+						reln->smgr_rnode.node.dbNode,
+						reln->smgr_rnode.node.relNode,
+						forknum, LSN_FORMAT_ARGS(lsn))));
 	}
-	else if (!(((PageHeader) buffer)->pd_flags & PD_WAL_LOGGED)
-			 && !RecoveryInProgress())
+	else if (lsn == InvalidXLogRecPtr)
 	{
-		XLogRecPtr	recptr;
-
 		/*
-		 * We assume standard page layout here.
+		 * When PostgreSQL extends a relation, it calls smgrextend() with an all-zeros pages,
+		 * and we can just ignore that in Zenith. We do need to remember the new size,
+		 * though, so that smgrnblocks() returns the right answer after the rel has
+		 * been extended. We rely on the relsize cache for that.
 		 *
-		 * But at smgr level we don't really know what kind of a page this is.
-		 * We have filtered visibility map pages and fsm pages above. TODO Do
-		 * we have any special page types?
-		 */
-
-		recptr = log_newpage_copy(&reln->smgr_rnode.node, forknum, blocknum, buffer, true);
-
-		/*
-		 * If we wal-log hint bits, someone could concurrently update page and
-		 * reset PD_WAL_LOGGED again, so this assert is not relevant anymore.
+		 * A completely empty heap page doesn't need to be WAL-logged, either. The
+		 * heapam can leave such a page behind, if e.g. an insert errors out after
+		 * initializing the page, but before it has inserted the tuple and WAL-logged
+		 * the change. When we read the page from the page server, it will come back
+		 * as all-zeros. That's OK, the heapam will initialize an all-zeros page on
+		 * first use.
 		 *
-		 * See comment to FlushBuffer(). The caller must hold a pin on the
-		 * buffer and have share-locked the buffer contents.  (Note: a
-		 * share-lock does not prevent updates of hint bits in the buffer, so
-		 * the page could change while the write is in progress, but we assume
-		 * that that will not invalidate the data written.)
+		 * In other scenarios, evicting a dirty page with no LSN is a bad sign: it implies
+		 * that the page was not WAL-logged, and its contents will be lost when it's
+		 * evicted.
 		 */
-		Assert(((PageHeader) buffer)->pd_flags & PD_WAL_LOGGED);	/* Should be set by
-																	 * log_newpage */
-
-		/*
-		 * Need to flush it too, so that it gets sent to the Page Server
-		 * before we might need to read it back. It should get flushed
-		 * eventually anyway, at least if there is some other WAL activity, so
-		 * this isn't strictly necessary for correctness. But if there is no
-		 * other WAL activity, the page read might get stuck waiting for the
-		 * record to be streamed out for an indefinite time.
-		 *
-		 * FIXME: Flushing the WAL is expensive. We should track the last
-		 * "evicted" LSN instead, and update it here. Or just kick the
-		 * bgwriter to do the flush, there is no need for us to block here
-		 * waiting for it to finish.
-		 */
-		XLogFlush(recptr);
-		lsn = recptr;
-		elog(SmgrTrace, "Force wal logging of page %u of relation %u/%u/%u.%u, lsn=%X",
-			 blocknum,
-			 reln->smgr_rnode.node.spcNode,
-			 reln->smgr_rnode.node.dbNode,
-			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32) lsn);
+		if (PageIsNew(buffer))
+		{
+			ereport(SmgrTrace,
+					(errmsg("Page %u of relation %u/%u/%u.%u is all-zeros",
+							blocknum,
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forknum)));
+		}
+		else if (PageIsEmptyHeapPage(buffer))
+		{
+			ereport(SmgrTrace,
+					(errmsg("Page %u of relation %u/%u/%u.%u is an empty heap page with no LSN",
+							blocknum,
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forknum)));
+		}
+		else
+		{
+			ereport(PANIC,
+					(errmsg("Page %u of relation %u/%u/%u.%u is evicted with zero LSN",
+							blocknum,
+							reln->smgr_rnode.node.spcNode,
+							reln->smgr_rnode.node.dbNode,
+							reln->smgr_rnode.node.relNode,
+							forknum)));
+		}
 	}
 	else
 	{
-		elog(SmgrTrace, "Page %u of relation %u/%u/%u.%u is alread wal logged at lsn=%X",
-			 blocknum,
-			 reln->smgr_rnode.node.spcNode,
-			 reln->smgr_rnode.node.dbNode,
-			 reln->smgr_rnode.node.relNode,
-			 forknum, (uint32) lsn);
+		ereport(SmgrTrace,
+				(errmsg("Page %u of relation %u/%u/%u.%u is already wal logged at lsn=%X/%X",
+						blocknum,
+						reln->smgr_rnode.node.spcNode,
+						reln->smgr_rnode.node.dbNode,
+						reln->smgr_rnode.node.relNode,
+						forknum, LSN_FORMAT_ARGS(lsn))));
 	}
+
+	/*
+	 * Remember the LSN on this page. When we read the page again, we must
+	 * read the same or newer version of it.
+	 */
 	SetLastWrittenPageLSN(lsn);
 }
-
 
 
 /*
@@ -568,6 +622,29 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 	bool		latest;
 	XLogRecPtr	request_lsn;
 
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			/*
+			 * We don't know if it's an unlogged rel stored locally, or permanent
+			 * rel stored in the page server. First check if it exists locally.
+			 * If it does, great. Otherwise check if it exists in the page server.
+			 */
+			if (mdexists(reln, forkNum))
+				return true;
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			return mdexists(reln, forkNum);
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithExistsRequest request = {
@@ -615,6 +692,23 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 void
 zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 {
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrcreate() on rel with unknown persistence");
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdcreate(reln, forkNum, isRedo);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	elog(SmgrTrace, "Create relation %u/%u/%u.%u",
 		 reln->smgr_rnode.node.spcNode,
 		 reln->smgr_rnode.node.dbNode,
@@ -648,9 +742,13 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 void
 zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 {
-#ifdef DEBUG_COMPARE_LOCAL
+	/*
+	 * Might or might not exist locally, depending on whether it's
+	 * an unlogged or permanent relation (or if DEBUG_COMPARE_LOCAL is
+	 * set). Try to unlink, it won't do any harm if the file doesn't
+	 * exist.
+	 */
 	mdunlink(rnode, forkNum, isRedo);
-#endif
 }
 
 /*
@@ -668,7 +766,25 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 {
 	XLogRecPtr	lsn;
 
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrextend() on rel with unknown persistence");
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdextend(reln, forkNum, blkno, buffer, skipFsync);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
+
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);
@@ -691,13 +807,16 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 void
 zenith_open(SMgrRelation reln)
 {
+	/*
+	 * We don't have anything special to do here. Call mdopen() to let md.c
+	 * initialize itself. That's only needed for temporary or unlogged
+	 * relations, but it's dirt cheap so do it always to make sure the md
+	 * fields are initialized, for debugging purposes if nothing else.
+	 */
+	mdopen(reln);
+
 	/* no work */
 	elog(SmgrTrace, "[ZENITH_SMGR] open noop");
-
-#ifdef DEBUG_COMPARE_LOCAL
-	if (IS_LOCAL_REL(reln))
-		mdopen(reln);
-#endif
 }
 
 /*
@@ -706,13 +825,11 @@ zenith_open(SMgrRelation reln)
 void
 zenith_close(SMgrRelation reln, ForkNumber forknum)
 {
-	/* no work */
-	elog(SmgrTrace, "[ZENITH_SMGR] close noop");
-
-#ifdef DEBUG_COMPARE_LOCAL
-	if (IS_LOCAL_REL(reln))
-		mdclose(reln, forknum);
-#endif
+	/*
+	 * Let md.c close it, if it had it open. Doesn't hurt to do this
+	 * even for permanent relations that have no local storage.
+	 */
+	mdclose(reln, forknum);
 }
 
 /*
@@ -721,6 +838,23 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 bool
 zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			/* probably shouldn't happen, but ignore it */
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			return mdprefetch(reln, forknum, blocknum);
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	/* not implemented */
 	elog(SmgrTrace, "[ZENITH_SMGR] prefetch noop");
 	return true;
@@ -736,6 +870,25 @@ void
 zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 				 BlockNumber blocknum, BlockNumber nblocks)
 {
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			/* mdwriteback() does nothing if the file doesn't exist */
+			mdwriteback(reln, forknum, blocknum, nblocks);
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdwriteback(reln, forknum, blocknum, nblocks);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	/* not implemented */
 	elog(SmgrTrace, "[ZENITH_SMGR] writeback noop");
 
@@ -755,6 +908,23 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	ZenithResponse *resp;
 	bool		latest;
 	XLogRecPtr	request_lsn;
+
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrread() on rel with unknown persistence");
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdread(reln, forkNum, blkno, buffer);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -795,9 +965,6 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	}
 
 	pfree(resp);
-
-	/* Clear PD_WAL_LOGGED bit stored in WAL record */
-	((PageHeader) buffer)->pd_flags &= ~PD_WAL_LOGGED;
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
@@ -915,6 +1082,38 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	XLogRecPtr	lsn;
 
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			/* This is a bit tricky. Check if the relation exists locally */
+			if (mdexists(reln, forknum))
+			{
+				/* It exists locally. Guess it's unlogged then. */
+				mdwrite(reln, forknum, blocknum, buffer, skipFsync);
+
+				/*
+				 * We could set relpersistence now that we have determined
+				 * that it's local. But we don't dare to do it, because that
+				 * would immediately allow reads as well, which shouldn't
+				 * happen. We could cache it with a different 'relpersistence'
+				 * value, but this isn't performance critical.
+				 */
+				return;
+			}
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdwrite(reln, forknum, blocknum, buffer, skipFsync);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	zenith_wallog_page(reln, forknum, blocknum, buffer);
 
 	lsn = PageGetLSN(buffer);
@@ -942,8 +1141,32 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	bool		latest;
 	XLogRecPtr	request_lsn;
 
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrnblocks() on rel with unknown persistence");
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			return mdnblocks(reln, forknum);
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	if (get_cached_relsize(reln->smgr_rnode.node, forknum, &n_blocks))
+	{
+		elog(SmgrTrace, "cached nblocks for %u/%u/%u.%u: %u blocks",
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum, n_blocks);
 		return n_blocks;
+	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
@@ -1002,6 +1225,24 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 {
 	XLogRecPtr	lsn;
 
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrtruncate() on rel with unknown persistence");
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdtruncate(reln, forknum, nblocks);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	set_cached_relsize(reln->smgr_rnode.node, forknum, nblocks);
 
 	/*
@@ -1044,12 +1285,202 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 void
 zenith_immedsync(SMgrRelation reln, ForkNumber forknum)
 {
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrimmedsync() on rel with unknown persistence");
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdimmedsync(reln, forknum);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
 	elog(SmgrTrace, "[ZENITH_SMGR] immedsync noop");
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
 		mdimmedsync(reln, forknum);
 #endif
+}
+
+/*
+ * zenith_start_unlogged_build() -- Starting build operation on a rel.
+ *
+ * Some indexes are built in two phases, by first populating the table with
+ * regular inserts, using the shared buffer cache but skipping WAL-logging,
+ * and WAL-logging the whole relation after it's done. Zenith relies on the
+ * WAL to reconstruct pages, so we cannot use the page server in the
+ * first phase when the changes are not logged.
+ */
+static void
+zenith_start_unlogged_build(SMgrRelation reln)
+{
+	/*
+	 * Currently, there can be only one unlogged relation build operation in
+	 * progress at a time. That's enough for the current usage.
+	 */
+	if (unlogged_build_phase != UNLOGGED_BUILD_NOT_IN_PROGRESS)
+		elog(ERROR, "unlogged relation build is already in progress");
+	Assert(unlogged_build_rel == NULL);
+
+	ereport(SmgrTrace,
+			(errmsg("starting unlogged build of relation %u/%u/%u",
+					reln->smgr_rnode.node.spcNode,
+					reln->smgr_rnode.node.dbNode,
+					reln->smgr_rnode.node.relNode)));
+
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgr_start_unlogged_build() on rel with unknown persistence");
+			break;
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			unlogged_build_rel = reln;
+			unlogged_build_phase = UNLOGGED_BUILD_NOT_PERMANENT;
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
+	if (smgrnblocks(reln, MAIN_FORKNUM) != 0)
+		elog(ERROR, "cannot perform unlogged index build, index is not empty ");
+
+	unlogged_build_rel = reln;
+	unlogged_build_phase = UNLOGGED_BUILD_PHASE_1;
+
+	/* Make the relation look like it's unlogged */
+	reln->smgr_relpersistence = RELPERSISTENCE_UNLOGGED;
+
+	/*
+	 * FIXME: should we pass isRedo true to create the tablespace dir if it
+	 * doesn't exist? Is it needed?
+	 */
+	mdcreate(reln, MAIN_FORKNUM, false);
+}
+
+/*
+ * zenith_finish_unlogged_build_phase_1()
+ *
+ * Call this after you have finished populating a relation in unlogged mode,
+ * before you start WAL-logging it.
+ */
+static void
+zenith_finish_unlogged_build_phase_1(SMgrRelation reln)
+{
+	Assert(unlogged_build_rel == reln);
+
+	ereport(SmgrTrace,
+			(errmsg("finishing phase 1 of unlogged build of relation %u/%u/%u",
+					reln->smgr_rnode.node.spcNode,
+					reln->smgr_rnode.node.dbNode,
+					reln->smgr_rnode.node.relNode)));
+
+	if (unlogged_build_phase == UNLOGGED_BUILD_NOT_PERMANENT)
+		return;
+
+	Assert(unlogged_build_phase == UNLOGGED_BUILD_PHASE_1);
+	Assert(reln->smgr_relpersistence == RELPERSISTENCE_UNLOGGED);
+
+	unlogged_build_phase = UNLOGGED_BUILD_PHASE_2;
+}
+
+/*
+ * zenith_end_unlogged_build() -- Finish an unlogged rel build.
+ *
+ * Call this after you have finished WAL-logging an relation that was
+ * first populated without WAL-logging.
+ *
+ * This removes the local copy of the rel, since it's now been fully
+ * WAL-logged and is present in the page server.
+ */
+static void
+zenith_end_unlogged_build(SMgrRelation reln)
+{
+	Assert(unlogged_build_rel == reln);
+
+	ereport(SmgrTrace,
+			(errmsg("ending unlogged build of relation %u/%u/%u",
+					reln->smgr_rnode.node.spcNode,
+					reln->smgr_rnode.node.dbNode,
+					reln->smgr_rnode.node.relNode)));
+
+	if (unlogged_build_phase != UNLOGGED_BUILD_NOT_PERMANENT)
+	{
+		RelFileNodeBackend rnode;
+
+		Assert(unlogged_build_phase == UNLOGGED_BUILD_PHASE_2);
+		Assert(reln->smgr_relpersistence == RELPERSISTENCE_UNLOGGED);
+
+		/* Make the relation look permanent again */
+		reln->smgr_relpersistence = RELPERSISTENCE_PERMANENT;
+
+		/* Remove local copy */
+		rnode = reln->smgr_rnode;
+		for (int forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+		{
+			elog(SmgrTrace, "forgetting cached relsize for %u/%u/%u.%u",
+				 rnode.node.spcNode,
+				 rnode.node.dbNode,
+				 rnode.node.relNode,
+				 forknum);
+
+			forget_cached_relsize(rnode.node, forknum);
+			mdclose(reln, forknum);
+			/* use isRedo == true, so that we drop it immediately */
+			mdunlink(rnode, forknum, true);
+		}
+	}
+
+	unlogged_build_rel = NULL;
+	unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+}
+
+static void
+AtEOXact_zenith(XactEvent event, void *arg)
+{
+	switch (event)
+	{
+		case XACT_EVENT_ABORT:
+		case XACT_EVENT_PARALLEL_ABORT:
+
+			/*
+			 * Forget about any build we might have had in progress. The local
+			 * file will be unlinked by smgrDoPendingDeletes()
+			 */
+			unlogged_build_rel = NULL;
+			unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+			break;
+
+		case XACT_EVENT_COMMIT:
+		case XACT_EVENT_PARALLEL_COMMIT:
+		case XACT_EVENT_PREPARE:
+		case XACT_EVENT_PRE_COMMIT:
+		case XACT_EVENT_PARALLEL_PRE_COMMIT:
+		case XACT_EVENT_PRE_PREPARE:
+			if (unlogged_build_phase != UNLOGGED_BUILD_NOT_IN_PROGRESS)
+			{
+				unlogged_build_rel = NULL;
+				unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+				ereport(ERROR,
+						(errcode(ERRCODE_INTERNAL_ERROR),
+						 (errmsg("unlogged index build was not properly finished"))));
+			}
+			break;
+	}
 }
 
 static const struct f_smgr zenith_smgr =
@@ -1069,6 +1500,10 @@ static const struct f_smgr zenith_smgr =
 	.smgr_nblocks = zenith_nblocks,
 	.smgr_truncate = zenith_truncate,
 	.smgr_immedsync = zenith_immedsync,
+
+	.smgr_start_unlogged_build = zenith_start_unlogged_build,
+	.smgr_finish_unlogged_build_phase_1 = zenith_finish_unlogged_build_phase_1,
+	.smgr_end_unlogged_build = zenith_end_unlogged_build,
 };
 
 
@@ -1086,6 +1521,8 @@ smgr_zenith(BackendId backend, RelFileNode rnode)
 void
 smgr_init_zenith(void)
 {
+	RegisterXactCallback(AtEOXact_zenith, NULL);
+
 	smgr_init_standard();
 	zenith_init();
 }
