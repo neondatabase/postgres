@@ -694,12 +694,6 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("cannot create temporary table within security-restricted operation")));
 
-	if (stmt->relation->relpersistence == RELPERSISTENCE_UNLOGGED)
-	{
-		/* Unlogged tables are not supported by Zenith */
-		stmt->relation->relpersistence = RELPERSISTENCE_PERMANENT;
-	}
-
 	/*
 	 * Determine the lockmode to use when scanning parents.  A self-exclusive
 	 * lock is needed here.
@@ -14090,7 +14084,7 @@ index_copy_data(Relation rel, RelFileNode newrnode)
 {
 	SMgrRelation dstrel;
 
-	dstrel = smgropen(newrnode, rel->rd_backend);
+	dstrel = smgropen(newrnode, rel->rd_backend, rel->rd_rel->relpersistence);
 	RelationOpenSmgr(rel);
 
 	/*
