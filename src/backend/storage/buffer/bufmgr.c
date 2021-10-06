@@ -802,7 +802,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 {
 	bool		hit;
 
-	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
+	SMgrRelation smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 
 	Assert(InRecovery);
 
@@ -1631,11 +1631,6 @@ MarkBufferDirty(Buffer buffer)
 		if (VacuumCostActive)
 			VacuumCostBalance += VacuumCostPageDirty;
 	}
-	/*
-	 * Clear PD_WAL_LOGGED flag so that if dirty page is evicted from page pool
-	 * before been WAL logged, FPI WAL record will be enforced.
-	 */
-	((PageHeader)BufferGetPage(buffer))->pd_flags &= ~PD_WAL_LOGGED;
 }
 
 /*
@@ -2050,15 +2045,6 @@ BufferSync(int flags)
 			item->forkNum = bufHdr->tag.forkNum;
 			item->blockNum = bufHdr->tag.blockNum;
 		}
-
-		/* Zenith XXX
-		 * Consider marking this page as not WAL-logged,
-		 * so that pagestore_smgr issued a log record before eviction
-		 * and persisted hint changes.
-		 * TODO: check performance impacts of this approach
-		 * since extra wal-logging may worsen the performance.
-		 */
-		//((PageHeader)page)->pd_flags &= ~PD_WAL_LOGGED;
 
 		UnlockBufHdr(bufHdr, buf_state);
 
@@ -2906,7 +2892,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(buf->tag.rnode, InvalidBackendId);
+		reln = smgropen(buf->tag.rnode, InvalidBackendId, 0);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(buf->tag.forkNum,
 										buf->tag.blockNum,
@@ -4913,7 +4899,7 @@ IssuePendingWritebacks(WritebackContext *context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(tag.rnode, InvalidBackendId);
+		reln = smgropen(tag.rnode, InvalidBackendId, 0);
 		smgrwriteback(reln, tag.forkNum, tag.blockNum, nblocks);
 	}
 

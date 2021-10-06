@@ -239,7 +239,6 @@ XLogRegisterBuffer(uint8 block_id, Buffer buffer, uint8 flags)
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
-	((PageHeader)regbuf->page)->pd_flags |= PD_WAL_LOGGED;
 
 	/*
 	 * Check that this page hasn't already been registered with some other
@@ -295,7 +294,6 @@ XLogRegisterBlock(uint8 block_id, RelFileNode *rnode, ForkNumber forknum,
 	regbuf->flags = flags;
 	regbuf->rdata_tail = (XLogRecData *) &regbuf->rdata_head;
 	regbuf->rdata_len = 0;
-	((PageHeader)page)->pd_flags |= PD_WAL_LOGGED;
 
 	/*
 	 * Check that this page hasn't already been registered with some other
@@ -1183,18 +1181,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 			MarkBufferDirty(bufpack[i]);
 		}
 
-		/*
-		 * Zenith forces WAL logging of evicted pages,
-		 * so it can happen that in some cases when pages are first
-		 * modified and then WAL logged (for example building GiST/GiN
-		 * indexes) there are no more pages which need to be WAL logged at
-		 * the end of build procedure. As far as XLogInsert throws error
-		 * if not records were inserted, we need to reset the insert state.
-		 */
-		if (nbufs > 0)
-			recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
-		else
-			XLogResetInsertion();
+		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
 
 		for (i = 0; i < nbufs; i++)
 		{
