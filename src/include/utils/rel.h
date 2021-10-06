@@ -544,7 +544,8 @@ static inline SMgrRelation
 RelationGetSmgr(Relation rel)
 {
 	if (unlikely(rel->rd_smgr == NULL))
-		smgrsetowner(&(rel->rd_smgr), smgropen(rel->rd_node, rel->rd_backend));
+		smgrsetowner(&(rel->rd_smgr),
+					 smgropen(rel->rd_node, rel->rd_backend, rel->rd_rel->relpersistence));
 	return rel->rd_smgr;
 }
 #endif							/* !FRONTEND */
@@ -559,7 +560,8 @@ RelationGetSmgr(Relation rel)
 #define RelationOpenSmgr(relation) \
 	do { \
 		if ((relation)->rd_smgr == NULL) \
-			smgrsetowner(&((relation)->rd_smgr), smgropen((relation)->rd_node, (relation)->rd_backend)); \
+			smgrsetowner(&((relation)->rd_smgr), \
+						 smgropen((relation)->rd_node, (relation)->rd_backend, (relation)->rd_rel->relpersistence)); \
 	} while (0)
 
 /*

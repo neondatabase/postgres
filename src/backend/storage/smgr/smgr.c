@@ -135,9 +135,14 @@ smgr(BackendId backend, RelFileNode rnode)
  *	smgropen() -- Return an SMgrRelation object, creating it if need be.
  *
  *		This does not attempt to actually open the underlying file.
+ *
+ * The caller should pass the value of pg_class.relpersistence, if they know
+ * it, or 0 if unknown. Some operations, like smgrwrite() and smgrunlink()
+ * are allowed when relpersistence is not known, but others like smgrread()
+ * require it.
  */
 SMgrRelation
-smgropen(RelFileNode rnode, BackendId backend)
+smgropen(RelFileNode rnode, BackendId backend, char relpersistence)
 {
 	RelFileNodeBackend brnode;
 	SMgrRelation reln;
@@ -168,6 +173,7 @@ smgropen(RelFileNode rnode, BackendId backend)
 		/* hash_search already filled in the lookup key */
 		reln->smgr_owner = NULL;
 		reln->smgr_targblock = InvalidBlockNumber;
+		reln->smgr_relpersistence = relpersistence;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
 
@@ -178,6 +184,17 @@ smgropen(RelFileNode rnode, BackendId backend)
 
 		/* it has no owner yet */
 		dlist_push_tail(&unowned_relns, &reln->node);
+	}
+	else
+	{
+		/*
+		 * If the caller passed a valid 'relpersistence', and it was unknown
+		 * before, update it.
+		 */
+		if (reln->smgr_relpersistence == 0)
+			reln->smgr_relpersistence = relpersistence;
+		else
+			Assert(relpersistence == 0 || reln->smgr_relpersistence == relpersistence);
 	}
 
 	return reln;
@@ -650,6 +667,30 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	(*reln->smgr).smgr_immedsync(reln, forknum);
+}
+
+/*
+ * Zenith-added functions to mark the phases of an unlogged index build.
+ */
+void
+smgr_start_unlogged_build(SMgrRelation reln)
+{
+	if ((*reln->smgr).smgr_start_unlogged_build)
+		(*reln->smgr).smgr_start_unlogged_build(reln);
+}
+
+void
+smgr_finish_unlogged_build_phase_1(SMgrRelation reln)
+{
+	if ((*reln->smgr).smgr_finish_unlogged_build_phase_1)
+		(*reln->smgr).smgr_finish_unlogged_build_phase_1(reln);
+}
+
+void
+smgr_end_unlogged_build(SMgrRelation reln)
+{
+	if ((*reln->smgr).smgr_end_unlogged_build)
+		(*reln->smgr).smgr_end_unlogged_build(reln);
 }
 
 /*
