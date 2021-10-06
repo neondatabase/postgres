@@ -128,6 +128,21 @@ update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 }
 
 void
+forget_cached_relsize(RelFileNode rnode, ForkNumber forknum)
+{
+	if (relsize_hash_size > 0)
+	{
+		RelTag		tag;
+
+		tag.rnode = rnode;
+		tag.forknum = forknum;
+		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
+		hash_search(relsize_hash, &tag, HASH_REMOVE, NULL);
+		LWLockRelease(relsize_lock);
+	}
+}
+
+void
 relsize_hash_init(void)
 {
 	DefineCustomIntVariable("zenith.relsize_hash_size",

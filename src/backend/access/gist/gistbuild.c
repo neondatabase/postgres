@@ -40,6 +40,7 @@
 #include "access/tableam.h"
 #include "access/xloginsert.h"
 #include "catalog/index.h"
+#include "catalog/storage.h"
 #include "miscadmin.h"
 #include "optimizer/optimizer.h"
 #include "storage/bufmgr.h"
@@ -289,6 +290,8 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		Buffer		buffer;
 		Page		page;
 
+		smgr_start_unlogged_build(index->rd_smgr);
+
 		/* initialize the root page */
 		buffer = gistNewBuffer(index);
 		Assert(BufferGetBlockNumber(buffer) == GIST_ROOT_BLKNO);
@@ -321,6 +324,8 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			gistFreeBuildBuffers(buildstate.gfbb);
 		}
 
+		smgr_finish_unlogged_build_phase_1(index->rd_smgr);
+
 		/*
 		 * We didn't write WAL records as we built the index, so if
 		 * WAL-logging is required, write all pages to the WAL now.
@@ -331,6 +336,9 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 							  0, RelationGetNumberOfBlocks(index),
 							  true);
 		}
+		SetLastWrittenPageLSN(XactLastRecEnd);
+
+		smgr_end_unlogged_build(index->rd_smgr);
 	}
 
 	/* okay, all heap tuples are indexed */
@@ -456,8 +464,13 @@ gist_indexsortbuild(GISTBuildState *state)
 	smgrwrite(state->indexrel->rd_smgr, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			  pagestate->page, true);
 	if (RelationNeedsWAL(state->indexrel))
-		log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
+	{
+		XLogRecPtr lsn;
+
+		lsn = log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					pagestate->page, true);
+		SetLastWrittenPageLSN(lsn);
+	}
 
 	pfree(pagestate->page);
 	pfree(pagestate);

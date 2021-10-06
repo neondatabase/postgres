@@ -74,6 +74,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
+#include "catalog/pg_class.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -530,7 +531,7 @@ BeginRedoForBlock(StringInfo input_message)
 
 	MemoryContextSwitchTo(oldcxt);
 
-	reln = smgropen(rnode, InvalidBackendId);
+	reln = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
 		reln->smgr_cached_nblocks[forknum] < blknum + 1)
 	{
