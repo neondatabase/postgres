@@ -193,5 +193,6 @@ extern void relsize_hash_init(void);
 extern bool get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber* size);
 extern void set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
 extern void update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
+extern void forget_cached_relsize(RelFileNode rnode, ForkNumber forknum);
 
 #endif
