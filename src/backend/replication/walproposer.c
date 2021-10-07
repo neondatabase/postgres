@@ -990,6 +990,10 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 					 * By convention we always stream since the beginning of
 					 * the record, and flushLsn points to it.
 					 */
+					elog(LOG, "recovery streaming to %s:%s, flushLsn=%X/%X",
+						walkeeper[i].host, walkeeper[i].port,
+						LSN_FORMAT_ARGS(walkeeper[i].voteResponse.flushLsn));
+
 					walkeeper[i].startStreamingAt = walkeeper[i].voteResponse.flushLsn;
 					SendMessageToNode(i, msg);
 					break;
@@ -1270,6 +1274,11 @@ AdvancePollState(int i, uint32 events)
 				 *
 				 * If we do have quorum, we can start an election
 				 */
+
+				elog(LOG, "new conn from %s:%s, i=%d, n_connected = %u",
+				 	wk->host, wk->port, i,
+					n_connected+1);
+
 				if (++n_connected < quorum)
 				{
 					/*
@@ -1282,7 +1291,11 @@ AdvancePollState(int i, uint32 events)
 				{
 					if (n_connected == quorum)
 					{
+
 						propTerm++;
+						elog(LOG, "increased propTerm=%d, voteRequest is ready",
+							propTerm);
+
 						/* prepare voting message */
 						voteRequest = (VoteRequest)
 						{
@@ -1331,6 +1344,10 @@ AdvancePollState(int i, uint32 events)
 				if (!BlockingWrite(i, &voteRequest, sizeof(voteRequest), SS_WAIT_VERDICT))
 					return;
 
+				elog(LOG, "sent vote to %s:%s, i=%d, term=%d",
+				 	wk->host, wk->port, i,
+					voteRequest.term);
+
 				/* If successful, wait for read-ready with SS_WAIT_VERDICT */
 				break;
 
@@ -1370,6 +1387,15 @@ AdvancePollState(int i, uint32 events)
 
 				if (++n_votes != quorum)
 				{
+					XLogRecPtr ptr = 0xdead;
+					if (msgQueueHead) {
+						ptr = msgQueueHead->req.beginLsn;
+					} 
+
+					elog(LOG, "WAL acceptor %s:%s joined after voting, starting streaming from %X/%X",
+						wk->host, wk->port,
+						LSN_FORMAT_ARGS(ptr));
+
 					/*
 					 * We are already streaming WAL: send all pending messages
 					 * to the attached walkeeper
