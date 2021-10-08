@@ -1376,6 +1376,10 @@ AdvancePollState(int i, uint32 events)
 
 				if (++n_votes != quorum)
 				{
+					/* Can't start streaming earlier than truncateLsn */
+					wk->startStreamingAt = truncateLsn;
+					Assert(msgQueueHead == NULL || wk->startStreamingAt >= msgQueueHead->req.beginLsn);
+
 					/*
 					 * We are already streaming WAL: send all pending messages
 					 * to the attached walkeeper
@@ -1449,10 +1453,6 @@ AdvancePollState(int i, uint32 events)
 				{
 					WalMessage *msg = wk->currMsg;
 					AppendRequestHeader *req = &msg->req;
-
-					/* Can't start streaming earlier than truncateLsn */
-					wk->startStreamingAt = Max(wk->startStreamingAt, truncateLsn);
-					Assert(wk->startStreamingAt >= msg->req.beginLsn);
 
 					/*
 					 * If we need to send this message not from the beginning,
