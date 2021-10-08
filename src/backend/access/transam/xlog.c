@@ -1211,6 +1211,11 @@ XLogInsertRecord(XLogRecData *rdata,
 		}
 	}
 
+	elog(LOG, "new wal record: start=%X/%X, end=%X/%X, size=%u",
+			 LSN_FORMAT_ARGS(StartPos),
+			 LSN_FORMAT_ARGS(EndPos),
+			 EndPos - StartPos);
+
 #ifdef WAL_DEBUG
 	if (XLOG_DEBUG)
 	{
