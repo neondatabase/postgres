@@ -394,11 +394,15 @@ HandleWalKeeperResponse(void)
 		msgQueueAck = msgQueueAck->next;
 	}
 
+	elog(LOG, "advanced truncateLsn to %X/%X", LSN_FORMAT_ARGS(truncateLsn));
+
 	/* Cleanup message queue */
 	while (msgQueueHead != NULL && msgQueueHead->req.endLsn <= truncateLsn)
 	{
 		WalMessage *msg = msgQueueHead;
 		msgQueueHead = msg->next;
+
+		elog(LOG, "queue message is being freed now begin=%X/%X end=%X/%X", LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn));
 
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
