@@ -360,14 +360,10 @@ HandleWalKeeperResponse(void)
 									 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
 	}
 
-
-	/* Cleanup message queue */
-	while (msgQueueHead != NULL && msgQueueHead->ackMask == ((1 << n_walkeepers) - 1))
+	/* Advance truncateLsn */
+	WalMessage *msgQueueAck = msgQueueHead;
+	while (msgQueueAck != NULL && msgQueueAck->ackMask == ((1 << n_walkeepers) - 1))
 	{
-		WalMessage *msg = msgQueueHead;
-
-		msgQueueHead = msg->next;
-
 		/*
 		 * This piece is received by everyone; try to advance truncateLsn, but
 		 * hold it back to nearest commitLsn. Thus we will always start
@@ -383,17 +379,27 @@ HandleWalKeeperResponse(void)
 		 * read from WAL and send are plain sheets of bytes, but safekeepers
 		 * ack only on commit boundaries.
 		 */
-		if (msg->req.endLsn >= minQuorumLsn && minQuorumLsn != InvalidXLogRecPtr)
+		if (msgQueueAck->req.endLsn >= minQuorumLsn && minQuorumLsn != InvalidXLogRecPtr)
 		{
 			truncateLsn = minQuorumLsn;
 			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
-		else if (msg->req.endLsn >= candidateTruncateLsn &&
+		else if (msgQueueAck->req.endLsn >= candidateTruncateLsn &&
 				 candidateTruncateLsn != InvalidXLogRecPtr)
 		{
 			truncateLsn = candidateTruncateLsn;
 			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
+
+		msgQueueAck = msgQueueAck->next;
+	}
+
+	/* Cleanup message queue */
+	while (msgQueueHead != NULL && msgQueueHead->req.endLsn <= truncateLsn)
+	{
+		WalMessage *msg = msgQueueHead;
+		msgQueueHead = msg->next;
+
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
 	}
@@ -1443,6 +1449,10 @@ AdvancePollState(int i, uint32 events)
 				{
 					WalMessage *msg = wk->currMsg;
 					AppendRequestHeader *req = &msg->req;
+
+					/* Can't start streaming earlier than truncateLsn */
+					wk->startStreamingAt = Max(wk->startStreamingAt, truncateLsn);
+					Assert(wk->startStreamingAt >= msg->req.beginLsn);
 
 					/*
 					 * If we need to send this message not from the beginning,
