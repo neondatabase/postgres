@@ -1397,13 +1397,18 @@ AdvancePollState(int i, uint32 events)
 
 				if (++n_votes != quorum)
 				{
+					/* Can't start streaming earlier than truncateLsn */
+					wk->startStreamingAt = truncateLsn;
+					Assert(msgQueueHead == NULL || wk->startStreamingAt >= msgQueueHead->req.beginLsn);
+
 					XLogRecPtr ptr = 0xdead;
 					if (msgQueueHead) {
 						ptr = msgQueueHead->req.beginLsn;
 					} 
 
-					elog(LOG, "WAL acceptor %s:%s joined after voting, starting streaming from %X/%X",
+					elog(LOG, "WAL acceptor %s:%s joined after voting, starting streaming from %X/%X, beginLsn=%X/%X",
 						wk->host, wk->port,
+						LSN_FORMAT_ARGS(wk->startStreamingAt),
 						LSN_FORMAT_ARGS(ptr));
 
 					/*
@@ -1479,10 +1484,6 @@ AdvancePollState(int i, uint32 events)
 				{
 					WalMessage *msg = wk->currMsg;
 					AppendRequestHeader *req = &msg->req;
-
-					/* Can't start streaming earlier than truncateLsn */
-					wk->startStreamingAt = Max(wk->startStreamingAt, truncateLsn);
-					Assert(wk->startStreamingAt >= msg->req.beginLsn);
 
 					/*
 					 * If we need to send this message not from the beginning,
