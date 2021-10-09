@@ -396,8 +396,8 @@ HandleWalKeeperResponse(void)
 
 	elog(LOG, "advanced truncateLsn to %X/%X", LSN_FORMAT_ARGS(truncateLsn));
 
-	/* Cleanup message queue */
-	while (msgQueueHead != NULL && msgQueueHead->req.endLsn <= truncateLsn)
+	/* Cleanup message queue up to truncateLsn, but only messages received by everyone */
+	while (msgQueueHead != NULL && msgQueueHead->ackMask == ((1 << n_walkeepers) - 1) && msgQueueHead->req.endLsn <= truncateLsn)
 	{
 		WalMessage *msg = msgQueueHead;
 		msgQueueHead = msg->next;
