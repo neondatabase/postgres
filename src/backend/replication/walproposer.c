@@ -77,8 +77,8 @@ static ProposerGreeting proposerGreeting;
 static WaitEventSet *waitEvents;
 static AppendResponse lastFeedback;
 /*
- *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
- *  + 1 of last chunk streamed to everyone)
+ *  minimal LSN which may be needed for recovery of some safekeeper,
+ *  record-aligned (first record which might not yet received by someone).
  */
 static XLogRecPtr truncateLsn;
 static XLogRecPtr candidateTruncateLsn;
@@ -360,14 +360,10 @@ HandleWalKeeperResponse(void)
 									 EpochFromFullTransactionId(hsFeedback.catalog_xmin));
 	}
 
-
-	/* Cleanup message queue */
-	while (msgQueueHead != NULL && msgQueueHead->ackMask == ((1 << n_walkeepers) - 1))
+	/* Advance truncateLsn */
+	WalMessage *msgQueueAck = msgQueueHead;
+	while (msgQueueAck != NULL && msgQueueAck->ackMask == ((1 << n_walkeepers) - 1))
 	{
-		WalMessage *msg = msgQueueHead;
-
-		msgQueueHead = msg->next;
-
 		/*
 		 * This piece is received by everyone; try to advance truncateLsn, but
 		 * hold it back to nearest commitLsn. Thus we will always start
@@ -383,22 +379,39 @@ HandleWalKeeperResponse(void)
 		 * read from WAL and send are plain sheets of bytes, but safekeepers
 		 * ack only on commit boundaries.
 		 */
-		if (msg->req.endLsn >= minQuorumLsn && minQuorumLsn != InvalidXLogRecPtr)
+		if (msgQueueAck->req.endLsn >= minQuorumLsn && minQuorumLsn != InvalidXLogRecPtr)
 		{
 			truncateLsn = minQuorumLsn;
 			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
-		else if (msg->req.endLsn >= candidateTruncateLsn &&
+		else if (msgQueueAck->req.endLsn >= candidateTruncateLsn &&
 				 candidateTruncateLsn != InvalidXLogRecPtr)
 		{
 			truncateLsn = candidateTruncateLsn;
 			candidateTruncateLsn = InvalidXLogRecPtr;
 		}
+
+		msgQueueAck = msgQueueAck->next;
+	}
+
+	/* Cleanup message queue up to truncateLsn, but only messages received by everyone */
+	while (msgQueueHead != NULL && msgQueueHead->ackMask == ((1 << n_walkeepers) - 1) && msgQueueHead->req.endLsn <= truncateLsn)
+	{
+		WalMessage *msg = msgQueueHead;
+		msgQueueHead = msg->next;
+
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
 	}
 	if (!msgQueueHead)			/* queue is empty */
 		msgQueueTail = NULL;
+	/* truncateLsn always points to the first chunk in the queue */
+	if (msgQueueHead)
+	{
+		/* Max takes care of special 0-sized messages */
+		Assert(truncateLsn >= msgQueueHead->req.beginLsn &&
+			   truncateLsn < Max(msgQueueHead->req.endLsn, msgQueueHead->req.beginLsn + 1));
+	}
 
 	/*
 	 * Generally sync is done when majority switched the epoch so we committed
@@ -1370,6 +1383,10 @@ AdvancePollState(int i, uint32 events)
 
 				if (++n_votes != quorum)
 				{
+					/* Can't start streaming earlier than truncateLsn */
+					wk->startStreamingAt = truncateLsn;
+					Assert(msgQueueHead == NULL || wk->startStreamingAt >= msgQueueHead->req.beginLsn);
+
 					/*
 					 * We are already streaming WAL: send all pending messages
 					 * to the attached walkeeper
