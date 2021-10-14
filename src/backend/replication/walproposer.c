@@ -77,8 +77,8 @@ static ProposerGreeting proposerGreeting;
 static WaitEventSet *waitEvents;
 static AppendResponse lastFeedback;
 /*
- *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
- *  + 1 of last chunk streamed to everyone)
+ *  minimal LSN which may be needed for recovery of some safekeeper,
+ *  record-aligned (first record which might not yet received by someone).
  */
 static XLogRecPtr truncateLsn;
 static XLogRecPtr candidateTruncateLsn;
@@ -405,6 +405,13 @@ HandleWalKeeperResponse(void)
 	}
 	if (!msgQueueHead)			/* queue is empty */
 		msgQueueTail = NULL;
+	/* truncateLsn always points to the first chunk in the queue */
+	if (msgQueueHead)
+	{
+		/* Max takes care of special 0-sized messages */
+		Assert(truncateLsn >= msgQueueHead->req.beginLsn &&
+			   truncateLsn < Max(msgQueueHead->req.endLsn, msgQueueHead->req.beginLsn + 1));
+	}
 
 	/*
 	 * Generally sync is done when majority switched the epoch so we committed
