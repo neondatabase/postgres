@@ -1,11 +1,8 @@
 #include "postgres.h"
 
-#include "replication/walproposer.h"
+#include "walproposer.h"
+#include "utils/guc.h"
 #include "libpq-fe.h"
-
-/* Required for anything that's dynamically loaded */
-PG_MODULE_MAGIC;
-void _PG_init(void);
 
 /* Header in walproposer.h -- Wrapper struct to abstract away the libpq connection */
 struct WalProposerConn
@@ -26,7 +23,7 @@ static int								libpqprop_flush(WalProposerConn* conn, bool socket_read_ready)
 static void								libpqprop_finish(WalProposerConn* conn);
 static PGAsyncReadResult				libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount);
 static PGAsyncWriteResult				libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size);
-static bool                             libpqprop_blocking_write(WalProposerConn* conn, void const* buf, size_t size);
+static bool								libpqprop_blocking_write(WalProposerConn* conn, void const* buf, size_t size);
 
 static WalProposerFunctionsType PQWalProposerFunctions = {
 	libpqprop_error_message,
@@ -45,11 +42,38 @@ static WalProposerFunctionsType PQWalProposerFunctions = {
 
 /* Module initialization */
 void
-_PG_init(void)
+libwalproposer_init(void)
 {
 	if (WalProposerFunctions != NULL)
 		elog(ERROR, "libpqwalproposer already loaded");
 	WalProposerFunctions = &PQWalProposerFunctions;
+
+	DefineCustomStringVariable(
+		"zenith.wal_acceptors",
+		gettext_noop("List of Zenith WAL acceptors (host:port)"),
+		NULL,
+		&wal_acceptors_list,
+		"",
+		PGC_POSTMASTER,
+		GUC_LIST_INPUT, /* | GUC_LIST_QUOTE // we cannot use GUC_LIST_QUOTE from inside an extension */
+		NULL, NULL, NULL
+	);
+	DefineCustomIntVariable(
+		"wal_acceptor_reconnect",
+		gettext_noop("Timeout for reconnecting to offline wal acceptor."),
+		NULL,
+		&wal_acceptor_reconnect_timeout,
+		1000,
+		0,
+		INT_MAX,
+		PGC_SIGHUP,
+		GUC_UNIT_MS,
+		NULL,
+		NULL,
+		NULL
+	);
+
+	WalProposerRegister();
 }
 
 /* Helper function */
@@ -109,7 +133,7 @@ libpqprop_connect_start(char* conninfo)
 	 *
 	 * palloc will exit on failure though, so there's not much we could do if it *did* fail.
 	 */
-	conn = palloc(sizeof(WalProposerConn));
+	conn = (WalProposerConn*) palloc(sizeof(WalProposerConn));
 	conn->pg_conn = pg_conn;
 	conn->is_nonblocking = false; /* connections always start in blocking mode */
 	return conn;

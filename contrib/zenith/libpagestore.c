@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * libpqpagestore.c
+ * libpagestore.c
  *	  Handles network communications with the remote pagestore.
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	 contrib/zenith/libpqpagestore.c
+ *	 contrib/zenith/libpagestore.c
  *
  *-------------------------------------------------------------------------
  */
@@ -26,11 +26,7 @@
 #include "pgstat.h"
 #include "utils/guc.h"
 
-#include "replication/walproposer.h"
-
-PG_MODULE_MAGIC;
-
-void		_PG_init(void);
+#include "walproposer.h"
 
 #define PqPageStoreTrace DEBUG5
 
@@ -280,7 +276,7 @@ check_zenith_id(char **newval, void **extra, GucSource source)
  * Module initialization function
  */
 void
-_PG_init(void)
+libpagestore_init(void)
 {
 	DefineCustomStringVariable("zenith.page_server_connstring",
 							   "connection string to the page server",

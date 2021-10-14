@@ -35,7 +35,6 @@
 #include "common/username.h"
 #include "port/atomics.h"
 #include "postmaster/postmaster.h"
-#include "replication/walproposer.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/help_config.h"
@@ -51,7 +50,7 @@ static void startup_hacks(const char *progname);
 static void init_locale(const char *categoryname, int category, const char *locale);
 static void help(const char *progname);
 static void check_root(const char *progname);
-
+static void sync_wal_proposer(int argc, char *argv[]);
 
 /*
  * Any Postgres server process begins execution here.
@@ -211,7 +210,7 @@ main(int argc, char *argv[])
 					 NULL,		/* no dbname */
 					 strdup(get_user_name_or_exit(progname)));	/* does not return */
 	else if (argc > 1 && strcmp(argv[1], "--sync-safekeepers") == 0)
-		WalProposerSync(argc, argv);
+		sync_wal_proposer(argc, argv);
 	else
 		PostmasterMain(argc, argv); /* does not return */
 	abort();					/* should not get here */
@@ -408,4 +407,25 @@ check_root(const char *progname)
 		exit(1);
 	}
 #endif							/* WIN32 */
+}
+
+/*
+ * Load the WalProposerSync function, and execute the synchronization.
+ */
+static void sync_wal_proposer(int argc, char *argv[])
+{
+	/*
+	 * Initialize the local installation path variable, which is required for
+	 * load_external_function
+	 */
+	getInstallationPaths(argv[0]);
+
+	/*
+	 * Options setup, required for load_external_function.
+	 */
+	InitializeGUCOptions();
+
+	void (*WalProposerSync)(int, char *[]) = load_external_function("zenith", "WalProposerSync", false, NULL);
+
+	WalProposerSync(argc, argv);
 }

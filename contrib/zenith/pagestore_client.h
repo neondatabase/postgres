@@ -10,8 +10,8 @@
  *
  *-------------------------------------------------------------------------
  */
-#ifndef pageserver_h
-#define pageserver_h
+#ifndef PAGESTORE_CLIENT_H
+#define PAGESTORE_CLIENT_H
 
 #include "postgres.h"
 
@@ -141,6 +141,9 @@ extern const f_smgr *smgr_inmem(BackendId backend, RelFileNode rnode);
 extern void smgr_init_inmem(void);
 extern void smgr_shutdown_inmem(void);
 
+/* */
+extern void libpagestore_init(void);
+
 /* zenith storage manager functionality */
 
 extern void zenith_init(void);
@@ -195,4 +198,4 @@ extern void set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumbe
 extern void update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size);
 extern void forget_cached_relsize(RelFileNode rnode, ForkNumber forknum);
 
-#endif
+#endif /* PAGESTORE_CLIENT_H */

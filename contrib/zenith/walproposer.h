@@ -9,6 +9,7 @@
 #include "nodes/replnodes.h"
 #include "utils/uuid.h"
 #include "replication/walreceiver.h"
+#include "replication/walsender.h"
 
 #define SK_MAGIC              0xCafeCeefu
 #define SK_PROTOCOL_VERSION   1
@@ -26,7 +27,6 @@
 
 extern char* wal_acceptors_list;
 extern int   wal_acceptor_reconnect_timeout;
-extern bool  am_wal_proposer;
 
 struct WalProposerConn; /* Defined in libpqwalproposer */
 typedef struct WalProposerConn WalProposerConn;
@@ -329,30 +329,24 @@ typedef struct WalKeeper
 	XLogRecPtr startStreamingAt;
 } WalKeeper;
 
-
-int        CompareLsn(const void *a, const void *b);
-char*      FormatWalKeeperState(WalKeeperState state);
-void       AssertEventsOkForState(uint32 events, WalKeeper* wk);
-uint32     WalKeeperStateDesiredEvents(WalKeeperState state);
-bool       StateShouldImmediatelyExecute(WalKeeperState state);
-char*      FormatEvents(uint32 events);
-void       WalProposerMain(Datum main_arg);
-void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
-bool       HexDecodeString(uint8 *result, char *input, int nbytes);
-void       WalProposerPoll(void);
-void       WalProposerRegister(void);
-void       ProcessStandbyReply(XLogRecPtr	writePtr,
-							   XLogRecPtr	flushPtr,
-							   XLogRecPtr	applyPtr,
-							   TimestampTz replyTime,
-							   bool		replyRequested);
-void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
+void		libwalproposer_init(void);
+int			CompareLsn(const void *a, const void *b);
+char*		FormatWalKeeperState(WalKeeperState state);
+void		AssertEventsOkForState(uint32 events, WalKeeper* wk);
+uint32		WalKeeperStateDesiredEvents(WalKeeperState state);
+bool		StateShouldImmediatelyExecute(WalKeeperState state);
+char*		FormatEvents(uint32 events);
+void		WalProposerMain(Datum main_arg);
+void		WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
+bool		HexDecodeString(uint8 *result, char *input, int nbytes);
+void		WalProposerPoll(void);
+void		WalProposerRegister(void);
+void		ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackXmin,
 									uint32		feedbackEpoch,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
-void       StartReplication(StartReplicationCmd *cmd);
-void       WalProposerSync(int argc, char *argv[]);
+void		WalProposerSync(int argc, char *argv[]);
 
 
 /* libpqwalproposer hooks & helper type */

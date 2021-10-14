@@ -73,7 +73,6 @@
 #include "replication/slot.h"
 #include "replication/snapbuild.h"
 #include "replication/syncrep.h"
-#include "replication/walproposer.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -117,6 +116,8 @@ bool		am_walsender = false;	/* Am I a walsender process? */
 bool		am_cascading_walsender = false; /* Am I cascading WAL to another
 											 * standby? */
 bool		am_db_walsender = false;	/* Connected to a database? */
+
+PhysicalReplicationHandler *physicalHandler = NULL;
 
 /* User-settable parameters for walsender */
 int			max_wal_senders = 0;	/* the maximum number of concurrent
@@ -181,7 +182,7 @@ static bool streamingDoneSending;
 static bool streamingDoneReceiving;
 
 /* Are we there yet? */
-static bool WalSndCaughtUp = false;
+bool WalSndCaughtUp = false;
 
 /* Flags set by signal handlers for later service in main loop */
 static volatile sig_atomic_t got_SIGUSR2 = false;
@@ -223,7 +224,6 @@ static LagTracker *lag_tracker;
 static void WalSndLastCycleHandler(SIGNAL_ARGS);
 
 /* Prototypes for private functions */
-typedef void (*WalSndSendDataCallback) (void);
 static void WalSndLoop(WalSndSendDataCallback send_data);
 static void InitWalSenderSlot(void);
 static void WalSndKill(int code, Datum arg);
@@ -235,7 +235,7 @@ static XLogRecPtr GetStandbyFlushRecPtr(void);
 static void IdentifySystem(void);
 static void CreateReplicationSlot(CreateReplicationSlotCmd *cmd);
 static void DropReplicationSlot(DropReplicationSlotCmd *cmd);
-void StartReplication(StartReplicationCmd *cmd);
+static void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
@@ -257,6 +257,25 @@ static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
 							  TimeLineID *tli_p);
 
+static void PqReplicationBegin(void);
+static void PqReplicationPrepareBuf(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len);
+static void PqReplicationSendData(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len);
+static void PqReplicationTimelineDone(void);
+static bool PqReplicationIteration(WalSndSendDataCallback send_data);
+static void PqReplicationEnd(void);
+
+static PhysicalReplicationHandler pqReplicationHandler = {
+	.start = PqReplicationBegin,
+	.prepare_buf = PqReplicationPrepareBuf,
+	.send_data = PqReplicationSendData,
+	.iteration = PqReplicationIteration,
+	.send_timeline_done = PqReplicationTimelineDone,
+	.end = PqReplicationEnd
+};
+
+static PhysicalReplicationHandler pqLogicalShim = {
+	.iteration = PqReplicationIteration
+};
 
 /* Initialize walsender process before entering the main command loop */
 void
@@ -562,22 +581,199 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 	pq_endmessage(&buf);
 }
 
+static void
+PqReplicationBegin(void)
+{
+	StringInfoData buf;
+
+	/* Send a CopyBothResponse message, and start streaming */
+	pq_beginmessage(&buf, 'W');
+	pq_sendbyte(&buf, 0);
+	pq_sendint16(&buf, 0);
+	pq_endmessage(&buf);
+	pq_flush();
+}
+
+static void
+PqReplicationPrepareBuf(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len) {
+	if (buf->data)
+		resetStringInfo(buf);
+	else
+		initStringInfo(buf);
+
+	pq_sendbyte(buf, 'w');
+	pq_sendint64(buf, startptr);	/* dataStart */
+	pq_sendint64(buf, endptr);		/* walEnd */
+	pq_sendint64(buf, 0);		/* sendtime, filled in last */
+}
+
+static void
+PqReplicationSendData(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len)
+{
+	resetStringInfo(&tmpbuf);
+	pq_sendint64(&tmpbuf, GetCurrentTimestamp());
+	memcpy(&buf->data[1 + sizeof(int64) + sizeof(int64)],
+		   tmpbuf.data, sizeof(int64));
+
+	pq_putmessage_noblock('d', buf->data, buf->len);
+}
+
+static void
+PqReplicationTimelineDone(void)
+{
+	pq_putmessage_noblock('c', NULL, 0);
+}
+
+/*
+ * Note: Apart from this being the default implementation for physical
+ * replication handlers, this is also used in the replication loop of logical
+ * replication.
+ */
+static bool
+PqReplicationIteration(WalSndSendDataCallback send_data)
+{
+	/* Check for input from the client */
+	ProcessRepliesIfAny();
+
+	/*
+	 * If we have received CopyDone from the client, sent CopyDone
+	 * ourselves, and the output buffer is empty, it's time to exit
+	 * streaming.
+	 */
+	if (streamingDoneReceiving && streamingDoneSending &&
+		!pq_is_send_pending())
+		return false;
+
+	/*
+	 * If we don't have any pending data in the output buffer, try to send
+	 * some more.  If there is some, we don't bother to call send_data
+	 * again until we've flushed it ... but we'd better assume we are not
+	 * caught up.
+	 */
+	if (!pq_is_send_pending())
+		send_data();
+	else
+		WalSndCaughtUp = false;
+
+	/* Try to flush pending output to the client */
+	if (pq_flush_if_writable() != 0)
+		WalSndShutdown();
+
+	/* If nothing remains to be sent right now ... */
+	if (WalSndCaughtUp && !pq_is_send_pending())
+	{
+		/*
+		 * If we're in catchup state, move to streaming.  This is an
+		 * important state change for users to know about, since before
+		 * this point data loss might occur if the primary dies and we
+		 * need to failover to the standby. The state change is also
+		 * important for synchronous replication, since commits that
+		 * started to wait at that point might wait for some time.
+		 */
+		if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
+		{
+			ereport(DEBUG1,
+					(errmsg_internal("\"%s\" has now caught up with upstream server",
+									 application_name)));
+			WalSndSetState(WALSNDSTATE_STREAMING);
+		}
+
+		/*
+		 * When SIGUSR2 arrives, we send any outstanding logs up to the
+		 * shutdown checkpoint record (i.e., the latest record), wait for
+		 * them to be replicated to the standby, and exit. This may be a
+		 * normal termination at shutdown, or a promotion, the walsender
+		 * is not sure which.
+		 */
+		if (got_SIGUSR2)
+			WalSndDone(send_data);
+	}
+
+	/* Check for replication timeout. */
+	WalSndCheckTimeOut();
+
+	/* Send keepalive if the time has come */
+	WalSndKeepaliveIfNecessary();
+
+	/*
+	 * Block if we have unsent data.  XXX For logical replication, let
+	 * WalSndWaitForWal() handle any other blocking; idle receivers need
+	 * its additional actions.  For physical replication, also block if
+	 * caught up; its send_data does not block.
+	 */
+	if ((WalSndCaughtUp && send_data != XLogSendLogical &&
+		 !streamingDoneSending) ||
+		pq_is_send_pending())
+	{
+		long		sleeptime;
+		int			wakeEvents;
+
+		if (!streamingDoneReceiving)
+			wakeEvents = WL_SOCKET_READABLE;
+		else
+			wakeEvents = 0;
+
+		/*
+		 * Use fresh timestamp, not last_processing, to reduce the chance
+		 * of reaching wal_sender_timeout before sending a keepalive.
+		 */
+		sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
+
+		if (pq_is_send_pending())
+			wakeEvents |= WL_SOCKET_WRITEABLE;
+
+		/* Sleep until something happens or we time out */
+		WalSndWait(wakeEvents, sleeptime, WAIT_EVENT_WAL_SENDER_MAIN);
+	}
+	return true;
+}
+
+static void
+PqReplicationEnd(void)
+{
+	EndReplicationCommand("START_STREAMING");
+}
+
 /*
  * Handle START_REPLICATION command.
  *
  * At the moment, this never returns, but an ereport(ERROR) will take us back
  * to the main loop.
  */
+/* Zenith XXX: This is called from walproposer.c */
 void
-StartReplication(StartReplicationCmd *cmd)
+StartReplication(StartReplicationCmd *cmd){
+	StartPhysicalReplication(
+		cmd->slotname,
+		cmd->timeline,
+		cmd->startpoint,
+		&pqReplicationHandler
+	);
+}
+
+void
+StartPhysicalReplication(char* slot_name, TimeLineID timeline,
+						 XLogRecPtr startpoint,
+						 PhysicalReplicationHandler *handler)
 {
-	StringInfoData buf;
 	XLogRecPtr	FlushPtr;
+
+	if (handler == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("No handler provided")));
+
+	if (physicalHandler != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("PhysicalHandler was already installed")));
 
 	if (ThisTimeLineID == 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("IDENTIFY_SYSTEM has not been run before START_REPLICATION")));
+
+	physicalHandler = handler;
 
 	/* create xlogreader for physical replication */
 	xlogreader =
@@ -600,9 +796,9 @@ StartReplication(StartReplicationCmd *cmd)
 	 * written at wal_level='minimal'.
 	 */
 
-	if (cmd->slotname)
+	if (slot_name)
 	{
-		(void) ReplicationSlotAcquire(cmd->slotname, SAB_Error);
+		(void) ReplicationSlotAcquire(slot_name, SAB_Error);
 		if (SlotIsLogical(MyReplicationSlot))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -628,11 +824,11 @@ StartReplication(StartReplicationCmd *cmd)
 	else
 		FlushPtr = GetFlushRecPtr();
 
-	if (cmd->timeline != 0)
+	if (timeline != 0)
 	{
 		XLogRecPtr	switchpoint;
 
-		sendTimeLine = cmd->timeline;
+		sendTimeLine = timeline;
 		if (sendTimeLine == ThisTimeLineID)
 		{
 			sendTimeLineIsHistoric = false;
@@ -649,7 +845,7 @@ StartReplication(StartReplicationCmd *cmd)
 			 * requested start location is on that timeline.
 			 */
 			timeLineHistory = readTimeLineHistory(ThisTimeLineID);
-			switchpoint = tliSwitchPoint(cmd->timeline, timeLineHistory,
+			switchpoint = tliSwitchPoint(timeline, timeLineHistory,
 										 &sendTimeLineNextTLI);
 			list_free_deep(timeLineHistory);
 
@@ -672,14 +868,14 @@ StartReplication(StartReplicationCmd *cmd)
 			 * WAL segment.
 			 */
 			if (!XLogRecPtrIsInvalid(switchpoint) &&
-				switchpoint < cmd->startpoint)
+				switchpoint < startpoint)
 			{
 				ereport(ERROR,
 						(errmsg("requested starting point %X/%X on timeline %u is not in this server's history",
-								LSN_FORMAT_ARGS(cmd->startpoint),
-								cmd->timeline),
+								LSN_FORMAT_ARGS(startpoint),
+								timeline),
 						 errdetail("This server's history forked from timeline %u at %X/%X.",
-								   cmd->timeline,
+								   timeline,
 								   LSN_FORMAT_ARGS(switchpoint))));
 			}
 			sendTimeLineValidUpto = switchpoint;
@@ -695,7 +891,7 @@ StartReplication(StartReplicationCmd *cmd)
 	streamingDoneSending = streamingDoneReceiving = false;
 
 	/* If there is nothing to stream, don't even enter COPY mode */
-	if (!sendTimeLineIsHistoric || cmd->startpoint < sendTimeLineValidUpto)
+	if (!sendTimeLineIsHistoric || startpoint < sendTimeLineValidUpto)
 	{
 		/*
 		 * When we first start replication the standby will be behind the
@@ -708,30 +904,22 @@ StartReplication(StartReplicationCmd *cmd)
 		 */
 		WalSndSetState(WALSNDSTATE_CATCHUP);
 
-		/* Send a CopyBothResponse message, and start streaming */
-		if (!am_wal_proposer)
-		{
-			pq_beginmessage(&buf, 'W');
-			pq_sendbyte(&buf, 0);
-			pq_sendint16(&buf, 0);
-			pq_endmessage(&buf);
-			pq_flush();
-		}
+		physicalHandler->start();
 
 		/*
 		 * Don't allow a request to stream from a future point in WAL that
 		 * hasn't been flushed to disk in this server yet.
 		 */
-		if (FlushPtr < cmd->startpoint)
+		if (FlushPtr < startpoint)
 		{
 			ereport(ERROR,
 					(errmsg("requested starting point %X/%X is ahead of the WAL flush position of this server %X/%X",
-							LSN_FORMAT_ARGS(cmd->startpoint),
+							LSN_FORMAT_ARGS(startpoint),
 							LSN_FORMAT_ARGS(FlushPtr))));
 		}
 
 		/* Start streaming from the requested point */
-		sentPtr = cmd->startpoint;
+		sentPtr = startpoint;
 
 		/* Initialize shared memory status, too */
 		SpinLockAcquire(&MyWalSnd->mutex);
@@ -753,7 +941,7 @@ StartReplication(StartReplicationCmd *cmd)
 		Assert(streamingDoneSending && streamingDoneReceiving);
 	}
 
-	if (cmd->slotname)
+	if (slot_name)
 		ReplicationSlotRelease();
 
 	/*
@@ -799,7 +987,7 @@ StartReplication(StartReplicationCmd *cmd)
 	}
 
 	/* Send CommandComplete message */
-	EndReplicationCommand("START_STREAMING");
+	physicalHandler->end();
 }
 
 /*
@@ -1206,6 +1394,8 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 
 	SyncRepInitConfig();
 
+	physicalHandler = &pqLogicalShim;
+
 	/* Main loop of walsender */
 	WalSndLoop(XLogSendLogical);
 
@@ -1328,7 +1518,7 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 		}
 
 		/* Try to flush pending output to the client */
-		if (!am_wal_proposer && pq_flush_if_writable() != 0)
+		if (pq_flush_if_writable() != 0)
 			WalSndShutdown();
 	}
 
@@ -1711,9 +1901,6 @@ ProcessRepliesIfAny(void)
 	int			r;
 	bool		received = false;
 
-	if (am_wal_proposer)
-		return;
-
 	last_processing = GetCurrentTimestamp();
 
 	/*
@@ -1900,16 +2087,18 @@ ProcessStandbyReplyMessage(void)
 	ProcessStandbyReply(writePtr,
 						flushPtr,
 						applyPtr,
-						replyTime,
-						replyRequested);
+						replyTime);
+
+	/* Send a reply if the standby requested one. */
+	if (replyRequested)
+		WalSndKeepalive(false);
 }
 
 void
 ProcessStandbyReply(XLogRecPtr	writePtr,
 					XLogRecPtr	flushPtr,
 					XLogRecPtr	applyPtr,
-					TimestampTz replyTime,
-					bool		replyRequested)
+					TimestampTz replyTime)
 {
 	TimeOffset	writeLag,
 				flushLag,
@@ -1925,11 +2114,10 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 		/* Copy because timestamptz_to_str returns a static buffer */
 		replyTimeStr = pstrdup(timestamptz_to_str(replyTime));
 
-		elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s reply_time %s",
+		elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X reply_time %s",
 			 LSN_FORMAT_ARGS(writePtr),
 			 LSN_FORMAT_ARGS(flushPtr),
 			 LSN_FORMAT_ARGS(applyPtr),
-			 replyRequested ? " (reply requested)" : "",
 			 replyTimeStr);
 
 		pfree(replyTimeStr);
@@ -1959,9 +2147,6 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 	else
 		fullyAppliedLastTime = false;
 
-	/* Send a reply if the standby requested one. */
-	if (replyRequested)
-		WalSndKeepalive(false);
 
 	/*
 	 * Update shared state for this WalSender process based on reply data from
@@ -2313,112 +2498,16 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			SyncRepInitConfig();
 		}
 
-		/* Check for input from the client */
-		ProcessRepliesIfAny();
-
-		if (am_wal_proposer)
-		{
-			send_data();
-			if (WalSndCaughtUp)
-			{
-				if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
-					WalSndSetState(WALSNDSTATE_STREAMING);
-				WalProposerPoll();
-				WalSndCaughtUp = false;
-			}
-			continue;
-		}
-
 		/*
-		 * If we have received CopyDone from the client, sent CopyDone
-		 * ourselves, and the output buffer is empty, it's time to exit
-		 * streaming.
+		 * When in physical replication, the handler will do its thing.
+		 *
+		 * For logical replication, a function with the same purpose was
+		 * installed as a shim.
 		 */
-		if (streamingDoneReceiving && streamingDoneSending &&
-			!pq_is_send_pending())
+		Assert(physicalHandler != NULL && physicalHandler->iteration != NULL);
+
+		if (!(physicalHandler->iteration(send_data)))
 			break;
-
-		/*
-		 * If we don't have any pending data in the output buffer, try to send
-		 * some more.  If there is some, we don't bother to call send_data
-		 * again until we've flushed it ... but we'd better assume we are not
-		 * caught up.
-		 */
-		if (!pq_is_send_pending())
-			send_data();
-		else
-			WalSndCaughtUp = false;
-
-		/* Try to flush pending output to the client */
-		if (pq_flush_if_writable() != 0)
-			WalSndShutdown();
-
-		/* If nothing remains to be sent right now ... */
-		if (WalSndCaughtUp && !pq_is_send_pending())
-		{
-			/*
-			 * If we're in catchup state, move to streaming.  This is an
-			 * important state change for users to know about, since before
-			 * this point data loss might occur if the primary dies and we
-			 * need to failover to the standby. The state change is also
-			 * important for synchronous replication, since commits that
-			 * started to wait at that point might wait for some time.
-			 */
-			if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
-			{
-				ereport(DEBUG1,
-						(errmsg_internal("\"%s\" has now caught up with upstream server",
-										 application_name)));
-				WalSndSetState(WALSNDSTATE_STREAMING);
-			}
-
-			/*
-			 * When SIGUSR2 arrives, we send any outstanding logs up to the
-			 * shutdown checkpoint record (i.e., the latest record), wait for
-			 * them to be replicated to the standby, and exit. This may be a
-			 * normal termination at shutdown, or a promotion, the walsender
-			 * is not sure which.
-			 */
-			if (got_SIGUSR2)
-				WalSndDone(send_data);
-		}
-
-		/* Check for replication timeout. */
-		WalSndCheckTimeOut();
-
-		/* Send keepalive if the time has come */
-		WalSndKeepaliveIfNecessary();
-
-		/*
-		 * Block if we have unsent data.  XXX For logical replication, let
-		 * WalSndWaitForWal() handle any other blocking; idle receivers need
-		 * its additional actions.  For physical replication, also block if
-		 * caught up; its send_data does not block.
-		 */
-		if ((WalSndCaughtUp && send_data != XLogSendLogical &&
-			 !streamingDoneSending) ||
-			pq_is_send_pending())
-		{
-			long		sleeptime;
-			int			wakeEvents;
-
-			if (!streamingDoneReceiving)
-				wakeEvents = WL_SOCKET_READABLE;
-			else
-				wakeEvents = 0;
-
-			/*
-			 * Use fresh timestamp, not last_processing, to reduce the chance
-			 * of reaching wal_sender_timeout before sending a keepalive.
-			 */
-			sleeptime = WalSndComputeSleeptime(GetCurrentTimestamp());
-
-			if (pq_is_send_pending())
-				wakeEvents |= WL_SOCKET_WRITEABLE;
-
-			/* Sleep until something happens or we time out */
-			WalSndWait(wakeEvents, sleeptime, WAIT_EVENT_WAL_SENDER_MAIN);
-		}
 	}
 }
 
@@ -2734,7 +2823,7 @@ XLogSendPhysical(void)
 			wal_segment_close(xlogreader);
 
 		/* Send CopyDone */
-		pq_putmessage_noblock('c', NULL, 0);
+		physicalHandler->send_timeline_done();
 		streamingDoneSending = true;
 
 		WalSndCaughtUp = true;
@@ -2790,15 +2879,7 @@ XLogSendPhysical(void)
 	/*
 	 * OK to read and send the slice.
 	 */
-	if (output_message.data)
-		resetStringInfo(&output_message);
-	else
-		initStringInfo(&output_message);
-
-	pq_sendbyte(&output_message, 'w');
-	pq_sendint64(&output_message, startptr);	/* dataStart */
-	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
-	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
+	physicalHandler->prepare_buf(&output_message, startptr, SendRqstPtr, nbytes);
 
 	/*
 	 * Read the log directly into the output buffer to avoid extra memcpy
@@ -2848,22 +2929,8 @@ retry:
 	output_message.len += nbytes;
 	output_message.data[output_message.len] = '\0';
 
-	if (am_wal_proposer)
-	{
-		WalProposerBroadcast(startptr, output_message.data, output_message.len);
-	}
-	else
-	{
-		/*
-		 * Fill the send timestamp last, so that it is taken as late as possible.
-		 */
-		resetStringInfo(&tmpbuf);
-		pq_sendint64(&tmpbuf, GetCurrentTimestamp());
-		memcpy(&output_message.data[1 + sizeof(int64) + sizeof(int64)],
-			   tmpbuf.data, sizeof(int64));
+	physicalHandler->send_data(&output_message, startptr, SendRqstPtr, nbytes);
 
-		pq_putmessage_noblock('d', output_message.data, output_message.len);
-	}
 	sentPtr = endptr;
 
 	/* Update shared memory status */

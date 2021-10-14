@@ -37,14 +37,17 @@
 
 #include <signal.h>
 #include <unistd.h>
+#include "access/xlog.h"
 #include "access/xlogdefs.h"
-#include "replication/walproposer.h"
 #include "storage/latch.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "access/xlog.h"
+#include "libpq/pqformat.h"
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
+#include "replication/walsender.h"
+#include "replication/walsender_private.h"
+#include "pagestore_client.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
@@ -53,13 +56,13 @@
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+#include "walproposer.h"
 
 
 char	   *wal_acceptors_list;
 int			wal_acceptor_reconnect_timeout;
-bool		am_wal_proposer;
 
-/* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
+/* Declared in walproposer.h, defined here, initialized in libwalproposer.c */
 WalProposerFunctionsType *WalProposerFunctions = NULL;
 
 #define WAL_PROPOSER_SLOT_NAME "wal_proposer_slot"
@@ -103,6 +106,20 @@ static bool AsyncFlush(int i, bool socket_read_ready, WalKeeperState success_sta
 static void HackyRemoveWalProposerEvent(int to_remove);
 static WalMessage *CreateMessageCommitLsnOnly(XLogRecPtr lsn);
 static void BroadcastMessage(WalMessage *msg);
+
+static void WalPReplicationBegin(void);
+static void WalPReplicationPrepareBuf(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len);
+static void WalPReplicationSendData(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len);
+static bool WalPReplicationIteration(WalSndSendDataCallback send_data);
+static void WalPReplicationEnd(void);
+
+static PhysicalReplicationHandler walPReplicationHandler = {
+	.start = WalPReplicationBegin,
+	.prepare_buf = WalPReplicationPrepareBuf,
+	.send_data = WalPReplicationSendData,
+	.iteration = WalPReplicationIteration,
+	.end = WalPReplicationEnd
+};
 
 
 /*
@@ -211,6 +228,7 @@ ShutdownConnection(int i)
 		walprop_finish(walkeeper[i].conn);
 	walkeeper[i].conn = NULL;
 	walkeeper[i].state = SS_OFFLINE;
+	walkeeper[i].voteResponse = (VoteResponse) {};
 	walkeeper[i].currMsg = NULL;
 
 	HackyRemoveWalProposerEvent(i);
@@ -339,6 +357,7 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr	minQuorumLsn;
+	WalMessage *msgQueueAck;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
@@ -346,7 +365,7 @@ HandleWalKeeperResponse(void)
 		lastFeedback.flushLsn = minQuorumLsn;
 		/* advance the replication slot */
 		if (!syncSafekeepers)
-			ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp(), false);
+			ProcessStandbyReply(minQuorumLsn, minQuorumLsn, InvalidXLogRecPtr, GetCurrentTimestamp());
 	}
 	CombineHotStanbyFeedbacks(&hsFeedback);
 	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
@@ -361,7 +380,7 @@ HandleWalKeeperResponse(void)
 	}
 
 	/* Advance truncateLsn */
-	WalMessage *msgQueueAck = msgQueueHead;
+	msgQueueAck = msgQueueHead;
 	while (msgQueueAck != NULL && msgQueueAck->ackMask == ((1 << n_walkeepers) - 1))
 	{
 		/*
@@ -461,15 +480,9 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	char	   *sep;
 	char	   *port;
 
-	/* Load the libpq-specific functions */
-	load_file("libpqwalproposer", false);
-	if (WalProposerFunctions == NULL)
-		elog(ERROR, "libpqwalproposer didn't initialize correctly");
-
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-	load_file("zenith", false);
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -538,7 +551,6 @@ WalProposerLoop(void)
 static void
 WalProposerStart(void)
 {
-
 	/* Initiate connections to all walkeeper nodes */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
@@ -549,7 +561,7 @@ WalProposerStart(void)
 }
 
 /*
- * WAL proposer bgworeker entry point
+ * WAL proposer bgworker entry point
  */
 void
 WalProposerMain(Datum main_arg)
@@ -569,7 +581,6 @@ WalProposerMain(Datum main_arg)
 
 	application_name = (char *) "walproposer";	/* for
 												 * synchronous_standby_names */
-	am_wal_proposer = true;
 	am_walsender = true;
 	InitWalSender();
 
@@ -625,6 +636,9 @@ WalProposerSync(int argc, char *argv[])
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set postmaster death monitoring pipe to nonblocking mode: %m")));
 
+	libpagestore_init();
+	libwalproposer_init();
+
 	WalProposerInit(0, 0);
 
 	process_shared_preload_libraries_in_progress = false;
@@ -637,14 +651,13 @@ WalProposerSync(int argc, char *argv[])
 static void
 WalProposerStartStreaming(XLogRecPtr startpos)
 {
-	StartReplicationCmd cmd;
-
 	elog(LOG, "WAL proposer starts streaming at %X/%X",
 		 LSN_FORMAT_ARGS(startpos));
-	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
-	cmd.timeline = proposerGreeting.timeline;
-	cmd.startpoint = startpos;
-	StartReplication(&cmd);
+
+	StartPhysicalReplication(WAL_PROPOSER_SLOT_NAME,
+							 proposerGreeting.timeline,
+							 startpos,
+							 &walPReplicationHandler);
 }
 
 /*
@@ -1298,10 +1311,10 @@ AdvancePollState(int i, uint32 events)
 						propTerm++;
 						/* prepare voting message */
 						voteRequest = (VoteRequest)
-						{
-							.tag = 'v',
+							{
+								.tag = 'v',
 								.term = propTerm
-						};
+							};
 						memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
 					}
 
@@ -1784,13 +1797,22 @@ WalProposerRegister(void)
 {
 	BackgroundWorker bgw;
 
+	/* Don't register background worker unless there's an acceptor specified */
 	if (*wal_acceptors_list == '\0')
+		return;
+
+	/* Can't register background workers in !preloaded shared libraries */
+	if (!process_shared_preload_libraries_in_progress)
+		return;
+
+	/* Can't register background workers unless we're under postmaster. */
+	if (!IsPostmasterEnvironment)
 		return;
 
 	memset(&bgw, 0, sizeof(bgw));
 	bgw.bgw_flags = BGWORKER_SHMEM_ACCESS;
 	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
-	snprintf(bgw.bgw_library_name, BGW_MAXLEN, "postgres");
+	snprintf(bgw.bgw_library_name, BGW_MAXLEN, "zenith");
 	snprintf(bgw.bgw_function_name, BGW_MAXLEN, "WalProposerMain");
 	snprintf(bgw.bgw_name, BGW_MAXLEN, "WAL proposer");
 	snprintf(bgw.bgw_type, BGW_MAXLEN, "WAL proposer");
@@ -1799,4 +1821,43 @@ WalProposerRegister(void)
 	bgw.bgw_main_arg = (Datum) 0;
 
 	RegisterBackgroundWorker(&bgw);
+}
+
+/*
+ * Physical replication plugin API implementations
+ */
+
+static void WalPReplicationBegin(void) {
+	/* Do nothing */
+}
+
+static void WalPReplicationPrepareBuf(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len) {
+	if (buf->data)
+		resetStringInfo(buf);
+	else
+		initStringInfo(buf);
+	pq_sendbyte(buf, 'w');
+	pq_sendint64(buf, startptr);	/* dataStart */
+	pq_sendint64(buf, endptr);		/* walEnd */
+	pq_sendint64(buf, 0);			/* sendtime, filled in last */
+}
+
+static void WalPReplicationSendData(StringInfo buf, XLogRecPtr startptr, XLogRecPtr endptr, Size len) {
+	WalProposerBroadcast(startptr, buf->data, buf->len);
+}
+
+static bool WalPReplicationIteration(WalSndSendDataCallback send_data) {
+	send_data();
+	if (WalSndCaughtUp)
+	{
+		if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
+			WalSndSetState(WALSNDSTATE_STREAMING);
+		WalProposerPoll();
+		WalSndCaughtUp = false;
+	}
+	return true;
+}
+
+static void WalPReplicationEnd(void) {
+	/* Do nothing */
 }

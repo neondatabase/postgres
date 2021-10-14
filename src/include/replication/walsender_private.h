@@ -109,6 +109,7 @@ typedef struct
 
 extern WalSndCtlData *WalSndCtl;
 
+extern bool WalSndCaughtUp;
 
 extern void WalSndSetState(WalSndState state);
 

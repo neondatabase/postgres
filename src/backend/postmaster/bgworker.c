@@ -22,7 +22,6 @@
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
-#include "replication/walproposer.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -129,9 +128,6 @@ static const struct
 	},
 	{
 		"ApplyWorkerMain", ApplyWorkerMain
-	},
-	{
-		"WalProposerMain", WalProposerMain
 	}
 };
 

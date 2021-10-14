@@ -4,7 +4,14 @@
 MODULE_big = zenith
 OBJS = \
 	$(WIN32RES) \
-	inmem_smgr.o libpagestore.o pagestore_smgr.o relsize_cache.o
+	inmem_smgr.o \
+	libpagestore.o \
+	libwalproposer.o \
+	pagestore_smgr.o \
+	relsize_cache.o \
+	walproposer.o \
+	walproposer_utils.o \
+	zenith.o
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)

@@ -117,7 +117,6 @@
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
-#include "replication/walproposer.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -394,7 +393,6 @@ static DNSServiceRef bonjour_sdref = NULL;
  */
 static void CloseServerPorts(int status, Datum arg);
 static void unlink_external_pid_file(int status, Datum arg);
-static void getInstallationPaths(const char *argv0);
 static void checkControlFile(void);
 static Port *ConnCreate(int serverFd);
 static void ConnFree(Port *port);
@@ -999,11 +997,6 @@ PostmasterMain(int argc, char *argv[])
 	ApplyLauncherRegister();
 
 	/*
-	 * Start WAL proposer bgworker is wal acceptors list is not empty
-	 */
-	WalProposerRegister();
-
-	/*
 	 * process any libraries that should be preloaded at postmaster start
 	 */
 	process_shared_preload_libraries();
@@ -1482,7 +1475,7 @@ unlink_external_pid_file(int status, Datum arg)
  * Compute and check the directory paths to files that are part of the
  * installation (as deduced from the postgres executable's own location)
  */
-static void
+void
 getInstallationPaths(const char *argv0)
 {
 	DIR		   *pdir;

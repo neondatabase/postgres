@@ -1,9 +1,9 @@
 #include "postgres.h"
 
-#include "replication/walproposer.h"
+#include "walproposer.h"
 #include "common/logging.h"
 #include "common/ip.h"
-#include "../interfaces/libpq/libpq-fe.h"
+#include "libpq-fe.h"
 #include <netinet/tcp.h>
 #include <unistd.h>
 
