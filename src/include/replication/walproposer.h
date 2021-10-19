@@ -263,7 +263,7 @@ struct WalMessage
 
 	/* PHANTOM FIELD:
 	 *
-	 * All WalMessages are allocated with exactly (size - sizeof(WalKeeperRequest)) additional bytes
+	 * All WalMessages are allocated with exactly (size - sizeof(AppendRequestHeader)) additional bytes
 	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
 	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
 };
