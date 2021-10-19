@@ -647,10 +647,22 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 	/* Extend as needed. */
 	while (fsm_nblocks_now < fsm_nblocks)
 	{
-		PageSetChecksumInplace((Page) pg.data, fsm_nblocks_now);
+		/*
+		 * NEON: Initialize FSM pages through buffer cache to prevent loading
+		 * them from pageserver.
+		 */
+		Buffer	buffer = ReadBufferExtended(rel, FSM_FORKNUM, P_NEW, RBM_ZERO_AND_LOCK, NULL);
+		Page	page = BufferGetPage(buffer);
+
+		PageInit((Page) page, BLCKSZ, 0);
+		PageSetChecksumInplace(page, fsm_nblocks_now);
+		MarkBufferDirty(buffer);
 
 		smgrextend(reln, FSM_FORKNUM, fsm_nblocks_now,
-				   pg.data, false);
+				   page, false);
+
+		UnlockReleaseBuffer(buffer);
+
 		fsm_nblocks_now++;
 	}
 
