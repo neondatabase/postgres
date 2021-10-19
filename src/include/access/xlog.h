@@ -403,6 +403,8 @@ extern SessionBackupState get_backup_status(void);
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
 
+#define ZENITH_SIGNAL_FILE		"zenith.signal"
+
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
 

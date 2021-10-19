@@ -271,6 +271,13 @@ bool		InArchiveRecovery = false;
 static bool standby_signal_file_found = false;
 static bool recovery_signal_file_found = false;
 
+/*
+ * Variables read from 'zenith.signal' file.
+ */
+bool		ZenithRecoveryRequested = false;
+XLogRecPtr	zenithLastRec = InvalidXLogRecPtr;
+bool		zenithWriteOk = false;
+
 /* Was the last xlog file restored from archive, or local? */
 static bool restoredFromArchive = false;
 
@@ -5505,6 +5512,81 @@ readRecoverySignalFile(void)
 }
 
 static void
+readZenithSignalFile(void)
+{
+	int			fd;
+
+	fd = BasicOpenFile(ZENITH_SIGNAL_FILE, O_RDONLY | PG_BINARY);
+	if (fd >= 0)
+	{
+		struct stat statbuf;
+		char	   *content;
+		char		prev_lsn_str[20];
+
+		/* Slurp the file into a string */
+		if (stat(ZENITH_SIGNAL_FILE, &statbuf) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content = palloc(statbuf.st_size + 1);
+		if (read(fd, content, statbuf.st_size) != statbuf.st_size)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content[statbuf.st_size] = '\0';
+
+		/* Parse it */
+		if (sscanf(content, "PREV LSN: %19s", prev_lsn_str) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+
+		if (strcmp(prev_lsn_str, "invalid") == 0)
+		{
+			/* No prev LSN. Forbid starting up in read-write mode */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = false;
+		}
+		else if (strcmp(prev_lsn_str, "none") == 0)
+		{
+			/*
+			 * The page server had no valid prev LSN, but assured that it's ok
+			 * to start without it. This happens when you start the compute
+			 * node for the first time on a new branch.
+			 */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = true;
+		}
+		else
+		{
+			uint32		hi,
+						lo;
+
+			if (sscanf(prev_lsn_str, "%X/%X", &hi, &lo) != 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithLastRec = ((uint64) hi) << 32 | lo;
+
+			/* If prev LSN is given, it better be valid */
+			if (zenithLastRec == InvalidXLogRecPtr)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid prev-LSN in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithWriteOk = true;
+		}
+		ZenithRecoveryRequested = true;
+		close(fd);
+
+		elog(LOG,
+			 "[ZENITH] found 'zenith.signal' file. setting prev LSN to %X/%X",
+			 LSN_FORMAT_ARGS(zenithLastRec));
+	}
+}
+
+static void
 validateRecoveryParameters(void)
 {
 	if (!ArchiveRecoveryRequested)
@@ -6451,7 +6533,6 @@ StartupXLOG(void)
 	bool		reachedRecoveryTarget = false;
 	bool		haveBackupLabel = false;
 	bool		haveTblspcMap = false;
-	bool        skipLastRecordReread = false;
 	XLogRecPtr	RecPtr,
 				checkPointLoc,
 				EndOfLog;
@@ -6477,9 +6558,14 @@ StartupXLOG(void)
 	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	/*
+	 * Read zenith.signal before anything else.
+	 */
+	readZenithSignalFile();
+
+	/*
 	 * Check that contents look valid.
 	 */
-	if (!XRecOffIsValid(ControlFile->checkPoint))
+	if (!XRecOffIsValid(ControlFile->checkPoint) && !ZenithRecoveryRequested)
 		ereport(FATAL,
 				(errmsg("control file contains invalid checkpoint location")));
 
@@ -6609,6 +6695,9 @@ StartupXLOG(void)
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
+		else if (ZenithRecoveryRequested)
+			ereport(LOG,
+					(errmsg("starting zenith recovery")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -6738,6 +6827,29 @@ StartupXLOG(void)
 
 		/* set flag to delete it later */
 		haveBackupLabel = true;
+	}
+	else if (ZenithRecoveryRequested)
+	{
+		/*
+		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
+		 * just finished reading the record that started at 'zenithLastRec'
+		 * and ended at checkpoint.redo
+		 */
+		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
+			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
+			 LSN_FORMAT_ARGS(zenithLastRec));
+
+		checkPointLoc = zenithLastRec;
+		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		EndRecPtr = ControlFile->checkPointCopy.redo;
+
+		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
+		wasShutdown = true;
+
+		/* Initialize expectedTLEs, like ReadRecord() does */
+		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
+
+		XLogBeginRead(xlogreader, EndRecPtr);
 	}
 	else
 	{
@@ -6996,30 +7108,10 @@ StartupXLOG(void)
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
-	if (RecPtr < checkPoint.redo)
-	{
-		int fd = BasicOpenFile("zenith.signal", O_RDWR | PG_BINARY);
-		if (fd >= 0) {
-			XLogRecPtr prevRecPtr = 0;
-			if ((size_t)read(fd, &prevRecPtr, sizeof prevRecPtr) != sizeof(prevRecPtr)) {
-				elog(LOG, "can't read previous record position from zenith.signal file: %m");
-			}
-			LastRec = prevRecPtr;
-			/* Zenith hacks to spawn compute node without WAL */
-			EndRecPtr = RecPtr = checkPoint.redo;
-			skipLastRecordReread = true;
-			close(fd);
 
-			elog(LOG,
-				"[ZENITH] found 'zenith.signal' file. Setting prevRecPtr to %X/%X",
-				LSN_FORMAT_ARGS(prevRecPtr));
-		}
-		else
-		{
-			ereport(PANIC,
-					(errmsg("invalid redo in checkpoint record")));
-		}
-	}
+	if (RecPtr < checkPoint.redo && !ZenithRecoveryRequested)
+		ereport(PANIC,
+				(errmsg("invalid redo in checkpoint record")));
 
 	/*
 	 * Check whether we need to force recovery from WAL.  If it appears to
@@ -7673,25 +7765,40 @@ StartupXLOG(void)
 	/*
 	 * Re-fetch the last valid or last applied record, so we can identify the
 	 * exact endpoint of what we consider the valid portion of WAL.
+	 *
+	 * When starting from a zenith base backup, we don't have WAL. Initialize
+	 * the WAL page where we will start writing new records from scratch,
+	 * instead.
 	 */
-
-	/*
-	 * We use the last WAL page to initialize the WAL for writing,
-	 * so we better have it in memory.
-	 */
-	if (skipLastRecordReread)
+	if (ZenithRecoveryRequested)
 	{
-		int offs = (EndRecPtr % XLOG_BLCKSZ);
-		XLogRecPtr lastPage = EndRecPtr - offs;
-		int idx = XLogRecPtrToBufIdx(lastPage);
-		XLogPageHeader xlogPageHdr = (XLogPageHeader)(XLogCtl->pages + idx*XLOG_BLCKSZ);
-		xlogPageHdr->xlp_pageaddr = lastPage;
-		xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
-		xlogPageHdr->xlp_tli = ThisTimeLineID;
-		xlogPageHdr->xlp_info = XLP_FIRST_IS_CONTRECORD;
-		xlogPageHdr->xlp_rem_len = offs - SizeOfXLogShortPHD;
-		readOff = XLogSegmentOffset(lastPage, wal_segment_size);
-		elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
+		if (!zenithWriteOk)
+		{
+			/*
+			 * We cannot start generating new WAL if we don't have a valid prev-LSN
+			 * to use for the first new WAL record. (Shouldn't happen.)
+			 */
+			ereport(ERROR,
+					(errmsg("cannot start in read-write mode from this base backup")));
+		}
+		else
+		{
+			int			offs = (EndRecPtr % XLOG_BLCKSZ);
+			XLogRecPtr	lastPage = EndRecPtr - offs;
+			int			idx = XLogRecPtrToBufIdx(lastPage);
+			XLogPageHeader xlogPageHdr = (XLogPageHeader) (XLogCtl->pages + idx * XLOG_BLCKSZ);
+
+			xlogPageHdr->xlp_pageaddr = lastPage;
+			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+			xlogPageHdr->xlp_tli = ThisTimeLineID;
+			xlogPageHdr->xlp_info = XLP_FIRST_IS_CONTRECORD; // FIXME
+			xlogPageHdr->xlp_rem_len = offs - SizeOfXLogShortPHD;
+			readOff = XLogSegmentOffset(lastPage, wal_segment_size);
+
+			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
+
+			// FIXME: should we unlink zenith.signal?
+		}
 	}
 	else
 	{
@@ -7874,7 +7981,7 @@ StartupXLOG(void)
 		/* Copy the valid part of the last block, and zero the rest */
 		page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
 		len = EndOfLog % XLOG_BLCKSZ;
-		if (!skipLastRecordReread)
+		if (!ZenithRecoveryRequested)
 			memcpy(page, xlogreader->readBuf, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
