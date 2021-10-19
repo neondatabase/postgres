@@ -654,9 +654,22 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 	/* Now extend the file */
 	while (vm_nblocks_now < vm_nblocks)
 	{
-		PageSetChecksumInplace((Page) pg.data, vm_nblocks_now);
+		/*
+		 * NEON: Initialize VM pages through buffer cache to prevent loading
+		 * them from pageserver.
+		 */
+		Buffer	buffer = ReadBufferExtended(rel, VISIBILITYMAP_FORKNUM, P_NEW,
+											RBM_ZERO_AND_LOCK, NULL);
+		Page	page = BufferGetPage(buffer);
 
-		smgrextend(reln, VISIBILITYMAP_FORKNUM, vm_nblocks_now, pg.data, false);
+		PageInit((Page) page, BLCKSZ, 0);
+		PageSetChecksumInplace(page, vm_nblocks_now);
+		MarkBufferDirty(buffer);
+
+		smgrextend(reln, VISIBILITYMAP_FORKNUM, vm_nblocks_now, page, false);
+
+		UnlockReleaseBuffer(buffer);
+
 		vm_nblocks_now++;
 	}
 
