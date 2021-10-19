@@ -560,13 +560,14 @@ zenith_get_request_lsn(bool *latest)
 
 	if (RecoveryInProgress())
 	{
+		*latest = false;
 		lsn = GetXLogReplayRecPtr(NULL);
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
-		lsn = InvalidXLogRecPtr;
 	}
 	else if (am_walsender)
 	{
+		*latest = true;
 		lsn = InvalidXLogRecPtr;
 		elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
 	}
@@ -579,6 +580,7 @@ zenith_get_request_lsn(bool *latest)
 		 * pages modified by later WAL records must still in the buffer cache,
 		 * so our request cannot concern those.
 		 */
+		*latest = true;
 		lsn = GetLastWrittenPageLSN();
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
@@ -602,11 +604,6 @@ zenith_get_request_lsn(bool *latest)
 		}
 	}
 
-	/*
-	 * FIXME: In read-only mode, we would need to set *latest=false here. But
-	 * we don't support read-only mode at the moment
-	 */
-	*latest = true;
 	return lsn;
 }
 
