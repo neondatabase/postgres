@@ -1426,8 +1426,8 @@ AdvancePollState(int i, uint32 events)
 
 						if (syncSafekeepers)
 						{
-							/* Wait until all walkeepers are synced */
-							WalProposerLoop();
+							/* keep polling until all walkeepers are synced */
+							return;
 						}
 					}
 					else if (syncSafekeepers)
