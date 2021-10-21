@@ -121,9 +121,10 @@ static XLogRecData *XLogRecordAssemble(RmgrId rmid, uint8 info,
 static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 									uint16 hole_length, char *dest, uint16 *dlen);
 
-/* Timeout in milliseconds for delaying backend WAL inserts to avoid WAL overflow */
+/* Timeout in milliseconds for delaying WAL inserts to avoid WAL overflow */
 #define BACK_PRESSURE_TIMEOUT 100
 #define MB ((XLogRecPtr)1024*1024)
+
 /*
  * Begin constructing a WAL record. This must be called before the
  * XLogRegister* functions and XLogInsert().
