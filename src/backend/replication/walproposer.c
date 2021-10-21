@@ -339,6 +339,7 @@ HandleWalKeeperResponse(void)
 {
 	HotStandbyFeedback hsFeedback;
 	XLogRecPtr	minQuorumLsn;
+	WalMessage *msgQueueAck;
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastFeedback.flushLsn)
@@ -361,7 +362,7 @@ HandleWalKeeperResponse(void)
 	}
 
 	/* Advance truncateLsn */
-	WalMessage *msgQueueAck = msgQueueHead;
+	msgQueueAck = msgQueueHead;
 	while (msgQueueAck != NULL && msgQueueAck->ackMask == ((1 << n_walkeepers) - 1))
 	{
 		/*
