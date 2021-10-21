@@ -1213,7 +1213,7 @@ AdvancePollState(int i, uint32 events)
 				{
 					elog(WARNING, "Failed to send 'START_WAL_PUSH' query to walkeeper %s:%s: %s",
 						 wk->host, wk->port, walprop_error_message(wk->conn));
-					ResetConnection(i);
+					ShutdownConnection(i);
 					return;
 				}
 
@@ -1252,7 +1252,7 @@ AdvancePollState(int i, uint32 events)
 					case WP_EXEC_FAILED:
 						elog(WARNING, "Failed to send query to walkeeper %s:%s: %s",
 							 wk->host, wk->port, walprop_error_message(wk->conn));
-						ResetConnection(i);
+						ShutdownConnection(i);
 						return;
 
 						/*
@@ -1263,7 +1263,7 @@ AdvancePollState(int i, uint32 events)
 					case WP_EXEC_UNEXPECTED_SUCCESS:
 						elog(WARNING, "Received bad resonse from walkeeper %s:%s query execution",
 							 wk->host, wk->port);
-						ResetConnection(i);
+						ShutdownConnection(i);
 						return;
 				}
 				break;
@@ -1662,7 +1662,7 @@ AsyncRead(int i, void *value, size_t value_size)
 				 wk->host, wk->port,
 				 FormatWalKeeperState(wk->state),
 				 walprop_error_message(wk->conn));
-			ResetConnection(i);
+			ShutdownConnection(i);
 			return false;
 	}
 
@@ -1707,7 +1707,7 @@ BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state)
 		elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
 			 wk->host, wk->port, FormatWalKeeperState(wk->state),
 			 walprop_error_message(wk->conn));
-		ResetConnection(i);
+		ShutdownConnection(i);
 		return false;
 	}
 
@@ -1756,7 +1756,7 @@ AsyncWrite(int i, void *msg, size_t msg_size, WalKeeperState flush_state, WalKee
 			elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
 				 wk->host, wk->port, FormatWalKeeperState(wk->state),
 				 walprop_error_message(wk->conn));
-			ResetConnection(i);
+			ShutdownConnection(i);
 			return false;
 	}
 
