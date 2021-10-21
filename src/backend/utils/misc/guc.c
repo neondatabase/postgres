@@ -2901,24 +2901,24 @@ static struct config_int ConfigureNamesInt[] =
 	{
 		{"max_replication_write_lag", PGC_POSTMASTER, REPLICATION_SENDING,
 			gettext_noop("Maximal write lag between master and replicas."),
-			gettext_noop("When lag between minimal write position of replica and current LSN exeeds this value,"
+			gettext_noop("When lag between minimal write position of replica and current LSN exceeds this value,"
 						 "backends are blocked"),
 			GUC_UNIT_MB,
 		},
 		&max_replication_write_lag,
-		1024, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		0, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 
 	{
 		{"max_replication_flush_lag", PGC_POSTMASTER, REPLICATION_SENDING,
 			gettext_noop("Maximal flush lag between master and replicas."),
-			gettext_noop("When lag between minimal flush position of replica and current LSN exeeds this value,"
+			gettext_noop("When lag between minimal flush position of replica and current LSN exceeds this value,"
 						 "backends are blocked"),
 			GUC_UNIT_MB,
 		},
 		&max_replication_flush_lag,
-		1, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		0, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 
