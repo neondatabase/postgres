@@ -946,8 +946,8 @@ void
 ResourceOwnerEnlargeBuffers(ResourceOwner owner)
 {
 	/* We used to allow pinning buffers without a resowner, but no more */
-	Assert(owner != NULL);
-	ResourceArrayEnlarge(&(owner->bufferarr));
+	if (owner)
+		ResourceArrayEnlarge(&(owner->bufferarr));
 }
 
 /*
@@ -958,7 +958,8 @@ ResourceOwnerEnlargeBuffers(ResourceOwner owner)
 void
 ResourceOwnerRememberBuffer(ResourceOwner owner, Buffer buffer)
 {
-	ResourceArrayAdd(&(owner->bufferarr), BufferGetDatum(buffer));
+	if (owner)
+		ResourceArrayAdd(&(owner->bufferarr), BufferGetDatum(buffer));
 }
 
 /*
@@ -967,7 +968,7 @@ ResourceOwnerRememberBuffer(ResourceOwner owner, Buffer buffer)
 void
 ResourceOwnerForgetBuffer(ResourceOwner owner, Buffer buffer)
 {
-	if (!ResourceArrayRemove(&(owner->bufferarr), BufferGetDatum(buffer)))
+	if (owner && !ResourceArrayRemove(&(owner->bufferarr), BufferGetDatum(buffer)))
 		elog(ERROR, "buffer %d is not owned by resource owner %s",
 			 buffer, owner->name);
 }
