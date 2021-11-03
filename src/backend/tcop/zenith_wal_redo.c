@@ -660,6 +660,7 @@ GetPage(StringInfo input_message)
 	BlockNumber blknum;
 	Buffer		buf;
 	Page		page;
+	int			tot_written;
 
 	/*
 	 * message format:
@@ -683,7 +684,21 @@ GetPage(StringInfo input_message)
 	/* single thread, so don't bother locking the page */
 
 	/* Response: Page content */
-	write(STDOUT_FILENO, page, BLCKSZ); /* FIXME: check errors */
+	tot_written = 0;
+	do {
+		ssize_t		rc;
+
+		rc = write(STDOUT_FILENO, &page[tot_written], BLCKSZ - tot_written);
+		if (rc < 0) {
+			/* If interrupted by signal, just retry */
+			if (errno == EINTR)
+				continue;
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not write to stdout: %m")));
+		}
+		tot_written += rc;
+	} while (tot_written < BLCKSZ);
 
 	ReleaseBuffer(buf);
 	DropDatabaseBuffers(rnode.dbNode);
