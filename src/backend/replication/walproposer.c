@@ -555,7 +555,12 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	if (*zenith_tenant_walproposer != '\0' &&
 		!HexDecodeString(proposerGreeting.ztenantid, zenith_tenant_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
-	proposerGreeting.timeline = ThisTimeLineID;
+	/*
+	 * We don't care about PG's timelines in Zenith; but need to send a valid one.
+	 * Because ThisTimeLineID is not always valid, nor initialized at this point,
+	 * we default to 1.
+	 */
+	proposerGreeting.timeline = 1;
 	proposerGreeting.walSegSize = wal_segment_size;
 
 	InitEventSet();
