@@ -1,6 +1,7 @@
 #include "postgres.h"
 
 #include "replication/walproposer.h"
+#include "libpq/pqformat.h"
 #include "common/logging.h"
 #include "common/ip.h"
 #include "../interfaces/libpq/libpq-fe.h"
@@ -67,6 +68,9 @@ FormatWalKeeperState(WalKeeperState state)
 			break;
 		case SS_WAIT_VERDICT:
 			return_val = "wait-for-verdict";
+			break;
+		case SS_SEND_ELECTED_FLUSH:
+			return_val = "send-announcement-flush";
 			break;
 		case SS_IDLE:
 			return_val = "idle";
@@ -151,6 +155,7 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 			result = WL_NO_EVENTS;
 			break;
 		/* but flushing does require read- or write-ready */
+		case SS_SEND_ELECTED_FLUSH:
 		case SS_SEND_WAL_FLUSH:
 			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
 			break;
@@ -265,4 +270,50 @@ HexDecodeString(uint8 *result, char *input, int nbytes)
 	}
 
 	return true;
+}
+
+/* --------------------------------
+ *		pq_getmsgint32_le	- get a binary 4-byte int from a message buffer in native (LE) order
+ * --------------------------------
+ */
+uint32
+pq_getmsgint32_le(StringInfo msg)
+{
+	uint32		n32;
+
+	pq_copymsgbytes(msg, (char *) &n32, sizeof(n32));
+
+	return n32;
+}
+
+/* --------------------------------
+ *		pq_getmsgint64	- get a binary 8-byte int from a message buffer in native (LE) order
+ * --------------------------------
+ */
+uint64
+pq_getmsgint64_le(StringInfo msg)
+{
+	uint64		n64;
+
+	pq_copymsgbytes(msg, (char *) &n64, sizeof(n64));
+
+	return n64;
+}
+
+/* append a binary [u]int32 to a StringInfo buffer in native (LE) order */
+void
+pq_sendint32_le(StringInfo buf, uint32 i)
+{
+	enlargeStringInfo(buf, sizeof(uint32));
+	memcpy(buf->data + buf->len, &i, sizeof(uint32));
+	buf->len += sizeof(uint32);
+}
+
+/* append a binary [u]int64 to a StringInfo buffer in native (LE) order */
+void
+pq_sendint64_le(StringInfo buf, uint64 i)
+{
+	enlargeStringInfo(buf, sizeof(uint64));
+	memcpy(buf->data + buf->len, &i, sizeof(uint64));
+	buf->len += sizeof(uint64);
 }
