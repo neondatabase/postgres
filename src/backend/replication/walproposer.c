@@ -43,6 +43,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "access/xlog.h"
+#include "libpq/pqformat.h"
 #include "replication/slot.h"
 #include "replication/walreceiver.h"
 #include "postmaster/bgworker.h"
@@ -82,6 +83,7 @@ static AppendResponse lastFeedback;
  */
 static XLogRecPtr truncateLsn;
 static VoteRequest voteRequest; /* Vote request for walkeeper */
+static TermHistory propTermHistory; /* term history of the proposer */
 static term_t propTerm;			/* term of the proposer */
 static XLogRecPtr propEpochStartLsn;	/* epoch start lsn of the proposer */
 static term_t donorEpoch;		/* Most advanced acceptor epoch */
@@ -95,13 +97,19 @@ static bool syncSafekeepers;
 
 /* Declarations of a few functions ahead of time, so that we can define them out of order. */
 static void AdvancePollState(int i, uint32 events);
-static bool AsyncRead(int i, void *value, size_t value_size);
+static bool AsyncRead(int i, char **buf, int *buf_size);
+static bool AsyncReadFixed(int i, void *value, size_t value_size);
+static bool AsyncReadMessage(int i, AcceptorProposerMessage *anymsg);
 static bool BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state);
-static bool AsyncWrite(int i, void *msg, size_t msg_size, WalKeeperState flush_state, WalKeeperState success_state);
-static bool AsyncFlush(int i, bool socket_read_ready, WalKeeperState success_state);
-static void HackyRemoveWalProposerEvent(int to_remove);
-static WalMessage *CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static bool AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state);
+static bool AsyncFlush(int i, bool socket_read_ready);
+static void HackyRemoveWalProposerEvent(WalKeeper *to_remove);
 static void BroadcastMessage(WalMessage *msg);
+static WalMessage *CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static term_t GetHighestTerm(TermHistory *th);
+static term_t GetEpoch(WalKeeper *wk);
+static void SendProposerElected(WalKeeper *wk);
+static void StartStreaming(WalKeeper *wk);
 
 
 /*
@@ -159,10 +167,6 @@ CalculateMinFlushLsn(void)
 	XLogRecPtr lsn = UnknownXLogRecPtr;
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		/* We can't rely on safekeeper flushLsn if it has wrong epoch */
-		if (walkeeper[i].feedback.epoch != propTerm)
-			return 0;
-
 		if (walkeeper[i].feedback.flushLsn < lsn)
 			lsn = walkeeper[i].feedback.flushLsn;
 	}
@@ -205,7 +209,7 @@ UpdateEventSet(WalKeeper *wk, uint32 events)
  * Note: Internally, this completely reconstructs the event set. It should be avoided if possible.
  */
 static void
-HackyRemoveWalProposerEvent(int to_remove)
+HackyRemoveWalProposerEvent(WalKeeper *to_remove)
 {
 	/* Remove the existing event set */
 	if (waitEvents)
@@ -228,7 +232,7 @@ HackyRemoveWalProposerEvent(int to_remove)
 
 		wk->eventPos = -1;
 
-		if (i == to_remove)
+		if (wk == to_remove)
 			continue;
 
 		/* If this WAL keeper isn't offline, add an event for it! */
@@ -241,15 +245,18 @@ HackyRemoveWalProposerEvent(int to_remove)
 
 /* Shuts down and cleans up the connection for a walkeeper. Sets its state to SS_OFFLINE */
 static void
-ShutdownConnection(int i)
+ShutdownConnection(WalKeeper *wk)
 {
-	if (walkeeper[i].conn)
-		walprop_finish(walkeeper[i].conn);
-	walkeeper[i].conn = NULL;
-	walkeeper[i].state = SS_OFFLINE;
-	walkeeper[i].currMsg = NULL;
+	if (wk->conn)
+		walprop_finish(wk->conn);
+	wk->conn = NULL;
+	wk->state = SS_OFFLINE;
+	wk->currMsg = NULL;
+	if (wk->voteResponse.termHistory.entries)
+		pfree(wk->voteResponse.termHistory.entries);
+	wk->voteResponse.termHistory.entries = NULL;
 
-	HackyRemoveWalProposerEvent(i);
+	HackyRemoveWalProposerEvent(wk);
 }
 
 /*
@@ -259,14 +266,13 @@ ShutdownConnection(int i)
  * On success, sets the state to SS_CONNECTING_WRITE.
  */
 static void
-ResetConnection(int i)
+ResetConnection(WalKeeper *wk)
 {
 	pgsocket	sock;			/* socket of the new connection */
-	WalKeeper  *wk = &walkeeper[i];
 
 	if (wk->state != SS_OFFLINE)
 	{
-		ShutdownConnection(i);
+		ShutdownConnection(wk);
 	}
 
 	/*
@@ -354,13 +360,11 @@ GetAcknowledgedByQuorumWALPosition(void)
 	for (int i = 0; i < n_walkeepers; i++)
 	{
 		/*
-		 * Note that while we haven't pushed WAL up to epoch start lsn to the
-		 * majority we don't really know which LSN is reliably committed as
-		 * reported flush_lsn is physical end of wal, which can contain
-		 * diverged history (compared to donor).
+		 * Like in Raft, we aren't allowed to commit entries from previous
+		 * terms, so ignore reported LSN until it gets to epochStartLsn.
 		 */
-		responses[i] = walkeeper[i].feedback.epoch == propTerm
-			? walkeeper[i].feedback.flushLsn : 0;
+		responses[i] = walkeeper[i].feedback.flushLsn >= propEpochStartLsn ?
+			walkeeper[i].feedback.flushLsn : 0;
 	}
 	qsort(responses, n_walkeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -529,6 +533,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 * `ResetConnection` as needed
 		 */
 		walkeeper[n_walkeepers].conninfo[0] = '\0';
+		initStringInfo(&walkeeper[n_walkeepers].outbuf);
 		walkeeper[n_walkeepers].currMsg = NULL;
 		walkeeper[n_walkeepers].startStreamingAt = InvalidXLogRecPtr;
 		n_walkeepers += 1;
@@ -575,7 +580,7 @@ WalProposerStart(void)
 	/* Initiate connections to all walkeeper nodes */
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		ResetConnection(i);
+		ResetConnection(&walkeeper[i]);
 	}
 
 	WalProposerLoop();
@@ -831,17 +836,33 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 	return msg;
 }
 
+/* latest term in TermHistory, or 0 is there is no entries */
+static term_t
+GetHighestTerm(TermHistory *th)
+{
+	return th->n_entries > 0 ? th->entries[th->n_entries - 1].term : 0;
+}
+
+/* safekeeper's epoch is the term of the highest entry in the log */
+static term_t
+GetEpoch(WalKeeper *wk)
+{
+	return GetHighestTerm(&wk->voteResponse.termHistory);
+}
 
 /*
  * Called after majority of acceptors gave votes, it calculates the most
  * advanced safekeeper (who will be the donor) and epochStartLsn -- LSN since
  * which we'll write WAL in our term.
- * Sets truncateLsn along the way (though it
- * is not of much use at this point).
+ *
+ * Sets truncateLsn along the way (though it is not of much use at this point --
+ * only for skipping recovery).
  */
 static void
 DetermineEpochStartLsn(void)
 {
+	TermHistory *dth;
+
 	propEpochStartLsn = InvalidXLogRecPtr;
 	donorEpoch = 0;
 	truncateLsn = InvalidXLogRecPtr;
@@ -850,11 +871,11 @@ DetermineEpochStartLsn(void)
 	{
 		if (walkeeper[i].state == SS_IDLE)
 		{
-			if (walkeeper[i].voteResponse.epoch > donorEpoch ||
-				(walkeeper[i].voteResponse.epoch == donorEpoch &&
+			if (GetEpoch(&walkeeper[i]) > donorEpoch ||
+				(GetEpoch(&walkeeper[i]) == donorEpoch &&
 				 walkeeper[i].voteResponse.flushLsn > propEpochStartLsn))
 			{
-				donorEpoch = walkeeper[i].voteResponse.epoch;
+				donorEpoch = GetEpoch(&walkeeper[i]);
 				propEpochStartLsn = walkeeper[i].voteResponse.flushLsn;
 				donor = i;
 			}
@@ -883,6 +904,16 @@ DetermineEpochStartLsn(void)
 	 */
 	Assert((truncateLsn != InvalidXLogRecPtr) ||
 		   (syncSafekeepers && truncateLsn == propEpochStartLsn));
+
+	/*
+	 * Proposer's term history is the donor's + its own entry.
+	 */
+	dth = &walkeeper[donor].voteResponse.termHistory;
+	propTermHistory.n_entries = dth->n_entries + 1;
+	propTermHistory.entries = palloc(sizeof(TermSwitchEntry) * propTermHistory.n_entries);
+	memcpy(propTermHistory.entries, dth->entries, sizeof(TermSwitchEntry) * dth->n_entries);
+	propTermHistory.entries[propTermHistory.n_entries - 1].term = propTerm;
+	propTermHistory.entries[propTermHistory.n_entries - 1].lsn = propEpochStartLsn;
 
 	elog(LOG, "got votes from majority (%d) of nodes, term " UINT64_FORMAT ", epochStartLsn %X/%X, donor %s:%s, truncate_lsn %X/%X",
 		 quorum,
@@ -926,7 +957,7 @@ ReconnectWalKeepers(void)
 		for (int i = 0; i < n_walkeepers; i++)
 		{
 			if (walkeeper[i].state == SS_OFFLINE)
-				ResetConnection(i);
+				ResetConnection(&walkeeper[i]);
 		}
 	}
 }
@@ -1008,44 +1039,129 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 		return false;
 	}
 
-	/*
-	 * Start sending entries to everyone from the beginning (truncateLsn),
-	 * except for those who lives in donor's epoch and thus for sure has
-	 * correct WAL. We could do here even slightly better, taking into account
-	 * commitLsn of the rest to avoid sending them excessive data.
-	 */
-	for (int i = 0; i < n_walkeepers; i++)
-	{
-		if (walkeeper[i].state != SS_IDLE)
-			continue;
+	return true;
+}
 
-		if (walkeeper[i].voteResponse.epoch != donorEpoch)
+/*
+ * Determine for wk the starting streaming point and send it message
+ * 1) Announcing we are elected proposer (which immediately advances epoch if
+ *    safekeeper is synced, being important for sync-safekeepers)
+ * 2) Communicating starting streaming point -- safekeeper must truncate its WAL
+ *    beyond it -- and history of term switching.
+ * 
+ * Sets wk->startStreamingAt.
+ */
+static void
+SendProposerElected(WalKeeper *wk)
+{
+	ProposerElected msg;
+	TermHistory *th;
+	term_t lastCommonTerm;
+	int i;
+
+	/* 
+	 * Determine start LSN by comparing safekeeper's log term switch history and
+	 * proposer's, searching for the divergence point.
+	 *
+	 * Note: there is a vanishingly small chance of no common point even if
+	 * there is some WAL on safekeeper, if immediately after bootstrap compute
+	 * wrote some WAL on single sk and died; we stream since the beginning then.
+	 */
+	th = &wk->voteResponse.termHistory;
+	/* 
+	 * If any WAL is present on the sk, it must be authorized by some term.
+	 * OTOH, without any WAL there are no term swiches in the log.
+	 */
+	Assert((th->n_entries == 0) ==
+		   (wk->voteResponse.flushLsn == InvalidXLogRecPtr));
+	/* We must start somewhere. */
+	Assert(propTermHistory.n_entries >= 1);
+
+	for (i = 0; i < Min(propTermHistory.n_entries, th->n_entries); i++)
+	{
+		if (propTermHistory.entries[i].term != th->entries[i].term)
+			break;
+		/* term must begin everywhere at the same point */
+		Assert(propTermHistory.entries[i].lsn == th->entries[i].lsn);
+	}
+	i--; /* step back to the last common term */
+	if (i < 0)
+	{
+		/* safekeeper is empty or no common point, start from the beginning */
+		wk->startStreamingAt = propTermHistory.entries[0].lsn;
+	}
+	else
+	{
+		/*
+		 * End of (common) term is the start of the next except it is the last
+		 * one; there it is flush_lsn in case of safekeeper or, in case of
+		 * proposer, LSN it is currently writing, but then we just pick
+		 * safekeeper pos as it obviously can't be higher.
+		 */
+		if (propTermHistory.entries[i].term == propTerm)
 		{
-			SendMessageToNode(i, msgQueueHead);
+			wk->startStreamingAt = wk->voteResponse.flushLsn;
 		}
 		else
 		{
-			for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
-			{
-				if (msg->req.endLsn <= walkeeper[i].voteResponse.flushLsn)
-				{
-					/* message is already received by this walkeeper */
-					msg->ackMask |= 1 << i;
-				}
-				else
-				{
-					/*
-					 * By convention we always stream since the beginning of
-					 * the record, and flushLsn points to it.
-					 */
-					walkeeper[i].startStreamingAt = walkeeper[i].voteResponse.flushLsn;
-					SendMessageToNode(i, msg);
-					break;
-				}
-			}
+			XLogRecPtr propEndLsn = propTermHistory.entries[i + 1].lsn;
+			XLogRecPtr skEndLsn = (i + 1 < th->n_entries ? th->entries[i + 1].lsn :
+														   wk->voteResponse.flushLsn);
+			wk->startStreamingAt = Min(propEndLsn, skEndLsn);
 		}
 	}
-	return true;
+
+	Assert(msgQueueHead == NULL || wk->startStreamingAt >= msgQueueHead->req.beginLsn);
+
+	msg.tag = 'e';
+	msg.term = propTerm;
+	msg.startStreamingAt = wk->startStreamingAt;
+	msg.termHistory = &propTermHistory;
+
+	lastCommonTerm = i >= 0 ? propTermHistory.entries[i].term : 0;
+	elog(LOG,
+		 "sending elected msg term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s",
+		 msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt), lastCommonTerm, msg.termHistory->n_entries, wk->host, wk->port);
+	
+	resetStringInfo(&wk->outbuf);
+	pq_sendint64_le(&wk->outbuf, msg.tag);
+	pq_sendint64_le(&wk->outbuf, msg.term);
+	pq_sendint64_le(&wk->outbuf, msg.startStreamingAt);
+	pq_sendint32_le(&wk->outbuf, msg.termHistory->n_entries);
+	for (int i = 0; i < msg.termHistory->n_entries; i++)
+	{
+		pq_sendint64_le(&wk->outbuf, msg.termHistory->entries[i].term);
+		pq_sendint64_le(&wk->outbuf, msg.termHistory->entries[i].lsn);
+	}
+
+	if (!AsyncWrite(wk, wk->outbuf.data, wk->outbuf.len, SS_SEND_ELECTED_FLUSH))
+		return;
+
+	StartStreaming(wk);
+}
+
+/*
+ * Start streaming to safekeeper wk.
+ */
+static void
+StartStreaming(WalKeeper *wk)
+{
+	int wki = wk - walkeeper;
+
+	for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
+	{
+		if (msg->req.endLsn <= wk->startStreamingAt)
+		{
+			/* message is already received by this walkeeper */
+			msg->ackMask |= 1 << wki;
+		}
+		else
+		{
+			SendMessageToNode(wki, msg);
+			return;
+		}
+	}
+	wk->state = SS_IDLE; /* nothing to send yet, safekeeper is recovered */
 }
 
 /*
@@ -1196,7 +1312,7 @@ AdvancePollState(int i, uint32 events)
 							 * restart at a slower interval on calls to
 							 * ReconnectWalKeepers.
 							 */
-							ShutdownConnection(i);
+							ShutdownConnection(wk);
 							return;
 					}
 
@@ -1205,7 +1321,7 @@ AdvancePollState(int i, uint32 events)
 					 * un-register the old event and re-register an event on
 					 * the new socket.
 					 */
-					HackyRemoveWalProposerEvent(i);
+					HackyRemoveWalProposerEvent(wk);
 					wk->eventPos = AddWaitEventToSet(waitEvents, new_events, walprop_socket(wk->conn), NULL, wk);
 					break;
 				}
@@ -1219,7 +1335,7 @@ AdvancePollState(int i, uint32 events)
 				{
 					elog(WARNING, "Failed to send 'START_WAL_PUSH' query to walkeeper %s:%s: %s",
 						 wk->host, wk->port, walprop_error_message(wk->conn));
-					ShutdownConnection(i);
+					ShutdownConnection(wk);
 					return;
 				}
 
@@ -1258,7 +1374,7 @@ AdvancePollState(int i, uint32 events)
 					case WP_EXEC_FAILED:
 						elog(WARNING, "Failed to send query to walkeeper %s:%s: %s",
 							 wk->host, wk->port, walprop_error_message(wk->conn));
-						ShutdownConnection(i);
+						ShutdownConnection(wk);
 						return;
 
 						/*
@@ -1269,7 +1385,7 @@ AdvancePollState(int i, uint32 events)
 					case WP_EXEC_UNEXPECTED_SUCCESS:
 						elog(WARNING, "Received bad resonse from walkeeper %s:%s query execution",
 							 wk->host, wk->port);
-						ShutdownConnection(i);
+						ShutdownConnection(wk);
 						return;
 				}
 				break;
@@ -1301,7 +1417,7 @@ AdvancePollState(int i, uint32 events)
 				 * error handling or state setting is taken care of. We can
 				 * leave any other work until later.
 				 */
-				if (!AsyncRead(i, &wk->greet, sizeof(wk->greet)))
+				if (!AsyncReadFixed(i, &wk->greet, sizeof(wk->greet)))
 					return;
 
 				/* Protocol is all good, move to voting. */
@@ -1381,11 +1497,12 @@ AdvancePollState(int i, uint32 events)
 			case SS_VOTING:
 				elog(WARNING, "EOF from node %s:%s in %s state", wk->host,
 					 wk->port, FormatWalKeeperState(wk->state));
-				ResetConnection(i);
+				ResetConnection(wk);
 				break;
 
 				/* We have quorum for voting, send our vote request */
 			case SS_SEND_VOTE:
+				elog(LOG, "requesting vote from %s:%s for term " UINT64_FORMAT, wk->host, wk->port, voteRequest.term);
 				/* On failure, logging & resetting is handled */
 				if (!BlockingWrite(i, &voteRequest, sizeof(voteRequest), SS_WAIT_VERDICT))
 					return;
@@ -1395,18 +1512,13 @@ AdvancePollState(int i, uint32 events)
 
 				/* Start reading the walkeeper response for our candidate */
 			case SS_WAIT_VERDICT:
-
-				/*
-				 * If our reading doesn't immediately succeed, any necessary
-				 * error handling or state setting is taken care of. We can
-				 * leave any other work until later.
-				 */
-				if (!AsyncRead(i, &wk->voteResponse, sizeof(wk->voteResponse)))
+				wk->voteResponse.apm.tag = 'v';
+				if (!AsyncReadMessage(i, (AcceptorProposerMessage *) &wk->voteResponse))
 					return;
 
 				elog(LOG,
 					 "got VoteResponse from acceptor %s:%s, voteGiven=" UINT64_FORMAT ", epoch=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X",
-					 wk->host, wk->port, wk->voteResponse.voteGiven, wk->voteResponse.epoch,
+					 wk->host, wk->port, wk->voteResponse.voteGiven, GetHighestTerm(&wk->voteResponse.termHistory),
 					 LSN_FORMAT_ARGS(wk->voteResponse.flushLsn),
 					 LSN_FORMAT_ARGS(wk->voteResponse.truncateLsn));
 
@@ -1426,18 +1538,16 @@ AdvancePollState(int i, uint32 events)
 				Assert(wk->voteResponse.term == propTerm);
 
 				/* Handshake completed, do we have quorum? */
-
-				if (++n_votes != quorum)
+				n_votes++;
+				if (n_votes < quorum)
 				{
-					/* Can't start streaming earlier than truncateLsn */
-					wk->startStreamingAt = truncateLsn;
-					Assert(msgQueueHead == NULL || wk->startStreamingAt >= msgQueueHead->req.beginLsn);
+					wk->state = SS_IDLE; /* can't do much yet, no quorum */
+				}
+				else if (n_votes > quorum)
+				{
 
-					/*
-					 * We are already streaming WAL: send all pending messages
-					 * to the attached walkeeper
-					 */
-					SendMessageToNode(i, msgQueueHead);
+					/* recovery already performed, just start streaming */
+					SendProposerElected(wk);
 				}
 				else
 				{
@@ -1461,20 +1571,6 @@ AdvancePollState(int i, uint32 events)
 						/* Perform recovery */
 						if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
 							elog(FATAL, "Failed to recover state");
-
-						/*
-						 * This message signifies epoch switch; it is needed
-						 * to make the switch happen on donor, as he won't get
-						 * any other messages until we start writing new WAL
-						 * (and we e.g. don't in --sync mode at all)
-						 */
-						BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
-
-						if (syncSafekeepers)
-						{
-							/* keep polling until all walkeepers are synced */
-							return;
-						}
 					}
 					else if (syncSafekeepers)
 					{
@@ -1482,11 +1578,49 @@ AdvancePollState(int i, uint32 events)
 						fprintf(stdout, "%X/%X\n", LSN_FORMAT_ARGS(propEpochStartLsn));
 						exit(0);
 					}
+
+					for (int i = 0; i < n_walkeepers; i++)
+					{
+						if (walkeeper[i].state == SS_IDLE)
+							SendProposerElected(&walkeeper[i]);
+					}
+
+					if (syncSafekeepers)
+					{
+						/*
+						 * Queue empty message to enforce receiving feedback
+						 * even from nodes who are fully recovered; this is
+						 * required to learn they switched epoch which finishes
+						 * sync-safeekepers who doesn't generate any real new
+						 * records. Will go away once we switch to async acks.
+						 */
+						BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
+
+						/* keep polling until all walkeepers are synced */
+						return;
+					}
+
 					WalProposerStartStreaming(propEpochStartLsn);
 					/* Should not return here */
 				}
 
 				break;
+
+			/* Flush proposer announcement message */
+			case SS_SEND_ELECTED_FLUSH:
+
+				/*
+				 * AsyncFlush ensures we only move on to SS_RECV_FEEDBACK once
+				 * the flush completes. If we still have more to do, we'll
+				 * wait until the next poll comes along.
+				 */
+				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
+					return;
+				
+				StartStreaming(wk);
+
+				break;
+
 
 				/*
 				 * Idle state for sending WAL. Moved out only by calls to
@@ -1495,7 +1629,7 @@ AdvancePollState(int i, uint32 events)
 			case SS_IDLE:
 				elog(WARNING, "EOF from node %s:%s in %s state", wk->host,
 					 wk->port, FormatWalKeeperState(wk->state));
-				ResetConnection(i);
+				ResetConnection(wk);
 				break;
 
 				/*
@@ -1543,15 +1677,16 @@ AdvancePollState(int i, uint32 events)
 					 * message is stored after the end of the WalMessage
 					 * struct, in the allocation for each msg
 					 */
-					if (!AsyncWrite(i, req,
+					if (!AsyncWrite(wk, req,
 									sizeof(AppendRequestHeader) + req->endLsn -
 									req->beginLsn,
-									SS_SEND_WAL_FLUSH, SS_RECV_FEEDBACK))
+									SS_SEND_WAL_FLUSH))
 					{
 						if (req != &msg->req)
 							free(req);
 						return;
 					}
+					wk->state = SS_RECV_FEEDBACK;
 					if (req != &msg->req)
 						free(req);
 
@@ -1566,8 +1701,10 @@ AdvancePollState(int i, uint32 events)
 				 * the flush completes. If we still have more to do, we'll
 				 * wait until the next poll comes along.
 				 */
-				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0, SS_RECV_FEEDBACK))
+				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
 					return;
+
+				wk->state = SS_RECV_FEEDBACK;
 
 				break;
 
@@ -1585,7 +1722,7 @@ AdvancePollState(int i, uint32 events)
 					 * necessary error handling or state setting is taken care
 					 * of. We can leave any other work until later.
 					 */
-					if (!AsyncRead(i, &wk->feedback, sizeof(wk->feedback)))
+					if (!AsyncReadFixed(i, &wk->feedback, sizeof(wk->feedback)))
 						return;
 
 					next = wk->currMsg->next;
@@ -1622,6 +1759,35 @@ AdvancePollState(int i, uint32 events)
 	}
 }
 
+/* 
+ * Try to read CopyData message from i'th safekeeper, resetting connection on
+ * failure.
+ */
+static bool
+AsyncRead(int i, char **buf, int *buf_size)
+{
+	WalKeeper  *wk = &walkeeper[i];
+
+	switch (walprop_async_read(wk->conn, buf, buf_size))
+	{
+		case PG_ASYNC_READ_SUCCESS:
+			return true;
+
+		case PG_ASYNC_READ_TRY_AGAIN:
+			/* WL_SOCKET_READABLE is always set during copyboth */
+			return false;
+
+		case PG_ASYNC_READ_FAIL:
+			elog(WARNING, "Failed to read from node %s:%s in %s state: %s", wk->host,
+				 wk->port, FormatWalKeeperState(wk->state),
+				 walprop_error_message(wk->conn));
+			ShutdownConnection(wk);
+			return false;
+	}
+	Assert(false);
+	return false;
+}
+
 /*
  * Reads a CopyData block from the 'i'th WAL keeper's postgres connection,
  * returning whether the read was successful.
@@ -1631,35 +1797,14 @@ AdvancePollState(int i, uint32 events)
  * failed, a warning is emitted and the connection is reset.
  */
 static bool
-AsyncRead(int i, void *value, size_t value_size)
+AsyncReadFixed(int i, void *value, size_t value_size)
 {
 	WalKeeper  *wk = &walkeeper[i];
 	char	   *buf = NULL;
 	int			buf_size = -1;
-	uint32		events;
 
-	switch (walprop_async_read(wk->conn, &buf, &buf_size))
-	{
-			/* On success, there's just a couple more things we'll check below */
-		case PG_ASYNC_READ_SUCCESS:
-			break;
-
-			/*
-			 * If we need more input, wait until the socket is read-ready and
-			 * try again.
-			 */
-		case PG_ASYNC_READ_TRY_AGAIN:
-			UpdateEventSet(wk, WL_SOCKET_READABLE);
-			return false;
-
-		case PG_ASYNC_READ_FAIL:
-			elog(WARNING, "Failed to read from node %s:%s in %s state: %s",
-				 wk->host, wk->port,
-				 FormatWalKeeperState(wk->state),
-				 walprop_error_message(wk->conn));
-			ShutdownConnection(i);
-			return false;
-	}
+	if (!(AsyncRead(i, &buf, &buf_size)))
+		return false;
 
 	/*
 	 * If we get here, the read was ok, but we still need to check it was the
@@ -1677,12 +1822,66 @@ AsyncRead(int i, void *value, size_t value_size)
 	/* Copy the resulting info into place */
 	memcpy(value, buf, buf_size);
 
-	/* Update the events for the WalKeeper, if it's going to wait */
-	events = WalKeeperStateDesiredEvents(wk->state);
-	if (events)
-		UpdateEventSet(wk, events);
-
 	return true;
+}
+
+/*
+ * Read next message with known type into provided struct. 
+ * TODO: migrate AsyncReadFixed here for all messages
+ */
+static bool
+AsyncReadMessage(int i, AcceptorProposerMessage *anymsg)
+{
+	WalKeeper  *wk = &walkeeper[i];
+	char *buf;
+	int buf_size;
+	uint64 tag;
+	StringInfoData s;
+
+	if (!(AsyncRead(i, &buf, &buf_size)))
+		return false;
+
+	/* parse it */
+	s.data = buf;
+	s.len = buf_size;
+	s.cursor = 0;
+
+	tag = pq_getmsgint64_le(&s);
+	if (tag != anymsg->tag)
+	{
+		elog(WARNING, "unexpected message tag %c from node %s:%s in state %s", (char) tag, wk->host,
+			 wk->port, FormatWalKeeperState(wk->state));
+		ResetConnection(wk);
+		return false;
+	}
+
+	switch (tag)
+	{
+		case 'v':
+		{
+			VoteResponse *msg = (VoteResponse *) anymsg;
+
+			msg->term = pq_getmsgint64_le(&s);
+			msg->voteGiven = pq_getmsgint64_le(&s);
+			msg->flushLsn = pq_getmsgint64_le(&s);
+			msg->truncateLsn = pq_getmsgint64_le(&s);
+			msg->termHistory.n_entries = pq_getmsgint32_le(&s);
+			msg->termHistory.entries = palloc(sizeof(TermSwitchEntry) * msg->termHistory.n_entries);
+			for (int i = 0; i < msg->termHistory.n_entries; i++)
+			{
+				msg->termHistory.entries[i].term = pq_getmsgint64_le(&s);
+				msg->termHistory.entries[i].lsn = pq_getmsgint64_le(&s);
+			}
+			pq_getmsgend(&s);
+			return true;
+		}
+
+		default:
+		{
+			Assert(false);
+			return false;
+		}
+	}
 }
 
 /*
@@ -1702,7 +1901,7 @@ BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state)
 		elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
 			 wk->host, wk->port, FormatWalKeeperState(wk->state),
 			 walprop_error_message(wk->conn));
-		ShutdownConnection(i);
+		ShutdownConnection(wk);
 		return false;
 	}
 
@@ -1721,23 +1920,18 @@ BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state)
 
 /*
  * Starts a write into the 'i'th WAL keeper's postgres connection, moving to
- * success_state only when the write succeeds. If the write needs flushing,
- * moves to flush_state.
+ * flush_state (adjusting eventset) if write still needs flushing.
  *
- * Returns false only if the write immediately fails. Upon failure, a warning is
- * emitted and the connection is reset.
+ * Returns false if sending is unfinished (requires flushing or conn failed).
+ * Upon failure, a warning is emitted and the connection is reset.
  */
 static bool
-AsyncWrite(int i, void *msg, size_t msg_size, WalKeeperState flush_state, WalKeeperState success_state)
+AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state)
 {
-	WalKeeper  *wk = &walkeeper[i];
-	uint32		events;
-
 	switch (walprop_async_write(wk->conn, msg, msg_size))
 	{
 		case PG_ASYNC_WRITE_SUCCESS:
-			wk->state = success_state;
-			break;
+			return true;
 		case PG_ASYNC_WRITE_TRY_FLUSH:
 
 			/*
@@ -1746,37 +1940,30 @@ AsyncWrite(int i, void *msg, size_t msg_size, WalKeeperState flush_state, WalKee
 			 * this function
 			 */
 			wk->state = flush_state;
-			break;
+			UpdateEventSet(wk, WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE);
+			return false;
 		case PG_ASYNC_WRITE_FAIL:
 			elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
 				 wk->host, wk->port, FormatWalKeeperState(wk->state),
 				 walprop_error_message(wk->conn));
-			ShutdownConnection(i);
+			ShutdownConnection(wk);
+			return false;
+		default:
+		    Assert(false);
 			return false;
 	}
-
-	/* If the new state will be waiting for something, update the event set */
-	events = WalKeeperStateDesiredEvents(wk->state);
-	if (events)
-		UpdateEventSet(wk, events);
-
-	return true;
 }
 
 /*
  * Flushes a previous call to AsyncWrite. This only needs to be called when the
  * socket becomes read or write ready *after* calling AsyncWrite.
  *
- * If flushing completes, moves to 'success_state' and returns true. If more
- * flushes are needed, does nothing and returns true.
- *
- * On failure, emits a warning, resets the connection, and returns false.
+ * If flushing successfully completes returns true, otherwise false.
  */
 static bool
-AsyncFlush(int i, bool socket_read_ready, WalKeeperState success_state)
+AsyncFlush(int i, bool socket_read_ready)
 {
 	WalKeeper  *wk = &walkeeper[i];
-	uint32		events;
 
 	/*---
 	 * PQflush returns:
@@ -1787,27 +1974,21 @@ AsyncFlush(int i, bool socket_read_ready, WalKeeperState success_state)
 	switch (walprop_flush(wk->conn, socket_read_ready))
 	{
 		case 0:
-			/* On success, move to the next state - that logic is further down */
-			break;
+			UpdateEventSet(wk, WL_SOCKET_READABLE); /* flush is done, unset write interest */
+			return true;
 		case 1:
 			/* Nothing to do; try again when the socket's ready */
-			return true;
+			return false;
 		case -1:
 			elog(WARNING, "Failed to flush write to node %s:%s in %s state: %s",
 				 wk->host, wk->port, FormatWalKeeperState(wk->state),
 				 walprop_error_message(wk->conn));
-			ResetConnection(i);
+			ResetConnection(wk);
+			return false;
+		default:
+			Assert(false);
 			return false;
 	}
-
-	wk->state = success_state;
-
-	/* If the new state will be waiting for something, update the event set */
-	events = WalKeeperStateDesiredEvents(wk->state);
-	if (events)
-		UpdateEventSet(wk, events);
-
-	return true;
 }
 
 /*
