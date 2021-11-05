@@ -148,6 +148,9 @@ typedef enum
 	 */
 	SS_WAIT_VERDICT,
 
+	/* need to flush ProposerAnnouncement */
+	SS_SEND_ELECTED_FLUSH,
+
 	/*
 	 * Waiting for quorum to send WAL. Idle state. If the socket becomes
 	 * read-ready, the connection has been closed.
@@ -180,7 +183,7 @@ typedef enum
 typedef uint64 term_t;
 
 /*
- * Proposer -> Acceptor messaging.
+ * Proposer <-> Acceptor messaging.
  */
 
 /* Initial Proposer -> Acceptor message */
@@ -196,6 +199,11 @@ typedef struct ProposerGreeting
 	TimeLineID timeline;
 	uint32	   walSegSize;
 } ProposerGreeting;
+
+typedef struct AcceptorProposerMessage
+{
+	uint64 tag;
+} AcceptorProposerMessage;
 
 /*
  * Acceptor -> Proposer initial response: the highest term acceptor voted for.
@@ -216,16 +224,46 @@ typedef struct VoteRequest
 	pg_uuid_t   proposerId; /* for monitoring/debugging */
 } VoteRequest;
 
+/* Element of term switching chain. */
+typedef struct TermSwitchEntry
+{
+	term_t term;
+	XLogRecPtr lsn;
+} TermSwitchEntry;
+
+typedef struct TermHistory
+{
+	uint32 n_entries;
+	TermSwitchEntry *entries;
+} TermHistory;
+
 /* Vote itself, sent from safekeeper to proposer */
 typedef struct VoteResponse {
-	uint64 tag;
-	term_t term; /* not really needed, just adds observability */
+	AcceptorProposerMessage apm;
+	term_t term;
 	uint64 voteGiven;
-    /// Safekeeper's log position, to let proposer choose the most advanced one
-	term_t epoch;
+	/*
+	 * Safekeeper flush_lsn (end of WAL) + history of term switches allow
+     * proposer to choose the most advanced one.
+	 */
 	XLogRecPtr flushLsn;
 	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some walkeeper */
+	TermHistory termHistory;
 } VoteResponse;
+
+/*
+ * Proposer -> Acceptor message announcing proposer is elected and communicating
+ * epoch history to it.
+ */
+typedef struct ProposerElected
+{
+	uint64 tag;
+	term_t term;
+	/* proposer will send since this point */
+	XLogRecPtr startStreamingAt;
+	/* history of term switches up to this proposer */
+	TermHistory *termHistory;
+} ProposerElected;
 
 /*
  * Header of request with WAL message sent from proposer to walkeeper.
@@ -289,7 +327,6 @@ typedef struct AppendResponse
 	 */
 	uint64 tag;
 	term_t     term;
-	term_t epoch;
 	XLogRecPtr flushLsn;
 	// Safekeeper reports back his awareness about which WAL is committed, as
 	// this is a criterion for walproposer --sync mode exit
@@ -316,6 +353,7 @@ typedef struct WalKeeper
 	 * reach SS_SEND_WAL; not before.
 	 */
 	WalProposerConn*   conn;
+	StringInfoData outbuf;
 
 	WalMessage*        currMsg;       /* message been send to the receiver */
 
@@ -325,8 +363,7 @@ typedef struct WalKeeper
 	VoteResponse	   voteResponse;  /* the vote */
 	AppendResponse feedback;		  /* feedback to master */
 	/*
-	 * streaming must be started at the record boundary which is saved here, if
-	 * it differs from the chunk start
+	 * Streaming will start here; must be record boundary.
 	 */
 	XLogRecPtr startStreamingAt;
 } WalKeeper;
@@ -341,6 +378,10 @@ char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
 void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
 bool       HexDecodeString(uint8 *result, char *input, int nbytes);
+uint32     pq_getmsgint32_le(StringInfo msg);
+uint64     pq_getmsgint64_le(StringInfo msg);
+void	   pq_sendint32_le(StringInfo buf, uint32 i);
+void	   pq_sendint64_le(StringInfo buf, uint64 i);
 void       WalProposerPoll(void);
 void       WalProposerRegister(void);
 void       ProcessStandbyReply(XLogRecPtr	writePtr,
