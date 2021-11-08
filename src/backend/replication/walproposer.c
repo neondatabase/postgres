@@ -978,7 +978,9 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 			}
 			else
 			{
-				Assert(buf[0] == 'w');
+				Assert(buf[0] == 'w' || buf[0] == 'k');
+				if (buf[0] == 'k')
+					continue; /* keepalive */
 				memcpy(&rec_start_lsn, &buf[XLOG_HDR_START_POS],
 					   sizeof rec_start_lsn);
 				rec_start_lsn = pg_ntoh64(rec_start_lsn);
