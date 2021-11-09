@@ -73,6 +73,7 @@ static XLogRecPtr lastSentLsn;	/* WAL has been appended to msg queue up to
 								 * this point */
 static XLogRecPtr lastSentCommitLsn;	/* last commitLsn broadcast to
 										 * walkeepers */
+static XLogRecPtr acknowledgedLsn; /* LSN acknowledged by all walkeepers */
 static ProposerGreeting proposerGreeting;
 static WaitEventSet *waitEvents;
 static AppendResponse lastFeedback;
@@ -422,7 +423,7 @@ HandleWalKeeperResponse(void)
 	 * ack only on record boundaries.
 	 */
 	minFlushLsn = CalculateMinFlushLsn();
-	if (minFlushLsn > truncateLsn && minFlushLsn <= minQuorumLsn)
+	if (minFlushLsn > truncateLsn && minFlushLsn <= minQuorumLsn && minFlushLsn <= acknowledgedLsn)
 		truncateLsn = minFlushLsn;
 
 	/* Cleanup message queue up to truncateLsn, but only messages received by everyone */
@@ -1590,6 +1591,15 @@ AdvancePollState(int i, uint32 events)
 					wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms
 													 * receiving of this
 													 * message */
+
+					/* If the current message was received by all safekeepers,
+					 * update acknowledgedLsn.
+					 */
+					if (wk->currMsg->ackMask == ((1 << n_walkeepers) - 1))
+					{
+						Assert(wk->currMsg->req.endLsn >= acknowledgedLsn);
+						acknowledgedLsn = wk->currMsg->req.endLsn;
+					}
 
 					wk->currMsg = NULL;
 					HandleWalKeeperResponse();
