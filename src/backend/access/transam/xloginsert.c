@@ -152,12 +152,14 @@ XLogBeginInsert(void)
 		{
 			XLogRecPtr replicaWriteLsn;
 			XLogRecPtr replicaFlushLsn;
+			XLogRecPtr replicaApplyLsn;
 			XLogRecPtr myFlushLsn = GetFlushRecPtr();
 
-			GetMinReplicaLsn(&replicaWriteLsn, &replicaFlushLsn);
+			GetMinReplicaLsn(&replicaWriteLsn, &replicaFlushLsn, &replicaApplyLsn);
 
-			if ((replicaWriteLsn != UnknownXLogRecPtr
-				 && myFlushLsn > replicaWriteLsn + max_replication_write_lag*MB) ||
+			//TODO: rename max_replication_write_lag to max_replication_apply_lag ?
+			if ((replicaApplyLsn != UnknownXLogRecPtr
+				 && myFlushLsn > replicaApplyLsn + max_replication_write_lag*MB) ||
 				(replicaFlushLsn != UnknownXLogRecPtr
 				 && myFlushLsn > replicaFlushLsn + max_replication_flush_lag*MB))
 			{

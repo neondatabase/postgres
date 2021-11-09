@@ -391,9 +391,15 @@ HandleWalKeeperResponse(void)
 
 		/* advance the replication slot */
 		if (!syncSafekeepers)
-			ProcessStandbyReply(lastFeedback.diskConsistentLsn,
+			ProcessStandbyReply(
+								// write_lsn
+								// Not used, because we use SYNCHRONOUS_COMMIT_REMOTE_FLUSH.
 								lastFeedback.flushLsn,
-								InvalidXLogRecPtr, GetCurrentTimestamp(), false);
+								//flush_lsn - This is what durably stored in WAL service.
+								lastFeedback.flushLsn,
+								//apply_lsn - This is what processed and durably saved at pageserver.
+								lastFeedback.diskConsistentLsn,
+								GetCurrentTimestamp(), false);
 	}
 
 	CombineHotStanbyFeedbacks(&hsFeedback);

@@ -3746,10 +3746,11 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
  * Get minimal write and flush LSN among all live replicas
  */
 void
-GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn)
+GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply_lsn)
 {
 	XLogRecPtr min_write_lsn = UnknownXLogRecPtr;
 	XLogRecPtr min_flush_lsn = UnknownXLogRecPtr;
+	XLogRecPtr min_apply_lsn = UnknownXLogRecPtr;
 	for (int i = 0; i < max_wal_senders; i++)
 	{
 		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
@@ -3762,11 +3763,14 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn)
 			 */
 			XLogRecPtr written = walsnd->write;
 			XLogRecPtr flushed = walsnd->flush;
+			XLogRecPtr applied = walsnd->apply;
 			min_write_lsn = Min(written, min_write_lsn);
 			min_flush_lsn = Min(flushed, min_flush_lsn);
+			min_apply_lsn = Min(applied, min_apply_lsn);
 		}
 	}
 	*write_lsn = min_write_lsn;
 	*flush_lsn = min_flush_lsn;
+	*apply_lsn = min_apply_lsn;
 }
 
