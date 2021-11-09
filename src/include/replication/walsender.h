@@ -48,7 +48,7 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
-extern void GetMinReplicaLsn(XLogRecPtr* write, XLogRecPtr* flush);
+extern void GetMinReplicaLsn(XLogRecPtr* write, XLogRecPtr* flush, XLogRecPtr* apply);
 /*
  * Remember that we want to wakeup walsenders later
  *
