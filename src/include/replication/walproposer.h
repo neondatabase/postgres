@@ -327,11 +327,12 @@ typedef struct AppendResponse
 	 */
 	uint64 tag;
 	term_t     term;
+	// TODO: add comment
 	XLogRecPtr flushLsn;
 	// Safekeeper reports back his awareness about which WAL is committed, as
 	// this is a criterion for walproposer --sync mode exit
 	XLogRecPtr commitLsn;
-	// Part of WALL applied and written to the disk by all pageservers
+	// Part of WAL applied and written to the disk by all pageservers
 	XLogRecPtr diskConsistentLsn;
 	HotStandbyFeedback hs;
 } AppendResponse;
