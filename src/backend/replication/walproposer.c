@@ -870,7 +870,7 @@ DetermineEpochStartLsn(void)
 	 */
 	if (propEpochStartLsn == InvalidXLogRecPtr && !syncSafekeepers)
 	{
-		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, SAB_Error);
+		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, true);
 		propEpochStartLsn = truncateLsn = MyReplicationSlot->data.restart_lsn;
 		ReplicationSlotRelease();
 		elog(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(propEpochStartLsn));
