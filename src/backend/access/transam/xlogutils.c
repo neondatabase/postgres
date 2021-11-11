@@ -355,6 +355,11 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 											 blkno, mode, NULL);
 			return BLK_DONE;
 		}
+		else if (XLogRecBlockImageApply(record, block_id))
+		{
+			*buf = InvalidBuffer;
+			return BLK_RESTORED;
+		}
 		else
 		{
 			*buf = InvalidBuffer;

@@ -538,6 +538,21 @@ typedef enum ExclusiveBackupState
  */
 static SessionBackupState sessionBackupState = SESSION_BACKUP_NONE;
 
+typedef struct buftag {
+	RelFileNode	node;
+	BlockNumber	blkno;
+	ForkNumber	forknum;
+} BufferTag;
+
+/*
+ * We use 4 locks here, to 1.) use a power of 2 for efficient modulo
+ * calculations, and 2.) to have some locks with no active role at
+ * all times; allowing some leeway in lock ordering in the replay loop.
+ */
+#define NUM_REPLAY_BUFFER_LOCKS 4
+
+LWLock *replayLock = NULL;
+
 /*
  * Shared state data for WAL insertion.
  */
@@ -721,6 +736,12 @@ typedef struct XLogCtlData
 	TimeLineID	lastReplayedTLI;
 	XLogRecPtr	replayEndRecPtr;
 	TimeLineID	replayEndTLI;
+
+	BufferTag replayingBlocks[XLR_MAX_BLOCK_ID + 1];
+
+	uint16		activeBufLock;
+	LWLockPadded bufferLocks[NUM_REPLAY_BUFFER_LOCKS];
+
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
 
@@ -945,6 +966,8 @@ static void CleanupBackupHistory(void);
 static void UpdateMinRecoveryPoint(XLogRecPtr lsn, bool force);
 static XLogRecord *ReadRecord(XLogReaderState *xlogreader,
 							  int emode, bool fetching_ckpt);
+static LWLock *XLogGetReplayBufferLock();
+static LWLock *XLogGetNextReplayBufferLock();
 static void CheckRecoveryConsistency(void);
 static XLogRecord *ReadCheckpointRecord(XLogReaderState *xlogreader,
 										XLogRecPtr RecPtr, int whichChkpt, bool report);
@@ -7437,6 +7460,11 @@ StartupXLOG(void)
 					(errmsg("redo starts at %X/%X",
 							LSN_FORMAT_ARGS(ReadRecPtr))));
 
+			for (int i = 0; i < NUM_REPLAY_BUFFER_LOCKS; i++)
+			{
+				LWLockInitialize(&XLogCtl->bufferLocks[i].lock, LWTRANCHE_BUFFER_MAPPING);
+			}
+
 			/*
 			 * main redo apply loop
 			 */
@@ -7571,7 +7599,41 @@ StartupXLOG(void)
 				SpinLockAcquire(&XLogCtl->info_lck);
 				XLogCtl->replayEndRecPtr = EndRecPtr;
 				XLogCtl->replayEndTLI = ThisTimeLineID;
+				XLogCtl->activeBufLock = (XLogCtl->activeBufLock + 1) % NUM_REPLAY_BUFFER_LOCKS;
+
+				for (int i = 0; i <= XLR_MAX_BLOCK_ID; i++) {
+					if (i <= xlogreader->max_block_id && XLogRecHasBlockRef(xlogreader, i))
+					{
+						RelFileNode rnode;
+						BlockNumber blkno;
+						ForkNumber forknum;
+						XLogRecGetBlockTag(xlogreader, i, &rnode, &forknum, &blkno);
+
+						XLogCtl->replayingBlocks[i] = (BufferTag) {
+							.node = rnode,
+							.blkno = blkno,
+							.forknum = forknum
+						};
+					}
+					else
+					{
+						XLogCtl->replayingBlocks[i] = (BufferTag) {
+							.node = (RelFileNode) {0,0,0},
+							.blkno = 0,
+							.forknum = 0
+						};
+					}
+				}
 				SpinLockRelease(&XLogCtl->info_lck);
+
+				/*
+				 * Although this lock can still be held at this point in time,
+				 * the backends holding this lock all are all allocating buffers
+				 * that were not touched in the previous WAL record, or started
+				 * allocating after last record had finished replaying.
+				 * We expect that we don't need to wait too long.
+				 */
+				LWLockAcquire(XLogGetReplayBufferLock(), LW_EXCLUSIVE);
 
 				/*
 				 * If we are attempting to enter Hot Standby mode, process
@@ -7603,6 +7665,7 @@ StartupXLOG(void)
 				SpinLockAcquire(&XLogCtl->info_lck);
 				XLogCtl->lastReplayedEndRecPtr = EndRecPtr;
 				XLogCtl->lastReplayedTLI = ThisTimeLineID;
+				LWLockRelease(XLogGetReplayBufferLock());
 				SpinLockRelease(&XLogCtl->info_lck);
 
 				/*
@@ -8256,6 +8319,107 @@ StartupXLOG(void)
 	 */
 	if (promoted)
 		RequestCheckpoint(CHECKPOINT_FORCE);
+}
+
+static LWLock *
+XLogGetReplayBufferLock()
+{
+	Assert(XLogCtl->activeBufLock >= 0 &&
+		   XLogCtl->activeBufLock < NUM_REPLAY_BUFFER_LOCKS);
+	return &XLogCtl->bufferLocks[XLogCtl->activeBufLock].lock;
+}
+
+static LWLock *
+XLogGetNextReplayBufferLock()
+{
+	Assert(XLogCtl->activeBufLock >= 0 &&
+		   XLogCtl->activeBufLock < NUM_REPLAY_BUFFER_LOCKS);
+	return &XLogCtl->bufferLocks[(XLogCtl->activeBufLock + 1) % NUM_REPLAY_BUFFER_LOCKS].lock;
+}
+
+void
+XLogReplayContinue()
+{
+	if (replayLock != NULL)
+		LWLockRelease(replayLock);
+	replayLock = NULL;
+}
+
+/*
+ * XLogReplayGetLsnForBuffer
+ *		Get the LSN that we want this buffer to have
+ *
+ * We will lock ReplayBlockFilterLock and return true if
+ * RecoveryInProgress().
+ */
+bool
+XLogReplayPauseOperations(RelFileNode node, BlockNumber blkno,
+						  ForkNumber fnum)
+{
+	BufferTag	tag;
+	int			index = -1;
+	if (!RecoveryInProgress() || !StandbyMode)
+	{
+		replayLock = NULL;
+		return false;
+	}
+
+	SpinLockAcquire(&XLogCtl->info_lck);
+
+	/*
+	 * If we're not currently in the process of replaying a record, replay
+	 * can't be accessign the buffer.
+	 */
+	if (XLogCtl->lastReplayedEndRecPtr == XLogCtl->replayEndRecPtr) {
+		/* lock replay so that we don't move to modifying the buffers */
+		replayLock = XLogGetNextReplayBufferLock();
+		LWLockAcquire(replayLock, LW_SHARED);
+		SpinLockRelease(&XLogCtl->info_lck);
+		return true;
+	}
+
+	/* initialize the search query */
+	tag = (BufferTag) {
+		.node = node,
+		.blkno = blkno,
+		.forknum = fnum
+	};
+
+	for (int i = 0; i <= XLR_MAX_BLOCK_ID; i++)
+	{
+		/* find the buffer tag in the array of buffers */
+		if (memcmp(&tag, &XLogCtl->replayingBlocks[i], sizeof(BufferTag)) == 0)
+			index = i;
+	}
+
+	/*
+	 * The requested buffer is not modified in the WAL record currently being
+	 * replayed, so lock the next replay lock in shared mode to prevent the
+	 * next wal record from starting it's replay.
+	 */
+	if (index < 0)
+	{
+		replayLock = XLogGetNextReplayBufferLock();
+		LWLockAcquire(replayLock, LW_SHARED);
+		SpinLockRelease(&XLogCtl->info_lck);
+		return true;
+	}
+	else
+	{
+		/*
+		 * The replay process holds the current lock. We take a reference to
+		 * that lock, and wait for the lock to release. Then, we re-do the
+		 * whole iteration, as we cannot be certain that the next
+		 */
+		LWLock *waitfor = XLogGetReplayBufferLock();
+		replayLock = XLogGetNextReplayBufferLock();
+		LWLockAcquire(replayLock, LW_SHARED);
+		SpinLockRelease(&XLogCtl->info_lck);
+
+		if (LWLockAcquireOrWait(waitfor, LW_SHARED))
+			LWLockRelease(waitfor);
+		return true;
+	}
 }
 
 /*
@@ -10511,7 +10675,10 @@ xlog_redo(XLogReaderState *record)
 				 */
 			}
 			else if (result != BLK_RESTORED)
+			{
+				Assert(false);
 				elog(ERROR, "unexpected XLogReadBufferForRedo result when restoring backup block");
+			}
 			if (buffer != InvalidBuffer)
 				UnlockReleaseBuffer(buffer);
 		}

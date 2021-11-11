@@ -150,16 +150,24 @@ XLogBeginInsert(void)
 		/* Suspend writes until replicas catch up */
 		while (true)
 		{
-			XLogRecPtr replicaWriteLsn;
-			XLogRecPtr replicaFlushLsn;
-			XLogRecPtr myFlushLsn = GetFlushRecPtr();
+			XLogRecPtr	replicaWriteLsn;
+			XLogRecPtr	replicaFlushLsn;
+			XLogRecPtr	myFlushLsn = GetFlushRecPtr();
+			bool		wait = false;
 
 			GetMinReplicaLsn(&replicaWriteLsn, &replicaFlushLsn);
 
-			if ((replicaWriteLsn != UnknownXLogRecPtr
-				 && myFlushLsn > replicaWriteLsn + max_replication_write_lag*MB) ||
-				(replicaFlushLsn != UnknownXLogRecPtr
-				 && myFlushLsn > replicaFlushLsn + max_replication_flush_lag*MB))
+			if (max_replication_write_lag != 0 && (
+				replicaWriteLsn != UnknownXLogRecPtr
+				&& myFlushLsn > replicaWriteLsn + max_replication_write_lag*MB))
+				wait = true;
+
+			if (max_replication_flush_lag != 0 && (
+				replicaFlushLsn != InvalidXLogRecPtr
+				&& myFlushLsn > replicaFlushLsn + max_replication_flush_lag*MB))
+				wait = true;
+
+			if (wait)
 			{
 				(void) WaitLatch(MyLatch,
 								 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,

@@ -317,6 +317,9 @@ extern bool HotStandbyActiveInReplay(void);
 extern bool XLogInsertAllowed(void);
 extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
 extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
+extern bool XLogReplayPauseOperations(RelFileNode node, BlockNumber blkno,
+									  ForkNumber fnum);
+extern void XLogReplayContinue();
 extern XLogRecPtr GetXLogInsertRecPtr(void);
 extern XLogRecPtr GetXLogWriteRecPtr(void);
 extern RecoveryPauseState GetRecoveryPauseState(void);

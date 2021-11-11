@@ -14,6 +14,7 @@
 #ifndef BUFMGR_H
 #define BUFMGR_H
 
+#include "access/xlogreader.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
@@ -245,6 +246,8 @@ extern bool BgBufferSync(struct WritebackContext *wb_context);
 extern void AtProcExit_LocalBuffers(void);
 
 extern void TestForOldSnapshot_impl(Snapshot snapshot, Relation relation);
+
+extern bool only_buffered_filter(XLogReaderState *record, uint8 block_id);
 
 /* in freelist.c */
 extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);

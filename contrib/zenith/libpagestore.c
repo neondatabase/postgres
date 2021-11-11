@@ -17,6 +17,8 @@
 #include "pagestore_client.h"
 #include "fmgr.h"
 #include "access/xlog.h"
+#include "access/xlogutils.h"
+#include "storage/bufmgr.h"
 
 #include "libpq-fe.h"
 #include "libpq/pqformat.h"
@@ -41,8 +43,12 @@ void		_PG_init(void);
 
 bool		connected = false;
 PGconn	   *pageserver_conn;
+int			iterations = 0;
 
 static ZenithResponse *zenith_call(ZenithRequest *request);
+static bool replica_redo_read_buffer_filter(XLogReaderState *record,
+											uint8 block_id);
+
 page_server_api api = {
 	.request = zenith_call
 };
@@ -350,5 +356,12 @@ _PG_init(void)
 		zenith_log(PqPageStoreTrace, "set zenith_smgr hook");
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
+		redo_read_buffer_filter = replica_redo_read_buffer_filter;
 	}
+}
+
+static bool
+replica_redo_read_buffer_filter(XLogReaderState *record, uint8 block_id)
+{
+	return only_buffered_filter(record, block_id);
 }

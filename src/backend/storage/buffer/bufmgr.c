@@ -1174,6 +1174,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	/* Loop here in case we have to try another victim buffer */
 	for (;;)
 	{
+		bool	replayPaused;
 		/*
 		 * Ensure, while the spinlock's not yet held, that there's a free
 		 * refcount entry.
@@ -1276,6 +1277,12 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		}
 
 		/*
+		 * Before updating the buffer mappings; make sure that there's no
+		 * insecure concurrently running replay.
+		 */
+		replayPaused = XLogReplayPauseOperations(newTag.rnode, newTag.blockNum, newTag.forkNum);
+
+		/*
 		 * To change the association of a valid buffer, we'll need to have
 		 * exclusive lock on both the old and new mapping partitions.
 		 */
@@ -1328,6 +1335,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 * tag.
 		 */
 		buf_id = BufTableInsert(&newTag, newHash, buf->buf_id);
+
+		if (replayPaused)
+			XLogReplayContinue();
 
 		if (buf_id >= 0)
 		{
@@ -4899,4 +4909,28 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+bool
+only_buffered_filter(XLogReaderState *record, uint8 block_id)
+{
+	BufferTag	target_tag;
+	uint32		target_hash;
+	LWLock	   *partitionLock;
+	int			buf_id;
+
+	if (!XLogRecGetBlockTag(record, block_id,
+							&target_tag.rnode, &target_tag.forkNum, &target_tag.blockNum))
+	{
+		/* Caller specified a bogus block_id */
+		elog(PANIC, "failed to locate backup block with ID %d", block_id);
+	}
+
+	target_hash = BufTableHashCode(&target_tag);
+	partitionLock = BufMappingPartitionLock(target_hash);
+
+	LWLockAcquire(partitionLock, LW_SHARED);
+	buf_id = BufTableLookup(&target_tag, target_hash);
+	LWLockRelease(partitionLock);
+	return buf_id >= 0;
 }
