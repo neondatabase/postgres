@@ -64,7 +64,7 @@ typedef struct
 } registered_buffer;
 
 /* GUCs */
-int			max_replication_write_lag;
+int			max_replication_apply_lag;
 int			max_replication_flush_lag;
 
 static registered_buffer *registered_buffers;
@@ -122,7 +122,6 @@ static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 									uint16 hole_length, char *dest, uint16 *dlen);
 
 /* Timeout in milliseconds for delaying WAL inserts to avoid WAL overflow */
-#define BACK_PRESSURE_TIMEOUT 100
 #define MB ((XLogRecPtr)1024*1024)
 
 /*
@@ -142,42 +141,6 @@ XLogBeginInsert(void)
 
 	if (begininsert_called)
 		elog(ERROR, "XLogBeginInsert was already called");
-
-	if (max_replication_write_lag != 0 || max_replication_flush_lag != 0)
-	{
-		uint64 slept = 0;
-
-		/* Suspend writes until replicas catch up */
-		while (true)
-		{
-			XLogRecPtr replicaWriteLsn;
-			XLogRecPtr replicaFlushLsn;
-			XLogRecPtr replicaApplyLsn;
-			XLogRecPtr myFlushLsn = GetFlushRecPtr();
-
-			GetMinReplicaLsn(&replicaWriteLsn, &replicaFlushLsn, &replicaApplyLsn);
-
-			//TODO: rename max_replication_write_lag to max_replication_apply_lag ?
-			if ((replicaApplyLsn != UnknownXLogRecPtr
-				 && myFlushLsn > replicaApplyLsn + max_replication_write_lag*MB) ||
-				(replicaFlushLsn != UnknownXLogRecPtr
-				 && myFlushLsn > replicaFlushLsn + max_replication_flush_lag*MB))
-			{
-				(void) WaitLatch(MyLatch,
-								 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
-								 BACK_PRESSURE_TIMEOUT,
-								 WAIT_EVENT_BACK_PRESSURE);
-				ResetLatch(MyLatch);
-				slept += BACK_PRESSURE_TIMEOUT;
-			}
-			else
-				break;
-		}
-
-		// XXX: INFO will cause a lot of regression tests to fail.
-		if (slept > 0)
-			elog(DEBUG1, "slept for " UINT64_FORMAT " ms while waiting for all replicas to catch up", slept);
-	}
 
 	begininsert_called = true;
 }

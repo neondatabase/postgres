@@ -54,6 +54,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
+#include "replication/walsender.h"
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -4056,6 +4057,41 @@ UnlockBuffers(void)
 	}
 }
 
+// Check if we need to suspend inserts because of lagging replication.
+static uint64
+backpressureThrottle()
+{
+	if (max_replication_apply_lag != 0 || max_replication_flush_lag != 0)
+	{
+		XLogRecPtr writePtr;
+		XLogRecPtr flushPtr;
+		XLogRecPtr applyPtr;
+		XLogRecPtr myFlushLsn = GetFlushRecPtr();
+
+		GetMinReplicaLsn(&writePtr, &flushPtr, &applyPtr);
+		#define MB ((XLogRecPtr)1024*1024)
+
+		elog(DEBUG2, "current flushLsn %X/%X StandbyReply: write %X/%X flush %X/%X apply %X/%X",
+			LSN_FORMAT_ARGS(myFlushLsn),
+			LSN_FORMAT_ARGS(writePtr),
+			LSN_FORMAT_ARGS(flushPtr),
+			LSN_FORMAT_ARGS(applyPtr));
+
+		if ((flushPtr != UnknownXLogRecPtr
+			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
+		{
+			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
+		}
+
+		if ((applyPtr != UnknownXLogRecPtr
+			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
+		{
+			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
+		}
+	}
+	return 0;
+}
+
 /*
  * Acquire or release the content_lock for the buffer.
  */
@@ -4075,7 +4111,22 @@ LockBuffer(Buffer buffer, int mode)
 	else if (mode == BUFFER_LOCK_SHARE)
 		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_SHARED);
 	else if (mode == BUFFER_LOCK_EXCLUSIVE)
+	{
+		// Suspend writes until replicas catch up
+		uint64 lag = backpressureThrottle();
+		while (lag > 0)
+		{
+			elog(DEBUG2, "BackpressureThrottle LockBuffer(LW_EXCLUSIVE): lag %lu", lag);
+			#define BACK_PRESSURE_TIMEOUT 10000L // 0.01 sec
+			pg_usleep(BACK_PRESSURE_TIMEOUT);
+			lag = backpressureThrottle();
+
+			// We can hang here for a while. Don't block cancel requests.
+			CHECK_FOR_INTERRUPTS();
+		}
+
 		LWLockAcquire(BufferDescriptorGetContentLock(buf), LW_EXCLUSIVE);
+	}
 	else
 		elog(ERROR, "unrecognized buffer lock mode: %d", mode);
 }
