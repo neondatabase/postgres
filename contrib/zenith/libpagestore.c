@@ -42,6 +42,8 @@ void		_PG_init(void);
 bool		connected = false;
 PGconn	   *pageserver_conn;
 
+char	   *page_server_connstring_raw;
+
 static ZenithResponse *zenith_call(ZenithRequest *request);
 page_server_api api = {
 	.request = zenith_call
@@ -52,93 +54,8 @@ zenith_connect()
 {
 	char	   *query;
 	int			ret;
-	char	   *auth_token;
-	char	   *err = NULL;
-	PQconninfoOption *conn_options;
-	PQconninfoOption *conn_option;
-	int			noptions = 0;
 
-	/* this is heavily inspired by psql/command.c::do_connect */
-	conn_options = PQconninfoParse(page_server_connstring, &err);
-
-	if (conn_options == NULL)
-	{
-		/* The error string is malloc'd, so we must free it explicitly */
-		char	   *errcopy = err ? pstrdup(err) : "out of memory";
-
-		PQfreemem(err);
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("invalid connection string syntax: %s", errcopy)));
-	}
-
-	/*
-	 * Trying to populate pageserver connection string with auth token from
-	 * environment. We are looking for password in with placeholder value like
-	 * $ENV_VAR_NAME, so if password field is present and starts with $ we try
-	 * to fetch environment variable value and fail loudly if it is not set.
-	 */
-	for (conn_option = conn_options; conn_option->keyword != NULL; conn_option++)
-	{
-		noptions++;
-		if (strcmp(conn_option->keyword, "password") == 0)
-		{
-			if (conn_option->val != NULL && conn_option->val[0] != '\0')
-			{
-				/* ensure that this is a template */
-				if (strncmp(conn_option->val, "$", 1) != 0)
-					ereport(ERROR,
-							(errcode(ERRCODE_CONNECTION_EXCEPTION),
-							 errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])));
-
-				zenith_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
-				auth_token = getenv(&conn_option->val[1]);
-				if (!auth_token)
-				{
-					ereport(ERROR,
-							(errcode(ERRCODE_CONNECTION_EXCEPTION),
-							 errmsg("cannot get auth token, environment variable %s is not set", &conn_option->val[1])));
-				}
-				else
-				{
-					zenith_log(LOG, "using auth token from environment passed via env");
-
-					/*
-					 * inspired by PQconninfoFree and conninfo_storeval so
-					 * just free the old one and replace with freshly
-					 * malloc'ed one
-					 */
-					free(conn_option->val);
-					conn_option->val = strdup(auth_token);
-				}
-			}
-		}
-	}
-
-	/*
-	 * copy values from PQconninfoOption to key/value arrays because
-	 * PQconnectdbParams accepts options this way
-	 */
-	{
-		const char **keywords = malloc((noptions + 1) * sizeof(*keywords));
-		const char **values = malloc((noptions + 1) * sizeof(*values));
-		int			i = 0;
-
-		for (i = 0; i < noptions; i++)
-		{
-			keywords[i] = conn_options[i].keyword;
-			values[i] = conn_options[i].val;
-		}
-		/* add array terminator */
-		keywords[i] = NULL;
-		values[i] = NULL;
-
-		pageserver_conn = PQconnectdbParams(keywords, values, false);
-		free(keywords);
-		free(values);
-	}
-
-	PQconninfoFree(conn_options);
+	pageserver_conn = PQconnectdb(page_server_connstring);
 
 	if (PQstatus(pageserver_conn) == CONNECTION_BAD)
 	{
@@ -197,6 +114,7 @@ zenith_connect()
 		}
 	}
 
+	// FIXME: when auth is enabled this ptints JWT to logs
 	zenith_log(LOG, "libpqpagestore: connected to '%s'", page_server_connstring);
 
 	connected = true;
@@ -276,6 +194,96 @@ check_zenith_id(char **newval, void **extra, GucSource source)
 	return **newval == '\0' || HexDecodeString(zid, *newval, 16);
 }
 
+static char *
+substitute_pageserver_password(const char *page_server_connstring_raw)
+{
+	char	   *host = NULL;
+	char	   *port = NULL;
+	char	   *user = NULL;
+	char	   *auth_token = NULL;
+	char	   *err = NULL;
+	char	   *page_server_connstring = NULL;
+	PQconninfoOption *conn_options;
+	PQconninfoOption *conn_option;
+	MemoryContext oldcontext;
+	/*
+	 * Here we substitute password in connection string with an environment variable.
+	 * To simplify things we construct a connection string back with only known options.
+	 * In particular: host port user and password. We do not currently use other options and
+	 * constructing full connstring in an URI shape is quite messy.
+	 */
+
+	if (page_server_connstring_raw == NULL || page_server_connstring_raw[0] == '\0')
+		return NULL;
+
+	/* extract the auth token from the connection string */
+	conn_options = PQconninfoParse(page_server_connstring_raw, &err);
+	if (conn_options == NULL)
+	{
+		/* The error string is malloc'd, so we must free it explicitly */
+		char	   *errcopy = err ? pstrdup(err) : "out of memory";
+
+		PQfreemem(err);
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("invalid connection string syntax: %s", errcopy)));
+	}
+
+	/*
+	 * Trying to populate pageserver connection string with auth token from
+	 * environment. We are looking for password in with placeholder value like
+	 * $ENV_VAR_NAME, so if password field is present and starts with $ we try
+	 * to fetch environment variable value and fail loudly if it is not set.
+	 */
+	for (conn_option = conn_options; conn_option->keyword != NULL; conn_option++)
+	{
+		if (strcmp(conn_option->keyword, "host") == 0) {
+			if (conn_option->val != NULL && conn_option->val[0] != '\0')
+				host = conn_option->val;
+		}
+		else if (strcmp(conn_option->keyword, "port") == 0) {
+			if (conn_option->val != NULL && conn_option->val[0] != '\0')
+				port = conn_option->val;
+		}
+		else if (strcmp(conn_option->keyword, "user") == 0) {
+			if (conn_option->val != NULL && conn_option->val[0] != '\0')
+				user = conn_option->val;
+		}
+		else if (strcmp(conn_option->keyword, "password") == 0)
+		{
+			if (conn_option->val != NULL && conn_option->val[0] != '\0')
+			{
+				/* ensure that this is a template */
+				if (strncmp(conn_option->val, "$", 1) != 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_CONNECTION_EXCEPTION),
+							 errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])));
+
+				zenith_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
+				auth_token = getenv(&conn_option->val[1]);
+				if (!auth_token)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_CONNECTION_EXCEPTION),
+							 errmsg("cannot get auth token, environment variable %s is not set", &conn_option->val[1])));
+				}
+				else
+				{
+					zenith_log(LOG, "using auth token from environment passed via env");
+				}
+			}
+		}
+	}
+	// allocate connection string in a TopMemoryContext to make sure it is not freed
+	oldcontext = CurrentMemoryContext;
+	MemoryContextSwitchTo(TopMemoryContext);
+	page_server_connstring = psprintf("postgresql://%s:%s@%s:%s", user, auth_token ? auth_token : "", host, port);
+	MemoryContextSwitchTo(oldcontext);
+
+	PQconninfoFree(conn_options);
+	return page_server_connstring;
+}
+
 /*
  * Module initialization function
  */
@@ -285,7 +293,7 @@ _PG_init(void)
 	DefineCustomStringVariable("zenith.page_server_connstring",
 							   "connection string to the page server",
 							   NULL,
-							   &page_server_connstring,
+							   &page_server_connstring_raw,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
@@ -335,9 +343,14 @@ _PG_init(void)
 	zenith_log(PqPageStoreTrace, "libpqpagestore already loaded");
 	page_server = &api;
 
+	/* substitute password in pageserver_connstring */
+	page_server_connstring = substitute_pageserver_password(page_server_connstring_raw);
+
 	/* Is there more correct way to pass CustomGUC to postgres code? */
 	zenith_timeline_walproposer = zenith_timeline;
 	zenith_tenant_walproposer = zenith_tenant;
+	/* Walproposer instructcs safekeeper which pageserver to use for replication */
+	zenith_pageserver_connstring_walproposer = page_server_connstring;
 
 	if (wal_redo)
 	{
