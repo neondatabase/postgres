@@ -86,7 +86,7 @@ const int	SmgrTrace = DEBUG5;
 page_server_api *page_server;
 
 /* GUCs */
-char	   *page_server_connstring;
+char	   *page_server_connstring; // with substituted password
 char	   *callmemaybe_connstring;
 char	   *zenith_timeline;
 char	   *zenith_tenant;
