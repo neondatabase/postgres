@@ -283,9 +283,14 @@ ResetConnection(WalKeeper *wk)
 	 */
 	if (wk->conninfo[0] == '\0')
 	{
-		sprintf((char *) &wk->conninfo,
+		int written = 0;
+		written = snprintf((char *) &wk->conninfo, MAXCONNINFO,
 				"host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
 				wk->host, wk->port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+		// currently connection string is not that long, but once we pass something like jwt we might overflow the buffer,
+		// so it is better to be defensive and check that everything aligns well
+		if (written > MAXCONNINFO || written < 0)
+			elog(FATAL, "could not create connection string for walkeeper %s:%s", wk->host, wk->port);
 	}
 
 	wk->conn = walprop_connect_start((char *) &wk->conninfo);
@@ -495,6 +500,7 @@ HandleWalKeeperResponse(void)
 
 char	   *zenith_timeline_walproposer = NULL;
 char	   *zenith_tenant_walproposer = NULL;
+char	   *zenith_pageserver_connstring_walproposer = NULL;
 
 
 static void
@@ -566,6 +572,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	if (*zenith_tenant_walproposer != '\0' &&
 		!HexDecodeString(proposerGreeting.ztenantid, zenith_tenant_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
+
 	proposerGreeting.timeline = ThisTimeLineID;
 	proposerGreeting.walSegSize = wal_segment_size;
 
@@ -1337,17 +1344,26 @@ AdvancePollState(int i, uint32 events)
 				 * sending, wait for response with SS_WAIT_EXEC_RESULT
 				 */
 			case SS_EXEC_STARTWALPUSH:
-				if (!walprop_send_query(wk->conn, "START_WAL_PUSH"))
 				{
-					elog(WARNING, "Failed to send 'START_WAL_PUSH' query to walkeeper %s:%s: %s",
-						 wk->host, wk->port, walprop_error_message(wk->conn));
-					ShutdownConnection(wk);
-					return;
+					char *query = NULL;
+					if (zenith_pageserver_connstring_walproposer != NULL) {
+						query = psprintf("START_WAL_PUSH %s", zenith_pageserver_connstring_walproposer);
+					} else {
+						query = psprintf("START_WAL_PUSH");
+					}
+					if (!walprop_send_query(wk->conn, query))
+					{
+						pfree(query);
+						elog(WARNING, "Failed to send 'START_WAL_PUSH' query to walkeeper %s:%s: %s",
+							wk->host, wk->port, walprop_error_message(wk->conn));
+						ShutdownConnection(wk);
+						return;
+					}
+					pfree(query);
+					wk->state = SS_WAIT_EXEC_RESULT;
+					UpdateEventSet(wk, WL_SOCKET_READABLE);
+					break;
 				}
-
-				wk->state = SS_WAIT_EXEC_RESULT;
-				UpdateEventSet(wk, WL_SOCKET_READABLE);
-				break;
 
 			case SS_WAIT_EXEC_RESULT:
 				switch (walprop_get_query_result(wk->conn))
