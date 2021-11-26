@@ -3811,3 +3811,37 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 	*apply_lsn = min_apply_lsn;
 }
 
+// Check if we need to suspend inserts because of lagging replication.
+uint64
+backpressure_lag(void)
+{
+	if (max_replication_apply_lag != 0 || max_replication_flush_lag != 0)
+	{
+		XLogRecPtr writePtr;
+		XLogRecPtr flushPtr;
+		XLogRecPtr applyPtr;
+		XLogRecPtr myFlushLsn = GetFlushRecPtr();
+
+		GetMinReplicaLsn(&writePtr, &flushPtr, &applyPtr);
+		#define MB ((XLogRecPtr)1024*1024)
+
+		elog(DEBUG2, "current flushLsn %X/%X StandbyReply: write %X/%X flush %X/%X apply %X/%X",
+			LSN_FORMAT_ARGS(myFlushLsn),
+			LSN_FORMAT_ARGS(writePtr),
+			LSN_FORMAT_ARGS(flushPtr),
+			LSN_FORMAT_ARGS(applyPtr));
+
+		if ((flushPtr != UnknownXLogRecPtr
+			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
+		{
+			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
+		}
+
+		if ((applyPtr != UnknownXLogRecPtr
+			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
+		{
+			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
+		}
+	}
+	return 0;
+}
