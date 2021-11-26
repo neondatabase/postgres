@@ -3138,8 +3138,8 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
  * return; another interrupt could have arrived.  But we promise that
  * any pre-existing one will have been serviced.)
  */
-void
-ProcessInterrupts(void)
+static void
+ProcessInterrupts_pg(void)
 {
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
@@ -3379,6 +3379,36 @@ ProcessInterrupts(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+}
+
+void
+ProcessInterrupts(void)
+{
+	uint64 lag;
+
+	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
+		return;
+
+	// Don't throttle read only transactions
+	if (!TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
+	{
+		ProcessInterrupts_pg();
+		return;
+	}
+
+	#define BACK_PRESSURE_DELAY 10000L // 0.01 sec
+	while(true)
+	{
+		ProcessInterrupts_pg();
+
+		// Suspend writers until replicas catch up
+		lag = backpressure_lag();
+		if (lag <= 0)
+			break;
+
+		elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+		pg_usleep(BACK_PRESSURE_DELAY);
+	}
 }
 
 

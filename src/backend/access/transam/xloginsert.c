@@ -460,6 +460,11 @@ XLogInsert(RmgrId rmid, uint8 info)
 		return EndPos;
 	}
 
+	if (backpressure_lag() > 0)
+	{
+		InterruptPending = true;
+	}
+
 	do
 	{
 		XLogRecPtr	RedoRecPtr;
