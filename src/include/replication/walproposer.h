@@ -159,25 +159,32 @@ typedef enum
 	 * Moves to SS_SEND_WAL only by calls to SendMessageToNode.
 	 */
 	SS_IDLE,
+
+
 	/*
-	 * Start sending the message at currMsg. This state is only ever reached
-	 * through calls to SendMessageToNode.
-	 *
-	 * Sending needs to flush; immediately moves to SS_SEND_WAL_FLUSH.
+	 * Sending WAL to the node, receiving feedback from the node.
 	 */
-	SS_SEND_WAL,
-	/*
-	 * Flush the WAL message, repeated until successful. On success, moves to
-	 * SS_RECV_FEEDBACK.
-	 */
-	SS_SEND_WAL_FLUSH,
-	/*
-	 * Currently reading feedback from sending the WAL.
-	 *
-	 * After reading, moves to (SS_SEND_WAL or SS_IDLE) by calls to
-	 * SendMessageToNode.
-	 */
-	SS_RECV_FEEDBACK,
+	SS_ACTIVE_STATE,
+
+	// /*
+	//  * Start sending the message at currMsg. This state is only ever reached
+	//  * through calls to SendMessageToNode.
+	//  *
+	//  * Sending needs to flush; immediately moves to SS_SEND_WAL_FLUSH.
+	//  */
+	// SS_SEND_WAL,
+	// /*
+	//  * Flush the WAL message, repeated until successful. On success, moves to
+	//  * SS_RECV_FEEDBACK.
+	//  */
+	// SS_SEND_WAL_FLUSH,
+	// /*
+	//  * Currently reading feedback from sending the WAL.
+	//  *
+	//  * After reading, moves to (SS_SEND_WAL or SS_IDLE) by calls to
+	//  * SendMessageToNode.
+	//  */
+	// SS_RECV_FEEDBACK,
 } WalKeeperState;
 
 /* Consensus logical timestamp. */
@@ -357,7 +364,9 @@ typedef struct WalKeeper
 	WalProposerConn*   conn;
 	StringInfoData outbuf;
 
-	WalMessage*        currMsg;       /* message been send to the receiver */
+	WalMessage*        currMsg;       /* message been send to the receiver, flushWrite==true means it's already sent, flushWrite==false means it should be sent */
+	WalMessage*        ackMsg;        /* message waiting ack from receiver */
+	bool			   flushWrite;    /* true if flush is required before write */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
 	WalKeeperState     state;         /* walkeeper state machine state */

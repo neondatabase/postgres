@@ -110,6 +110,7 @@ static term_t GetHighestTerm(TermHistory *th);
 static term_t GetEpoch(WalKeeper *wk);
 static void SendProposerElected(WalKeeper *wk);
 static void StartStreaming(WalKeeper *wk);
+static void TryToWrite(WalKeeper *wk, uint32 events);
 
 
 /*
@@ -247,11 +248,15 @@ HackyRemoveWalProposerEvent(WalKeeper *to_remove)
 static void
 ShutdownConnection(WalKeeper *wk)
 {
+	elog(LOG, "Shutting down connection to walkeeper %s:%s", wk->host, wk->port);
+
 	if (wk->conn)
 		walprop_finish(wk->conn);
 	wk->conn = NULL;
 	wk->state = SS_OFFLINE;
 	wk->currMsg = NULL;
+	wk->ackMsg = NULL;
+	wk->flushWrite = false;
 	if (wk->voteResponse.termHistory.entries)
 		pfree(wk->voteResponse.termHistory.entries);
 	wk->voteResponse.termHistory.entries = NULL;
@@ -448,6 +453,8 @@ HandleWalKeeperResponse(void)
 		WalMessage *msg = msgQueueHead;
 		msgQueueHead = msg->next;
 
+		elog(LOG, "freeing msg=%p begin=%X/%X end=%X/%X trunclateLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn), LSN_FORMAT_ARGS(truncateLsn));
+
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
 	}
@@ -547,6 +554,8 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		walkeeper[n_walkeepers].conninfo[0] = '\0';
 		initStringInfo(&walkeeper[n_walkeepers].outbuf);
 		walkeeper[n_walkeepers].currMsg = NULL;
+		walkeeper[n_walkeepers].ackMsg = NULL;
+		walkeeper[n_walkeepers].flushWrite = false;
 		walkeeper[n_walkeepers].startStreamingAt = InvalidXLogRecPtr;
 		n_walkeepers += 1;
 	}
@@ -699,15 +708,14 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 }
 
 /*
- * Send message to the particular node
- *
- * Always updates the state and event set for the WAL keeper; setting either of
- * these before calling would be redundant work.
+ * Start sending message to the particular node.
  */
 static void
 SendMessageToNode(int i, WalMessage *msg)
 {
 	WalKeeper  *wk = &walkeeper[i];
+
+	elog(LOG, "SendMessageToNode i=%d msg=%p", i, (void*) msg);
 
 	/* we shouldn't be already sending something */
 	Assert(wk->currMsg == NULL);
@@ -720,27 +728,14 @@ SendMessageToNode(int i, WalMessage *msg)
 		msg = msg->next;
 
 	wk->currMsg = msg;
+	wk->flushWrite = false;
 
-	/* Only try to send the message if it's non-null */
-	if (wk->currMsg)
-	{
-		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
-		wk->currMsg->req.truncateLsn = truncateLsn;
-
-		/*
-		 * Once we've selected and set up our message, actually start sending
-		 * it.
-		 */
-		wk->state = SS_SEND_WAL;
-		/* Don't ned to update the event set; that's done by AdvancePollState */
-
-		AdvancePollState(i, WL_NO_EVENTS);
-	}
-	else
-	{
-		wk->state = SS_IDLE;
-		UpdateEventSet(wk, WL_SOCKET_READABLE);
-	}
+	/*
+	 * Try to send/read anything.
+	 */
+	wk->state = SS_ACTIVE_STATE;
+	TryToWrite(wk, WL_SOCKET_WRITEABLE);
+	UpdateEventSet(wk, (wk->flushWrite ? WL_SOCKET_WRITEABLE : 0) | WL_SOCKET_READABLE);
 }
 
 /*
@@ -751,7 +746,7 @@ BroadcastMessage(WalMessage *msg)
 {
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if (walkeeper[i].state == SS_IDLE && walkeeper[i].currMsg == NULL)
+		if ((walkeeper[i].state == SS_IDLE || walkeeper[i].state == SS_ACTIVE_STATE) && walkeeper[i].currMsg == NULL)
 		{
 			SendMessageToNode(i, msg);
 		}
@@ -790,6 +785,8 @@ CreateMessage(XLogRecPtr startpos, char *data, int len)
 	msg->req.endLsn = endpos;
 	msg->req.proposerId = proposerGreeting.proposerId;
 	memcpy(&msg->req + 1, data + XLOG_HDR_SIZE, len);
+
+	elog(LOG, "new message msg=%p beginLsn=%X/%X endLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn));
 
 	Assert(msg->req.endLsn >= lastSentLsn);
 	lastSentLsn = msg->req.endLsn;
@@ -841,6 +838,8 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 	msg->req.beginLsn = lsn;
 	msg->req.endLsn = lsn;
 	msg->req.proposerId = proposerGreeting.proposerId;
+
+	elog(LOG, "new message msg=%p beginLsn=%X/%X endLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn));
 
 	/*
 	 * truncateLsn and commitLsn are set just before the message sent, in
@@ -1167,6 +1166,7 @@ StartStreaming(WalKeeper *wk)
 		{
 			/* message is already received by this walkeeper */
 			msg->ackMask |= 1 << wki;
+			elog(LOG, "SET ackMask, i=%d msg=%p", wki, (void*)msg);
 		}
 		else
 		{
@@ -1233,12 +1233,161 @@ WalProposerPoll(void)
 	}
 }
 
+static void
+TryToWrite(WalKeeper *wk, uint32 events)
+{
+	int wki = wk - walkeeper;
+	WalMessage *msg;
+	AppendRequestHeader *req;
+
+	elog(LOG, "TryToWrite: msg=%p flushWrite=%s wk->currMsg->lsn=%X/%X", (void*) wk->currMsg, wk->flushWrite ? "true" : "false", LSN_FORMAT_ARGS(wk->currMsg ? wk->currMsg->req.beginLsn : 0));
+
+	if (wk->flushWrite)
+	{
+		elog(LOG, "flushing");
+
+		if (!AsyncFlush(wki, (events & WL_SOCKET_READABLE) != 0))
+			// nothing to write
+			return;
+
+		wk->currMsg = wk->currMsg->next;
+		wk->flushWrite = false;
+	}
+
+	while (wk->currMsg)
+	{
+		msg = wk->currMsg;
+		req = &msg->req;
+
+		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
+		req->truncateLsn = truncateLsn;
+
+		Assert((msg->ackMask & (1 << wki)) == 0);
+
+		/*
+		 * If we need to send this message not from the beginning,
+		 * form the cut version. Only happens for the first
+		 * message.
+		 */
+		if (wk->startStreamingAt > msg->req.beginLsn)
+		{
+			uint32		len;
+			uint32		size;
+
+			Assert(wk->startStreamingAt < req->endLsn);
+
+			len = msg->req.endLsn - wk->startStreamingAt;
+			size = sizeof(AppendRequestHeader) + len;
+			req = malloc(size);
+			*req = msg->req;
+			req->beginLsn = wk->startStreamingAt;
+			memcpy(req + 1,
+					(char *) (&msg->req + 1) + wk->startStreamingAt -
+					msg->req.beginLsn,
+					len);
+		}
+
+		elog(LOG,
+				"sending message msg=%p len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+				(void*) msg,
+				req->endLsn - req->beginLsn,
+				LSN_FORMAT_ARGS(req->beginLsn),
+				LSN_FORMAT_ARGS(req->endLsn),
+				LSN_FORMAT_ARGS(req->commitLsn),
+				LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
+
+		// processing acks
+		if (wk->ackMsg == NULL)
+			wk->ackMsg = wk->currMsg;
+
+		/*
+			* We write with msg->size here because the body of the
+			* message is stored after the end of the WalMessage
+			* struct, in the allocation for each msg
+			*/
+		if (!AsyncWrite(wk, req,
+						sizeof(AppendRequestHeader) + req->endLsn -
+						req->beginLsn,
+						SS_ACTIVE_STATE))
+		{
+			wk->flushWrite = true;
+			if (req != &msg->req)
+				free(req);
+			return;
+		}
+		if (req != &msg->req)
+			free(req);
+
+		// continue with next message
+		wk->currMsg = wk->currMsg->next;
+	}
+}
+
+/*
+ * Receive and process all available feedback.
+ */
+static void
+TryToRead(WalKeeper *wk)
+{
+	XLogRecPtr	minQuorumLsn;
+	int wki = wk - walkeeper;
+	bool readAnything = false;
+
+	while (wk->ackMsg != NULL)
+	{
+		elog(LOG, "Reading: msg=%p wk->ackMsg->beginLsn=%X/%X wk->ackMsg->endLsn=%X/%X", (void*) wk->ackMsg, LSN_FORMAT_ARGS(wk->ackMsg->req.beginLsn), LSN_FORMAT_ARGS(wk->ackMsg->req.endLsn));
+		Assert((wk->ackMsg->ackMask & (1 << wki)) == 0);
+
+		/*
+		* If our reading doesn't immediately succeed, any
+		* necessary error handling or state setting is taken care
+		* of. We can leave any other work until later.
+		*/
+		if (!AsyncReadFixed(wki, &wk->feedback, sizeof(wk->feedback)))
+			break;
+
+		Assert(wk->ackMsg != wk->currMsg);
+
+		elog(LOG, "RESPONSE wk->ackMsg->beginLsn=%X/%X wk->ackMsg->endLsn=%X/%X flushLsn=%X/%X", LSN_FORMAT_ARGS(wk->ackMsg->req.beginLsn), LSN_FORMAT_ARGS(wk->ackMsg->req.endLsn), LSN_FORMAT_ARGS(wk->feedback.flushLsn));
+
+		elog(LOG, "SET ackMask, i=%d msg=%p", wki, (void*)wk->ackMsg);
+
+		wk->ackMsg->ackMask |= 1 << wki; /* this walkeeper confirms
+											* receiving of this
+											* message */
+
+		wk->ackMsg = wk->ackMsg->next;
+		readAnything = true;
+	}
+
+	if (!readAnything)
+		return;
+
+	HandleWalKeeperResponse();
+
+	/*
+	 * Also send the new commit lsn to all the walkeepers.
+	 *
+	 * FIXME: This is redundant for walkeepers that have other
+	 * outbound messages pending.
+	 */
+	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+	if (minQuorumLsn > lastSentCommitLsn)
+	{
+		BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+		lastSentCommitLsn = minQuorumLsn;
+	}
+}
+
 /* Performs the logic for advancing the state machine of the 'i'th walkeeper,
  * given that a certain set of events has occured. */
 static void
 AdvancePollState(int i, uint32 events)
 {
 	WalKeeper  *wk = &walkeeper[i];
+
+	elog(LOG, "Advance poll state, i=%d wk=%s:%s  state=%s events=%d",
+				i, wk->host, wk->port, FormatWalKeeperState(wk->state), events);
 
 	/*
 	 * Keep advancing the state while either: (a) the event is still
@@ -1654,122 +1803,20 @@ AdvancePollState(int i, uint32 events)
 				ResetConnection(wk);
 				break;
 
-				/*
-				 * Start to send the message at wk->currMsg. Triggered only by
-				 * calls to SendMessageToNode
-				 */
-			case SS_SEND_WAL:
+
+			case SS_ACTIVE_STATE:
+				TryToWrite(wk, events);
+				TryToRead(wk);
+
+				if (wk->currMsg == NULL && wk->ackMsg == NULL)
 				{
-					WalMessage *msg = wk->currMsg;
-					AppendRequestHeader *req = &msg->req;
-
-					/*
-					 * If we need to send this message not from the beginning,
-					 * form the cut version. Only happens for the first
-					 * message.
-					 */
-					if (wk->startStreamingAt > msg->req.beginLsn)
-					{
-						uint32		len;
-						uint32		size;
-
-						Assert(wk->startStreamingAt < req->endLsn);
-
-						len = msg->req.endLsn - wk->startStreamingAt;
-						size = sizeof(AppendRequestHeader) + len;
-						req = malloc(size);
-						*req = msg->req;
-						req->beginLsn = wk->startStreamingAt;
-						memcpy(req + 1,
-							   (char *) (&msg->req + 1) + wk->startStreamingAt -
-							   msg->req.beginLsn,
-							   len);
-					}
-
-					elog(LOG,
-						 "sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-						 req->endLsn - req->beginLsn,
-						 LSN_FORMAT_ARGS(req->beginLsn),
-						 LSN_FORMAT_ARGS(req->endLsn),
-						 LSN_FORMAT_ARGS(req->commitLsn),
-						 LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
-
-					/*
-					 * We write with msg->size here because the body of the
-					 * message is stored after the end of the WalMessage
-					 * struct, in the allocation for each msg
-					 */
-					if (!AsyncWrite(wk, req,
-									sizeof(AppendRequestHeader) + req->endLsn -
-									req->beginLsn,
-									SS_SEND_WAL_FLUSH))
-					{
-						if (req != &msg->req)
-							free(req);
-						return;
-					}
-					wk->state = SS_RECV_FEEDBACK;
-					if (req != &msg->req)
-						free(req);
-
-					break;
+					wk->state = SS_IDLE;
+					UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for
+															 * read-ready */
 				}
-
-				/* Flush the WAL message we're sending from SS_SEND_WAL */
-			case SS_SEND_WAL_FLUSH:
-
-				/*
-				 * AsyncFlush ensures we only move on to SS_RECV_FEEDBACK once
-				 * the flush completes. If we still have more to do, we'll
-				 * wait until the next poll comes along.
-				 */
-				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
-					return;
-
-				wk->state = SS_RECV_FEEDBACK;
-
-				break;
-
-				/*
-				 * Start to receive the feedback from a message sent via
-				 * SS_SEND_WAL
-				 */
-			case SS_RECV_FEEDBACK:
+				else
 				{
-					WalMessage *next;
-					XLogRecPtr	minQuorumLsn;
-
-					/*
-					 * If our reading doesn't immediately succeed, any
-					 * necessary error handling or state setting is taken care
-					 * of. We can leave any other work until later.
-					 */
-					if (!AsyncReadFixed(i, &wk->feedback, sizeof(wk->feedback)))
-						return;
-
-					next = wk->currMsg->next;
-					wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms
-													 * receiving of this
-													 * message */
-
-					wk->currMsg = NULL;
-					HandleWalKeeperResponse();
-					SendMessageToNode(i, next); /* Updates state & event set */
-
-					/*
-					 * Also send the new commit lsn to all the walkeepers.
-					 *
-					 * FIXME: This is redundant for walkeepers that have other
-					 * outbound messages pending.
-					 */
-					minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-
-					if (minQuorumLsn > lastSentCommitLsn)
-					{
-						BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
-						lastSentCommitLsn = minQuorumLsn;
-					}
-					break;
+					UpdateEventSet(wk, (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE) | (wk->ackMsg == NULL ? 0 : WL_SOCKET_READABLE));
 				}
 		}
 

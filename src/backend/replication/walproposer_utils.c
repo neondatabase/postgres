@@ -75,14 +75,8 @@ FormatWalKeeperState(WalKeeperState state)
 		case SS_IDLE:
 			return_val = "idle";
 			break;
-		case SS_SEND_WAL:
-			return_val = "WAL-sending";
-			break;
-		case SS_SEND_WAL_FLUSH:
-			return_val = "WAL-sending (flushing)";
-			break;
-		case SS_RECV_FEEDBACK:
-			return_val = "WAL-feedback-receiving";
+		case SS_ACTIVE_STATE:
+			return_val = "WAL-active-state";
 			break;
 	}
 
@@ -143,7 +137,6 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 		case SS_WAIT_EXEC_RESULT:
 		case SS_HANDSHAKE_RECV:
 		case SS_WAIT_VERDICT:
-		case SS_RECV_FEEDBACK:
 			result = WL_SOCKET_READABLE;
 			break;
 
@@ -151,12 +144,11 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 		case SS_EXEC_STARTWALPUSH:
 		case SS_HANDSHAKE_SEND:
 		case SS_SEND_VOTE:
-		case SS_SEND_WAL:
 			result = WL_NO_EVENTS;
 			break;
 		/* but flushing does require read- or write-ready */
 		case SS_SEND_ELECTED_FLUSH:
-		case SS_SEND_WAL_FLUSH:
+		case SS_ACTIVE_STATE:
 			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
 			break;
 
