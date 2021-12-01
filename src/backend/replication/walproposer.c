@@ -248,8 +248,6 @@ HackyRemoveWalProposerEvent(WalKeeper *to_remove)
 static void
 ShutdownConnection(WalKeeper *wk)
 {
-	elog(LOG, "Shutting down connection to walkeeper %s:%s", wk->host, wk->port);
-
 	if (wk->conn)
 		walprop_finish(wk->conn);
 	wk->conn = NULL;
@@ -452,8 +450,6 @@ HandleWalKeeperResponse(void)
 	{
 		WalMessage *msg = msgQueueHead;
 		msgQueueHead = msg->next;
-
-		elog(LOG, "freeing msg=%p begin=%X/%X end=%X/%X trunclateLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn), LSN_FORMAT_ARGS(truncateLsn));
 
 		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
 		free(msg);
@@ -715,8 +711,6 @@ SendMessageToNode(int i, WalMessage *msg)
 {
 	WalKeeper  *wk = &walkeeper[i];
 
-	elog(LOG, "SendMessageToNode i=%d msg=%p", i, (void*) msg);
-
 	/* we shouldn't be already sending something */
 	Assert(wk->currMsg == NULL);
 
@@ -786,8 +780,6 @@ CreateMessage(XLogRecPtr startpos, char *data, int len)
 	msg->req.proposerId = proposerGreeting.proposerId;
 	memcpy(&msg->req + 1, data + XLOG_HDR_SIZE, len);
 
-	elog(LOG, "new message msg=%p beginLsn=%X/%X endLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn));
-
 	Assert(msg->req.endLsn >= lastSentLsn);
 	lastSentLsn = msg->req.endLsn;
 	return msg;
@@ -838,8 +830,6 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 	msg->req.beginLsn = lsn;
 	msg->req.endLsn = lsn;
 	msg->req.proposerId = proposerGreeting.proposerId;
-
-	elog(LOG, "new message msg=%p beginLsn=%X/%X endLsn=%X/%X", (void*) msg, LSN_FORMAT_ARGS(msg->req.beginLsn), LSN_FORMAT_ARGS(msg->req.endLsn));
 
 	/*
 	 * truncateLsn and commitLsn are set just before the message sent, in
@@ -1166,7 +1156,6 @@ StartStreaming(WalKeeper *wk)
 		{
 			/* message is already received by this walkeeper */
 			msg->ackMask |= 1 << wki;
-			elog(LOG, "SET ackMask, i=%d msg=%p", wki, (void*)msg);
 		}
 		else
 		{
@@ -1240,12 +1229,8 @@ TryToWrite(WalKeeper *wk, uint32 events)
 	WalMessage *msg;
 	AppendRequestHeader *req;
 
-	elog(LOG, "TryToWrite: msg=%p flushWrite=%s wk->currMsg->lsn=%X/%X", (void*) wk->currMsg, wk->flushWrite ? "true" : "false", LSN_FORMAT_ARGS(wk->currMsg ? wk->currMsg->req.beginLsn : 0));
-
 	if (wk->flushWrite)
 	{
-		elog(LOG, "flushing");
-
 		if (!AsyncFlush(wki, (events & WL_SOCKET_READABLE) != 0))
 			// nothing to write
 			return;
@@ -1335,7 +1320,6 @@ TryToRead(WalKeeper *wk)
 
 	while (wk->ackMsg != NULL)
 	{
-		elog(LOG, "Reading: msg=%p wk->ackMsg->beginLsn=%X/%X wk->ackMsg->endLsn=%X/%X", (void*) wk->ackMsg, LSN_FORMAT_ARGS(wk->ackMsg->req.beginLsn), LSN_FORMAT_ARGS(wk->ackMsg->req.endLsn));
 		Assert((wk->ackMsg->ackMask & (1 << wki)) == 0);
 
 		/*
@@ -1347,10 +1331,6 @@ TryToRead(WalKeeper *wk)
 			break;
 
 		Assert(wk->ackMsg != wk->currMsg);
-
-		elog(LOG, "RESPONSE wk->ackMsg->beginLsn=%X/%X wk->ackMsg->endLsn=%X/%X flushLsn=%X/%X", LSN_FORMAT_ARGS(wk->ackMsg->req.beginLsn), LSN_FORMAT_ARGS(wk->ackMsg->req.endLsn), LSN_FORMAT_ARGS(wk->feedback.flushLsn));
-
-		elog(LOG, "SET ackMask, i=%d msg=%p", wki, (void*)wk->ackMsg);
 
 		wk->ackMsg->ackMask |= 1 << wki; /* this walkeeper confirms
 											* receiving of this
@@ -1385,10 +1365,6 @@ static void
 AdvancePollState(int i, uint32 events)
 {
 	WalKeeper  *wk = &walkeeper[i];
-
-	elog(LOG, "Advance poll state, i=%d wk=%s:%s  state=%s events=%d",
-				i, wk->host, wk->port, FormatWalKeeperState(wk->state), events);
-
 	/*
 	 * Keep advancing the state while either: (a) the event is still
 	 * unprocessed (usually because it's the first iteration of the loop), or
