@@ -193,6 +193,7 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "access/remotexact.h"
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -2577,6 +2578,8 @@ PredicateLockRelation(Relation relation, Snapshot snapshot)
 										relation->rd_node.dbNode,
 										relation->rd_id);
 	PredicateLockAcquire(&tag);
+
+	GetRemoteXactHook()->collect_seq_scan_relation(relation);
 }
 
 /*
@@ -2601,6 +2604,8 @@ PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
 									relation->rd_id,
 									blkno);
 	PredicateLockAcquire(&tag);
+
+	GetRemoteXactHook()->collect_index_scan_page(relation, blkno);
 }
 
 /*
@@ -2647,6 +2652,8 @@ PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
 									 ItemPointerGetBlockNumber(tid),
 									 ItemPointerGetOffsetNumber(tid));
 	PredicateLockAcquire(&tag);
+
+	GetRemoteXactHook()->collect_read_tuple(relation, tid, tuple_xid);
 }
 
 
