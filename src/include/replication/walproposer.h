@@ -73,7 +73,7 @@ typedef enum
  * States are listed here in the order that they're executed - with the only
  * exception occuring from the "send WAL" cycle, which loops as:
  *
- *   SS_IDLE -> SS_SEND_WAL (+ flush) -> SS_RECV_FEEDBACK -> SS_IDLE/SS_SEND_WAL
+ *   SS_IDLE -> SS_ACTIVE -> SS_IDLE
  *
  * Most states, upon failure, will move back to SS_OFFLINE by calls to
  * ResetConnection or ShutdownConnection.
@@ -156,35 +156,17 @@ typedef enum
 	 * Waiting for quorum to send WAL. Idle state. If the socket becomes
 	 * read-ready, the connection has been closed.
 	 *
-	 * Moves to SS_SEND_WAL only by calls to SendMessageToNode.
+	 * Moves to SS_ACTIVE only by calls to SendMessageToNode.
 	 */
 	SS_IDLE,
 
-
 	/*
-	 * Sending WAL to the node, receiving feedback from the node.
+	 * Active phase, when we acquired quorum and have WAL to send or feedback
+	 * to read.
+	 * 
+	 * Moves to SS_IDLE when we have nothing to do.
 	 */
-	SS_ACTIVE_STATE,
-
-	// /*
-	//  * Start sending the message at currMsg. This state is only ever reached
-	//  * through calls to SendMessageToNode.
-	//  *
-	//  * Sending needs to flush; immediately moves to SS_SEND_WAL_FLUSH.
-	//  */
-	// SS_SEND_WAL,
-	// /*
-	//  * Flush the WAL message, repeated until successful. On success, moves to
-	//  * SS_RECV_FEEDBACK.
-	//  */
-	// SS_SEND_WAL_FLUSH,
-	// /*
-	//  * Currently reading feedback from sending the WAL.
-	//  *
-	//  * After reading, moves to (SS_SEND_WAL or SS_IDLE) by calls to
-	//  * SendMessageToNode.
-	//  */
-	// SS_RECV_FEEDBACK,
+	SS_ACTIVE,
 } WalKeeperState;
 
 /* Consensus logical timestamp. */
@@ -359,14 +341,14 @@ typedef struct WalKeeper
 	 * postgres protocol connection to the WAL acceptor
 	 *
 	 * Equals NULL only when state = SS_OFFLINE. Nonblocking is set once we
-	 * reach SS_SEND_WAL; not before.
+	 * reach SS_ACTIVE; not before.
 	 */
 	WalProposerConn*   conn;
 	StringInfoData outbuf;
 
-	WalMessage*        currMsg;       /* message been send to the receiver, flushWrite==true means it's already sent, flushWrite==false means it should be sent */
-	WalMessage*        ackMsg;        /* message waiting ack from receiver */
-	bool			   flushWrite;    /* true if flush is required before write */
+	bool               flushWrite;    /* set to true if we wrote currMsg, but still need to call AsyncFlush */
+	WalMessage*        currMsg;       /* message been send to the receiver */
+	WalMessage*        ackMsg;        /* message waiting ack from the receiver */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
 	WalKeeperState     state;         /* walkeeper state machine state */

@@ -75,8 +75,8 @@ FormatWalKeeperState(WalKeeperState state)
 		case SS_IDLE:
 			return_val = "idle";
 			break;
-		case SS_ACTIVE_STATE:
-			return_val = "WAL-active-state";
+		case SS_ACTIVE:
+			return_val = "active";
 			break;
 	}
 
@@ -148,7 +148,8 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 			break;
 		/* but flushing does require read- or write-ready */
 		case SS_SEND_ELECTED_FLUSH:
-		case SS_ACTIVE_STATE:
+		/* Active state does both reading and writing to the socket */
+		case SS_ACTIVE:
 			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
 			break;
 

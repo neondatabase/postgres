@@ -110,7 +110,7 @@ static term_t GetHighestTerm(TermHistory *th);
 static term_t GetEpoch(WalKeeper *wk);
 static void SendProposerElected(WalKeeper *wk);
 static void StartStreaming(WalKeeper *wk);
-static void TryToWrite(WalKeeper *wk, uint32 events);
+static void SendAppendRequests(WalKeeper *wk, uint32 events);
 
 
 /*
@@ -237,8 +237,9 @@ HackyRemoveWalProposerEvent(WalKeeper *to_remove)
 			continue;
 
 		/* If this WAL keeper isn't offline, add an event for it! */
-		if ((desired_events = WalKeeperStateDesiredEvents(wk->state)))
+		if (wk->conn != NULL)
 		{
+			desired_events = WalKeeperStateDesiredEvents(wk->state);
 			wk->eventPos = AddWaitEventToSet(waitEvents, desired_events, walprop_socket(wk->conn), NULL, wk);
 		}
 	}
@@ -252,9 +253,10 @@ ShutdownConnection(WalKeeper *wk)
 		walprop_finish(wk->conn);
 	wk->conn = NULL;
 	wk->state = SS_OFFLINE;
+	wk->flushWrite = false;
 	wk->currMsg = NULL;
 	wk->ackMsg = NULL;
-	wk->flushWrite = false;
+
 	if (wk->voteResponse.termHistory.entries)
 		pfree(wk->voteResponse.termHistory.entries);
 	wk->voteResponse.termHistory.entries = NULL;
@@ -549,9 +551,9 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 */
 		walkeeper[n_walkeepers].conninfo[0] = '\0';
 		initStringInfo(&walkeeper[n_walkeepers].outbuf);
+		walkeeper[n_walkeepers].flushWrite = false;
 		walkeeper[n_walkeepers].currMsg = NULL;
 		walkeeper[n_walkeepers].ackMsg = NULL;
-		walkeeper[n_walkeepers].flushWrite = false;
 		walkeeper[n_walkeepers].startStreamingAt = InvalidXLogRecPtr;
 		n_walkeepers += 1;
 	}
@@ -723,13 +725,12 @@ SendMessageToNode(int i, WalMessage *msg)
 
 	wk->currMsg = msg;
 	wk->flushWrite = false;
+	wk->state = SS_ACTIVE;
 
-	/*
-	 * Try to send/read anything.
-	 */
-	wk->state = SS_ACTIVE_STATE;
-	TryToWrite(wk, WL_SOCKET_WRITEABLE);
-	UpdateEventSet(wk, (wk->flushWrite ? WL_SOCKET_WRITEABLE : 0) | WL_SOCKET_READABLE);
+	/* TODO: do we need to send messages immediately? */
+	SendAppendRequests(wk, WL_SOCKET_WRITEABLE);
+
+	UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->flushWrite ? WL_SOCKET_WRITEABLE : 0));
 }
 
 /*
@@ -740,7 +741,7 @@ BroadcastMessage(WalMessage *msg)
 {
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if ((walkeeper[i].state == SS_IDLE || walkeeper[i].state == SS_ACTIVE_STATE) && walkeeper[i].currMsg == NULL)
+		if ((walkeeper[i].state == SS_IDLE || walkeeper[i].state == SS_ACTIVE) && walkeeper[i].currMsg == NULL)
 		{
 			SendMessageToNode(i, msg);
 		}
@@ -1222,8 +1223,12 @@ WalProposerPoll(void)
 	}
 }
 
+/*
+ * Send queue messages starting from wk->currMsg until the end or non-writable
+ * socket, whichever comes first.
+ */
 static void
-TryToWrite(WalKeeper *wk, uint32 events)
+SendAppendRequests(WalKeeper *wk, uint32 events)
 {
 	int wki = wk - walkeeper;
 	WalMessage *msg;
@@ -1232,7 +1237,7 @@ TryToWrite(WalKeeper *wk, uint32 events)
 	if (wk->flushWrite)
 	{
 		if (!AsyncFlush(wki, (events & WL_SOCKET_READABLE) != 0))
-			// nothing to write
+			/* nothing to write, should wait for writeable socket */
 			return;
 
 		wk->currMsg = wk->currMsg->next;
@@ -1281,19 +1286,18 @@ TryToWrite(WalKeeper *wk, uint32 events)
 				LSN_FORMAT_ARGS(req->commitLsn),
 				LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
 
-		// processing acks
+		/* if this is the first sent message, we should start processing feedback */
 		if (wk->ackMsg == NULL)
 			wk->ackMsg = wk->currMsg;
 
 		/*
-			* We write with msg->size here because the body of the
-			* message is stored after the end of the WalMessage
-			* struct, in the allocation for each msg
-			*/
+		 * We write with msg->size here because the body of the
+		 * message is stored after the end of the WalMessage
+		 * struct, in the allocation for each msg
+		 */
 		if (!AsyncWrite(wk, req,
-						sizeof(AppendRequestHeader) + req->endLsn -
-						req->beginLsn,
-						SS_ACTIVE_STATE))
+						sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn,
+						SS_ACTIVE))
 		{
 			wk->flushWrite = true;
 			if (req != &msg->req)
@@ -1303,16 +1307,18 @@ TryToWrite(WalKeeper *wk, uint32 events)
 		if (req != &msg->req)
 			free(req);
 
-		// continue with next message
+		/* continue writing the next message */
 		wk->currMsg = wk->currMsg->next;
 	}
 }
 
 /*
  * Receive and process all available feedback.
+ *
+ * NB: This function can call SendMessageToNode and produce new messages.
  */
 static void
-TryToRead(WalKeeper *wk)
+RecvAppendResponses(WalKeeper *wk)
 {
 	XLogRecPtr	minQuorumLsn;
 	int wki = wk - walkeeper;
@@ -1323,16 +1329,17 @@ TryToRead(WalKeeper *wk)
 		Assert((wk->ackMsg->ackMask & (1 << wki)) == 0);
 
 		/*
-		* If our reading doesn't immediately succeed, any
-		* necessary error handling or state setting is taken care
-		* of. We can leave any other work until later.
-		*/
+		 * If our reading doesn't immediately succeed, any
+		 * necessary error handling or state setting is taken care
+		 * of. We can leave any other work until later.
+		 */
 		if (!AsyncReadFixed(wki, &wk->feedback, sizeof(wk->feedback)))
 			break;
 
+		/* Can't receive response for a message we haven't sent yet */
 		Assert(wk->ackMsg != wk->currMsg);
 
-		wk->ackMsg->ackMask |= 1 << wki; /* this walkeeper confirms
+		wk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
 											* receiving of this
 											* message */
 
@@ -1530,7 +1537,7 @@ AdvancePollState(int i, uint32 events)
 						 * generic "something went wrong"
 						 */
 					case WP_EXEC_UNEXPECTED_SUCCESS:
-						elog(WARNING, "Received bad resonse from walkeeper %s:%s query execution",
+						elog(WARNING, "Received bad response from walkeeper %s:%s query execution",
 							 wk->host, wk->port);
 						ShutdownConnection(wk);
 						return;
@@ -1780,20 +1787,25 @@ AdvancePollState(int i, uint32 events)
 				break;
 
 
-			case SS_ACTIVE_STATE:
-				TryToWrite(wk, events);
-				TryToRead(wk);
+			case SS_ACTIVE:
+				/* TODO: how to detect EOF? */
+
+				if (events & WL_SOCKET_WRITEABLE)
+					SendAppendRequests(wk, events);
+
+				if (events & WL_SOCKET_READABLE)
+					RecvAppendResponses(wk);
 
 				if (wk->currMsg == NULL && wk->ackMsg == NULL)
 				{
 					wk->state = SS_IDLE;
 					UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for
 															 * read-ready */
+					break;
 				}
-				else
-				{
-					UpdateEventSet(wk, (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE) | (wk->ackMsg == NULL ? 0 : WL_SOCKET_READABLE));
-				}
+
+				UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE));
+				break;
 		}
 
 		/*
