@@ -707,6 +707,9 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 
 /*
  * Start sending message to the particular node.
+ *
+ * Always updates the state and event set for the WAL keeper; setting either of
+ * these before calling would be redundant work.
  */
 static void
 SendMessageToNode(int i, WalMessage *msg)
