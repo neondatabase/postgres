@@ -110,7 +110,7 @@ static term_t GetHighestTerm(TermHistory *th);
 static term_t GetEpoch(WalKeeper *wk);
 static void SendProposerElected(WalKeeper *wk);
 static void StartStreaming(WalKeeper *wk);
-static void SendAppendRequests(WalKeeper *wk, uint32 events);
+static bool SendAppendRequests(WalKeeper *wk, uint32 events);
 
 
 /*
@@ -731,7 +731,8 @@ SendMessageToNode(int i, WalMessage *msg)
 	wk->state = SS_ACTIVE;
 
 	/* TODO: do we need to send messages immediately? */
-	SendAppendRequests(wk, WL_SOCKET_WRITEABLE);
+	if (!SendAppendRequests(wk, WL_SOCKET_WRITEABLE))
+		return;
 
 	UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->flushWrite ? WL_SOCKET_WRITEABLE : 0));
 }
@@ -1229,8 +1230,11 @@ WalProposerPoll(void)
 /*
  * Send queue messages starting from wk->currMsg until the end or non-writable
  * socket, whichever comes first.
+ * 
+ * Can change state if Async* functions encounter errors and reset connection.
+ * Returns false in this case, true otherwise.
  */
-static void
+static bool
 SendAppendRequests(WalKeeper *wk, uint32 events)
 {
 	int wki = wk - walkeeper;
@@ -1240,8 +1244,11 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 	if (wk->flushWrite)
 	{
 		if (!AsyncFlush(wki, (events & WL_SOCKET_READABLE) != 0))
-			/* nothing to write, should wait for writeable socket */
-			return;
+			/* 
+			 * AsyncFlush failed, that could happen if the socket is closed or
+			 * we have nothing to write and should wait for writeable socket.
+			 */
+			return wk->state == SS_ACTIVE;
 
 		wk->currMsg = wk->currMsg->next;
 		wk->flushWrite = false;
@@ -1281,8 +1288,7 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 		}
 
 		elog(LOG,
-				"sending message msg=%p len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-				(void*) msg,
+				"sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
 				req->endLsn - req->beginLsn,
 				LSN_FORMAT_ARGS(req->beginLsn),
 				LSN_FORMAT_ARGS(req->endLsn),
@@ -1302,10 +1308,14 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 						sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn,
 						SS_ACTIVE))
 		{
-			wk->flushWrite = true;
 			if (req != &msg->req)
 				free(req);
-			return;
+			if (wk->state == SS_ACTIVE)
+			{
+				wk->flushWrite = true;
+				return true;
+			}
+			return false;
 		}
 		if (req != &msg->req)
 			free(req);
@@ -1313,21 +1323,31 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 		/* continue writing the next message */
 		wk->currMsg = wk->currMsg->next;
 	}
+
+	return true;
 }
 
 /*
- * Receive and process all available feedback.
- *
+ * Receive and process all available feedback. Can change state if Async* functions
+ * encounter errors and reset connection.
+ * 
  * NB: This function can call SendMessageToNode and produce new messages.
  */
-static void
+static bool
 RecvAppendResponses(WalKeeper *wk)
 {
 	XLogRecPtr	minQuorumLsn;
 	int wki = wk - walkeeper;
 	bool readAnything = false;
 
-	while (wk->ackMsg != NULL)
+	/*
+	 * We shouldn't read responses ahead of wk->currMsg, because that will
+	 * look like we are receiving responses for messages that haven't been
+	 * sent yet. This can happen when message was placed in a buffer in 
+	 * SendAppendRequests, but sent through a wire only with a flush in 
+	 * reading routine.
+	 */
+	while (wk->ackMsg != NULL && wk->ackMsg != wk->currMsg)
 	{
 		Assert((wk->ackMsg->ackMask & (1 << wki)) == 0);
 
@@ -1339,9 +1359,6 @@ RecvAppendResponses(WalKeeper *wk)
 		if (!AsyncReadFixed(wki, &wk->feedback, sizeof(wk->feedback)))
 			break;
 
-		/* Can't receive response for a message we haven't sent yet */
-		Assert(wk->ackMsg != wk->currMsg);
-
 		wk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
 											* receiving of this
 											* message */
@@ -1351,7 +1368,7 @@ RecvAppendResponses(WalKeeper *wk)
 	}
 
 	if (!readAnything)
-		return;
+		return wk->state == SS_ACTIVE;
 
 	HandleWalKeeperResponse();
 
@@ -1367,6 +1384,8 @@ RecvAppendResponses(WalKeeper *wk)
 		BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
 		lastSentCommitLsn = minQuorumLsn;
 	}
+
+	return wk->state == SS_ACTIVE;
 }
 
 /* Performs the logic for advancing the state machine of the 'i'th walkeeper,
@@ -1791,13 +1810,13 @@ AdvancePollState(int i, uint32 events)
 
 
 			case SS_ACTIVE:
-				/* TODO: how to detect EOF? */
-
 				if (events & WL_SOCKET_WRITEABLE)
-					SendAppendRequests(wk, events);
+					if (!SendAppendRequests(wk, events))
+						return;
 
 				if (events & WL_SOCKET_READABLE)
-					RecvAppendResponses(wk);
+					if (!RecvAppendResponses(wk))
+						return;
 
 				if (wk->currMsg == NULL && wk->ackMsg == NULL)
 				{
