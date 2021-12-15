@@ -1328,8 +1328,10 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 }
 
 /*
- * Receive and process all available feedback. Can change state if Async* functions
- * encounter errors and reset connection.
+ * Receive and process all available feedback.
+ *
+ * Can change state if Async* functions encounter errors and reset connection.
+ * Returns false in this case, true otherwise.
  * 
  * NB: This function can call SendMessageToNode and produce new messages.
  */
