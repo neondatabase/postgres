@@ -745,7 +745,7 @@ BroadcastMessage(WalMessage *msg)
 {
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if ((walkeeper[i].state == SS_IDLE || walkeeper[i].state == SS_ACTIVE) && walkeeper[i].currMsg == NULL)
+		if (walkeeper[i].state == SS_ACTIVE && walkeeper[i].currMsg == NULL)
 		{
 			SendMessageToNode(i, msg);
 		}
@@ -1148,7 +1148,7 @@ SendProposerElected(WalKeeper *wk)
 }
 
 /*
- * Start streaming to safekeeper wk.
+ * Start streaming to safekeeper wk, always updates state to SS_ACTIVE.
  */
 static void
 StartStreaming(WalKeeper *wk)
@@ -1168,7 +1168,10 @@ StartStreaming(WalKeeper *wk)
 			return;
 		}
 	}
-	wk->state = SS_IDLE; /* nothing to send yet, safekeeper is recovered */
+
+	/* nothing to send yet, waiting for the next message */
+	wk->state = SS_ACTIVE;
+	UpdateEventSet(wk, WL_SOCKET_READABLE);
 }
 
 /*
@@ -1763,6 +1766,12 @@ AdvancePollState(int i, uint32 events)
 							SendProposerElected(&walkeeper[i]);
 					}
 
+					/* 
+					 * The proposer has been elected, and there will be no quorum waiting
+					 * after this point. There will be no safekeeper with state SS_IDLE
+					 * also, because that state is used only for quorum waiting.
+					 */
+
 					if (syncSafekeepers)
 					{
 						/*
@@ -1819,14 +1828,6 @@ AdvancePollState(int i, uint32 events)
 				if (events & WL_SOCKET_READABLE)
 					if (!RecvAppendResponses(wk))
 						return;
-
-				if (wk->currMsg == NULL && wk->ackMsg == NULL)
-				{
-					wk->state = SS_IDLE;
-					UpdateEventSet(wk, WL_SOCKET_READABLE); /* Idle states wait for
-															 * read-ready */
-					break;
-				}
 
 				UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE));
 				break;

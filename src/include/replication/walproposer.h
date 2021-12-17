@@ -70,10 +70,7 @@ typedef enum
 /*
  * WAL safekeeper state
  *
- * States are listed here in the order that they're executed - with the only
- * exception occuring from the "send WAL" cycle, which loops as:
- *
- *   SS_IDLE -> SS_ACTIVE -> SS_IDLE
+ * States are listed here in the order that they're executed.
  *
  * Most states, upon failure, will move back to SS_OFFLINE by calls to
  * ResetConnection or ShutdownConnection.
@@ -163,8 +160,6 @@ typedef enum
 	/*
 	 * Active phase, when we acquired quorum and have WAL to send or feedback
 	 * to read.
-	 * 
-	 * Moves to SS_IDLE when we have nothing to do.
 	 */
 	SS_ACTIVE,
 } WalKeeperState;
