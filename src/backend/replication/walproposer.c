@@ -141,7 +141,6 @@ static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
 static void CombineHotStanbyFeedbacks(HotStandbyFeedback * hs);
-static XLogRecPtr CalculateDiskConsistentLsn(void);
 static XLogRecPtr CalculateMinFlushLsn(void);
 static XLogRecPtr GetAcknowledgedByQuorumWALPosition(void);
 static void HandleSafekeeperResponse(void);
@@ -672,7 +671,7 @@ AdvancePollState(Safekeeper *sk, uint32 events)
 			 */
 		case SS_OFFLINE:
 			elog(FATAL, "Unexpected safekeeper %s:%s state advancement: is offline",
-					sk->host, sk->port);
+				 sk->host, sk->port);
 			break;			/* actually unreachable, but prevents
 							 * -Wimplicit-fallthrough */
 
@@ -1715,6 +1714,72 @@ RecvAppendResponses(Safekeeper *sk)
 	return sk->state == SS_ACTIVE;
 }
 
+void
+ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
+{
+	uint8 nkeys;
+	int i;
+	int32 len;
+
+	/* get number of custom keys */
+	nkeys = pq_getmsgbyte(reply_message);
+
+	for (i = 0; i < nkeys; i++)
+	{
+		const char *key = pq_getmsgstring(reply_message);
+		if (strcmp(key, "current_timeline_size") == 0)
+		{
+				pq_getmsgint(reply_message, sizeof(int32)); // read value length
+				zf->currentInstanceSize = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseZenithFeedbackMessage: current_timeline_size %lu",
+					zf->currentInstanceSize);
+		}
+		else if (strcmp(key, "ps_writelsn") == 0)
+		{
+				pq_getmsgint(reply_message, sizeof(int32)); // read value length
+				zf->ps_writelsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_writelsn %X/%X",
+					LSN_FORMAT_ARGS(zf->ps_writelsn));
+		}
+		else if (strcmp(key, "ps_flushlsn") == 0)
+		{
+				pq_getmsgint(reply_message, sizeof(int32)); // read value length
+				zf->ps_flushlsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_flushlsn %X/%X",
+					LSN_FORMAT_ARGS(zf->ps_flushlsn));
+		}
+		else if (strcmp(key, "ps_applylsn") == 0)
+		{
+				pq_getmsgint(reply_message, sizeof(int32)); // read value length
+				zf->ps_applylsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_applylsn %X/%X",
+					LSN_FORMAT_ARGS(zf->ps_applylsn));
+		}
+		else if (strcmp(key, "ps_replytime") == 0)
+		{
+			pq_getmsgint(reply_message, sizeof(int32)); // read value length
+			zf->ps_replytime = pq_getmsgint64(reply_message);
+			{
+				char	   *replyTimeStr;
+
+				/* Copy because timestamptz_to_str returns a static buffer */
+				replyTimeStr = pstrdup(timestamptz_to_str(zf->ps_replytime));
+				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_replytime %lu reply_time: %s",
+					zf->ps_replytime, replyTimeStr);
+
+				pfree(replyTimeStr);
+			}
+		}
+		else
+		{
+			len = pq_getmsgint(reply_message, sizeof(int32)); // read value length
+			// Skip unknown keys to support backward compatibile protocol changes
+			elog(LOG, "ParseZenithFeedbackMessage: unknown key: %s len %d", key, len);
+			pq_getmsgbytes(reply_message, len);
+		};
+	}
+}
+
 /*
  * Combine hot standby feedbacks from all safekeepers.
  */
@@ -1743,22 +1808,6 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback * hs)
 	}
 }
 
-/*
- * Get minimum of disk consistent LSNs of all safekeepers
- */
-static XLogRecPtr
-CalculateDiskConsistentLsn(void)
-{
-	XLogRecPtr lsn = UnknownXLogRecPtr;
-	for (int i = 0; i < n_safekeepers; i++)
-	{
-		if (safekeeper[i].appendResponse.diskConsistentLsn < lsn)
-		{
-			lsn = safekeeper[i].appendResponse.diskConsistentLsn;
-		}
-	}
-	return lsn;
-}
 
 /*
  * Get minimum of flushed LSNs of all safekeepers, which is the LSN of the
@@ -1804,6 +1853,31 @@ GetAcknowledgedByQuorumWALPosition(void)
 	return responses[n_safekeepers - quorum];
 }
 
+/*
+ * Get ZenithFeedback fields from the most advanced safekeeper
+ */
+static void
+GetLatestZentihFeedback(ZenithFeedback *zf)
+{
+	int latest_safekeeper = 0;
+	uint64 replyTime = 0;
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (safekeeper[i].appendResponse.zf.ps_replytime > replyTime)
+		{
+			latest_safekeeper = i;
+			replyTime = safekeeper[i].appendResponse.zf.ps_replytime;
+			elog(LOG, "safekeeper[%d] replyTime %lu", i, replyTime);
+		}
+	}
+
+	zf->currentInstanceSize = safekeeper[latest_safekeeper].appendResponse.zf.currentInstanceSize;
+	zf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_writelsn;
+	zf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_flushlsn;
+	zf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_applylsn;
+	zf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.zf.ps_replytime;
+}
+
 static void
 HandleSafekeeperResponse(void)
 {
@@ -1812,16 +1886,17 @@ HandleSafekeeperResponse(void)
 	XLogRecPtr	diskConsistentLsn;
 	XLogRecPtr  minFlushLsn;
 
-	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-	diskConsistentLsn = CalculateDiskConsistentLsn();
 
-	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.diskConsistentLsn)
+	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+	diskConsistentLsn = quorumFeedback.zf.ps_flushlsn;
+	// Get ZenithFeedback fields from the most advanced safekeeper
+	GetLatestZentihFeedback(&quorumFeedback.zf);
+
+	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.zf.ps_flushlsn)
 	{
 
 		if (minQuorumLsn > quorumFeedback.flushLsn)
 			quorumFeedback.flushLsn = minQuorumLsn;
-
-		quorumFeedback.diskConsistentLsn = diskConsistentLsn;
 
 		/* advance the replication slot */
 		if (!syncSafekeepers)
@@ -1831,7 +1906,7 @@ HandleSafekeeperResponse(void)
 								//flush_lsn - This is what durably stored in WAL service.
 								quorumFeedback.flushLsn,
 								//apply_lsn - This is what processed and durably saved at pageserver.
-								quorumFeedback.diskConsistentLsn,
+								quorumFeedback.zf.ps_flushlsn,
 								GetCurrentTimestamp(), false);
 	}
 
@@ -2017,10 +2092,19 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			msg->term = pq_getmsgint64_le(&s);
 			msg->flushLsn = pq_getmsgint64_le(&s);
 			msg->commitLsn = pq_getmsgint64_le(&s);
-			msg->diskConsistentLsn = pq_getmsgint64_le(&s);
 			msg->hs.ts = pq_getmsgint64_le(&s);
 			msg->hs.xmin.value = pq_getmsgint64_le(&s);
 			msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);
+			if (buf_size > APPENDRESPONSE_FIXEDPART_SIZE)
+			{
+				StringInfoData z;
+				z.data = buf + APPENDRESPONSE_FIXEDPART_SIZE;
+				z.len = buf_size - APPENDRESPONSE_FIXEDPART_SIZE;
+				z.cursor = 0;
+				ParseZenithFeedbackMessage(&s, &msg->zf);
+				//advance main StringInfo cursor, because it is checked in pq_getmsgend below
+				s.cursor += z.cursor;
+			}
 			pq_getmsgend(&s);
 			return true;
 		}
