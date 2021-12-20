@@ -239,6 +239,7 @@ void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
+static void ProcessZenithFeedbackMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
 static void WalSndKeepalive(bool requestReply);
@@ -1839,6 +1840,10 @@ ProcessStandbyMessage(void)
 			ProcessStandbyHSFeedbackMessage();
 			break;
 
+		case 'z':
+			ProcessZenithFeedbackMessage();
+			break;
+
 		default:
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -1902,6 +1907,31 @@ ProcessStandbyReplyMessage(void)
 						applyPtr,
 						replyTime,
 						replyRequested);
+
+	elog(LOG, "ProcessStandbyReplyMessage: writelsn %X/%X",
+					LSN_FORMAT_ARGS(writePtr));
+	elog(LOG, "ProcessStandbyReplyMessage: flushlsn %X/%X",
+					LSN_FORMAT_ARGS(flushPtr));
+	elog(LOG, "ProcessStandbyReplyMessage: applylsn %X/%X",
+					LSN_FORMAT_ARGS(applyPtr));
+}
+
+// This message is a zenith extension of postgres replication protocol
+static void
+ProcessZenithFeedbackMessage(void)
+{
+	ZenithFeedback zf;
+
+	// consume message length
+	pq_getmsgint64(&reply_message);
+
+	ParseZenithFeedbackMessage(&reply_message, &zf);
+
+	ProcessStandbyReply(zf.ps_writelsn,
+						zf.ps_flushlsn,
+						zf.ps_applylsn,
+						zf.ps_replytime,
+						false);
 }
 
 void
