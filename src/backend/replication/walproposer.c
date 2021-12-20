@@ -1758,9 +1758,9 @@ ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 		if (strcmp(key, "current_timeline_size") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->currentInstanceSize = pq_getmsgint64(reply_message);
+				zf->currentClusterSize = pq_getmsgint64(reply_message);
 				elog(DEBUG2, "ParseZenithFeedbackMessage: current_timeline_size %lu",
-					zf->currentInstanceSize);
+					zf->currentClusterSize);
 		}
 		else if (strcmp(key, "ps_writelsn") == 0)
 		{
@@ -1895,11 +1895,10 @@ GetLatestZentihFeedback(ZenithFeedback *zf)
 		{
 			latest_safekeeper = i;
 			replyTime = safekeeper[i].appendResponse.zf.ps_replytime;
-			elog(DEBUG2, "safekeeper[%d] replyTime %lu", i, replyTime);
 		}
 	}
 
-	zf->currentInstanceSize = safekeeper[latest_safekeeper].appendResponse.zf.currentInstanceSize;
+	zf->currentClusterSize = safekeeper[latest_safekeeper].appendResponse.zf.currentClusterSize;
 	zf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_writelsn;
 	zf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_flushlsn;
 	zf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_applylsn;
@@ -1919,6 +1918,11 @@ HandleSafekeeperResponse(void)
 	diskConsistentLsn = quorumFeedback.zf.ps_flushlsn;
 	// Get ZenithFeedback fields from the most advanced safekeeper
 	GetLatestZentihFeedback(&quorumFeedback.zf);
+
+	if (!syncSafekeepers)
+	{
+		SetZenithCurrentClusterSize(quorumFeedback.zf.currentClusterSize);
+	}
 
 	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.zf.ps_flushlsn)
 	{

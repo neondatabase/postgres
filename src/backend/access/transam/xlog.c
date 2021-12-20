@@ -750,6 +750,11 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 	XLogRecPtr  lastWrittenPageLSN;
 
+	/*
+	 * size of a timeline in zenith pageserver.
+	 * used to enforce timeline size limit.
+	 */
+	uint64 		zenithCurrentClusterSize;
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -8895,6 +8900,26 @@ SetLastWrittenPageLSN(XLogRecPtr lsn)
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 
+
+uint64
+GetZenithCurrentClusterSize(void)
+{
+	uint64 size;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	size = XLogCtl->zenithCurrentClusterSize;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return size;
+}
+
+
+void
+SetZenithCurrentClusterSize(uint64 size)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->zenithCurrentClusterSize = size;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
 
 
 

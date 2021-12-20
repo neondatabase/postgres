@@ -353,6 +353,9 @@ extern void RemovePromoteSignalFiles(void);
 extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
 extern XLogRecPtr GetLastWrittenPageLSN(void);
 
+extern void SetZenithCurrentClusterSize(uint64 size);
+extern uint64 GetZenithCurrentClusterSize(void);
+
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
 extern void WakeupRecovery(void);
