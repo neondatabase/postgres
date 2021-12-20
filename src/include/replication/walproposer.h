@@ -282,7 +282,7 @@ typedef struct HotStandbyFeedback
 typedef	struct ZenithFeedback
 {
 	// current size of the timeline on pageserver
-	uint64 currentInstanceSize;
+	uint64 currentClusterSize;
 	// standby_status_update fields that safekeeper received from pageserver
 	XLogRecPtr ps_writelsn;
 	XLogRecPtr ps_flushlsn;
