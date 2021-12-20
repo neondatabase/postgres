@@ -278,6 +278,18 @@ typedef struct HotStandbyFeedback
 	FullTransactionId catalog_xmin;
 } HotStandbyFeedback;
 
+
+typedef	struct ZenithFeedback
+{
+	// current size of the timeline on pageserver
+	uint64 currentInstanceSize;
+	// standby_status_update fields that safekeeper received from pageserver
+	XLogRecPtr ps_writelsn;
+	XLogRecPtr ps_flushlsn;
+	XLogRecPtr ps_applylsn;
+	TimestampTz ps_replytime;
+} ZenithFeedback;
+
 /*
  * Report safekeeper state to proposer
  */
@@ -294,10 +306,16 @@ typedef struct AppendResponse
 	// Safekeeper reports back his awareness about which WAL is committed, as
 	// this is a criterion for walproposer --sync mode exit
 	XLogRecPtr commitLsn;
-	// Part of WAL applied and written to the disk by all pageservers
-	XLogRecPtr diskConsistentLsn;
 	HotStandbyFeedback hs;
+	// Feedback recieved from pageserver includes standby_status_update fields
+	// and custom zenith feedback.
+	// This part of the message is extensible.
+	ZenithFeedback zf;
 } AppendResponse;
+
+// ZenithFeedback is extensible part of the message that is parsed separately
+// Other fields are fixed part
+#define APPENDRESPONSE_FIXEDPART_SIZE offsetof(AppendResponse, zf)
 
 
 /*
@@ -357,6 +375,8 @@ void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									uint32		feedbackEpoch,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
+void ParseZenithFeedbackMessage(StringInfo reply_message,
+								ZenithFeedback *zf);
 void       StartReplication(StartReplicationCmd *cmd);
 void       WalProposerSync(int argc, char *argv[]);
 
