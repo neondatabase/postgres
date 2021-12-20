@@ -4,12 +4,13 @@
 MODULE_big = zenith
 OBJS = \
 	$(WIN32RES) \
-	inmem_smgr.o libpagestore.o pagestore_smgr.o relsize_cache.o
+	inmem_smgr.o libpagestore.o pagestore_smgr.o relsize_cache.o zenith.o
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
 
 EXTENSION = zenith
+DATA = zenith--1.0.sql
 PGFILEDESC = "zenith - cloud storage for PostgreSQL"
 
 ifdef USE_PGXS
