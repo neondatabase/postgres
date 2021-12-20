@@ -335,6 +335,15 @@ _PG_init(void)
 							 0,
 							 NULL, NULL, NULL);
 
+	DefineCustomIntVariable("zenith.max_cluster_size",
+							"cluster size limit",
+							NULL,
+							&max_cluster_size,
+							-1, -1, MAX_KILOBYTES,
+							PGC_SIGHUP,
+							GUC_UNIT_BYTE,
+							NULL, NULL,	NULL);
+
 	relsize_hash_init();
 
 	if (page_server != NULL)
