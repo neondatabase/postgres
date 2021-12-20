@@ -62,6 +62,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "catalog/pg_tablespace_d.h"
+#include "postmaster/autovacuum.h"
 
 /*
  * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
@@ -91,6 +92,7 @@ char	   *callmemaybe_connstring;
 char	   *zenith_timeline;
 char	   *zenith_tenant;
 bool		wal_redo = false;
+int32		max_cluster_size;
 
 /* unlogged relation build states */
 typedef enum
@@ -771,6 +773,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
 	XLogRecPtr	lsn;
+	uint64 current_instance_size;
 
 	switch (reln->smgr_relpersistence)
 	{
@@ -787,6 +790,35 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 		default:
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
+	current_instance_size = GetZenithCurrentClusterSize();
+
+	// Do not limit autovacuum processes.
+	if (!IsAutoVacuumWorkerProcess() && max_cluster_size > 0)
+	{
+		if (current_instance_size >= max_cluster_size)
+			ereport(ERROR,
+				(errcode(ERRCODE_DISK_FULL),
+					errmsg("could not extend file. Cluster size limit of %d bytes is reached",
+						max_cluster_size),
+					errhint("This limit is defined by zenith.max_cluster_size GUC")));
+		// Throw a warning if current size is too close to the limit.
+		// `too close' is now defined as 10%
+		else if (current_instance_size >= max_cluster_size*0.1)
+		{
+			ereport(WARNING,
+				(errmsg("Current cluster size %lu bytes is close to the limit of %d bytes. ",
+						current_instance_size, max_cluster_size),
+					errhint("This limit is defined by zenith.max_cluster_size GUC")));
+		}
+		else
+		{
+			ereport(WARNING,
+					(errmsg("Current cluster size %lu bytes is not close to the limit of %d bytes. ",
+							current_instance_size, max_cluster_size),
+						errhint("This limit is defined by zenith.max_cluster_size GUC")));
+		}
 	}
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
