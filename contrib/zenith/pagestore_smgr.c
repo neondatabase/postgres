@@ -835,7 +835,9 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 bool
 zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
-	XLogRecPtr request_lsn;
+	XLogRecPtr	request_lsn;
+	bool		latest;
+
 	switch (reln->smgr_relpersistence)
 	{
 		case 0:
@@ -853,7 +855,7 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	request_lsn = zenith_get_request_lsn(false);
+	request_lsn = zenith_get_request_lsn(&latest);
 	zenith_prefetch_buffer(reln, forknum, blocknum, request_lsn);
 	return true;
 }
