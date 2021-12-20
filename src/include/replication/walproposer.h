@@ -456,7 +456,7 @@ typedef WalProposerExecStatusType (*walprop_get_query_result_fn) (WalProposerCon
 typedef pgsocket (*walprop_socket_fn) (WalProposerConn* conn);
 
 /* Wrapper around PQconsumeInput (if socket's read-ready) + PQflush */
-typedef int (*walprop_flush_fn) (WalProposerConn* conn, bool socket_read_ready);
+typedef int (*walprop_flush_fn) (WalProposerConn* conn);
 
 /* Re-exported PQfinish */
 typedef void (*walprop_finish_fn) (WalProposerConn* conn);
@@ -531,8 +531,8 @@ typedef struct WalProposerFunctionsType
 	WalProposerFunctions->walprop_set_nonblocking(conn, arg)
 #define walprop_socket(conn) \
 	WalProposerFunctions->walprop_socket(conn)
-#define walprop_flush(conn, consume_input) \
-	WalProposerFunctions->walprop_flush(conn, consume_input)
+#define walprop_flush(conn) \
+	WalProposerFunctions->walprop_flush(conn)
 #define walprop_finish(conn) \
 	WalProposerFunctions->walprop_finish(conn)
 #define walprop_async_read(conn, buf, amount) \

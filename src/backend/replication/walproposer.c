@@ -102,7 +102,7 @@ static bool AsyncReadFixed(int i, void *value, size_t value_size);
 static bool AsyncReadMessage(int i, AcceptorProposerMessage *anymsg);
 static bool BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state);
 static bool AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state);
-static bool AsyncFlush(int i, bool socket_read_ready);
+static bool AsyncFlush(WalKeeper *wk);
 static void HackyRemoveWalProposerEvent(WalKeeper *to_remove);
 static void BroadcastMessage(WalMessage *msg);
 static WalMessage *CreateMessageCommitLsnOnly(XLogRecPtr lsn);
@@ -1246,7 +1246,7 @@ SendAppendRequests(WalKeeper *wk, uint32 events)
 
 	if (wk->flushWrite)
 	{
-		if (!AsyncFlush(wki, (events & WL_SOCKET_READABLE) != 0))
+		if (!AsyncFlush(wk))
 			/* 
 			 * AsyncFlush failed, that could happen if the socket is closed or
 			 * we have nothing to write and should wait for writeable socket.
@@ -1801,7 +1801,7 @@ AdvancePollState(int i, uint32 events)
 				 * the flush completes. If we still have more to do, we'll
 				 * wait until the next poll comes along.
 				 */
-				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
+				if (!AsyncFlush(wk))
 					return;
 				
 				StartStreaming(wk);
@@ -2043,17 +2043,15 @@ AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state
  * If flushing successfully completes returns true, otherwise false.
  */
 static bool
-AsyncFlush(int i, bool socket_read_ready)
+AsyncFlush(WalKeeper *wk)
 {
-	WalKeeper  *wk = &walkeeper[i];
-
 	/*---
 	 * PQflush returns:
 	 *   0 if successful                    [we're good to move on]
 	 *   1 if unable to send everything yet [call PQflush again]
 	 *  -1 if it failed                     [emit an error]
 	 */
-	switch (walprop_flush(wk->conn, socket_read_ready))
+	switch (walprop_flush(wk->conn))
 	{
 		case 0:
 			UpdateEventSet(wk, WL_SOCKET_READABLE); /* flush is done, unset write interest */
