@@ -670,7 +670,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 							reln->smgr_rnode.node.dbNode,
 							reln->smgr_rnode.node.relNode,
 							forkNum,
-							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+							LSN_FORMAT_ARGS(request_lsn)),
 					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
 			break;
@@ -853,7 +853,7 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	XLogRecPtr request_lsn = zenith_get_request_lsn(false);
+	request_lsn = zenith_get_request_lsn(false);
 	zenith_prefetch_buffer(reln, forknum, blocknum, request_lsn);
 	return true;
 }

@@ -117,7 +117,7 @@ zenith_connect()
 }
 
 static void
-zenith_send(ZenithRequest request)
+zenith_send(ZenithRequest* request)
 {
 	StringInfoData req_buff;
 
@@ -165,7 +165,7 @@ static ZenithResponse *
 zenith_receive(void)
 {
 	StringInfoData resp_buff;
-	ZenithMessage *resp;
+	ZenithResponse *resp;
 
 	/* read response */
 	resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
@@ -196,7 +196,7 @@ zenith_receive(void)
 }
 
 static ZenithResponse *
-zenith_call(ZenithRequest request)
+zenith_call(ZenithRequest* request)
 {
 	zenith_send(request);
 	zenith_flush();

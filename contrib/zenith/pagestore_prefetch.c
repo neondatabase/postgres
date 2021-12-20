@@ -357,16 +357,17 @@ zenith_prefetch_main(Datum arg)
 
 			prefetch_log("%lu: send prefetch request for block %d of relation %d",
 						 GetCurrentTimestamp(), entry->tag.blockNum, entry->tag.rnode.relNode);
-
-			page_server->send((ZenithRequest) {
-				.tag = T_ZenithReadRequest,
-				.page_key = {
-					 .rnode = entry->tag.rnode,
-					 .forknum = entry->tag.forkNum,
-					 .blkno = entry->tag.blockNum
-				},
-				.lsn = entry->lsn
-		    });
+			{
+				ZenithGetPageRequest request = {
+					.req.tag = T_ZenithGetPageRequest,
+					.req.latest = true,
+					.req.lsn = entry->lsn,
+					.rnode = entry->tag.rnode,
+					.forknum = entry->tag.forkNum,
+					.blkno = entry->tag.blockNum
+				};
+				page_server->send(&request.req);
+			}
 			n_prefetched += 1;
 		}
 
@@ -403,7 +404,7 @@ zenith_prefetch_main(Datum arg)
 				/* entry was not replaced in ring buffer */
 				Assert(entry->state == IN_PROGRESS);
 
-				if (!resp->ok)
+				if (resp->tag != T_ZenithGetPageResponse)
 				{
 					ereport(LOG,
 							(errcode(ERRCODE_IO_ERROR),
@@ -415,13 +416,12 @@ zenith_prefetch_main(Datum arg)
 									entry->tag.forkNum,
 									LSN_FORMAT_ARGS(entry->lsn))));
 				}
-				else if (!PageIsNew(resp->page)) /* page server returns zero page if requested cblock is not found */
+				else if (!PageIsNew(((ZenithGetPageResponse *) resp)->page)) /* page server returns zero page if requested cblock is not found */
 				{
 					prefetch_log("%lu: receive prefetched data for block %d of relation %d",
 								 GetCurrentTimestamp(), entry->tag.blockNum, entry->tag.rnode.relNode);
 					entry->state = COMPLETED;
-					((PageHeader)resp->page)->pd_flags &= ~PD_WAL_LOGGED; /* Clear PD_WAL_LOGGED bit stored in WAL record */
-					memcpy(prefetch_buffer + entry->index*BLCKSZ, resp->page, BLCKSZ);
+					memcpy(prefetch_buffer + entry->index*BLCKSZ, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
 				}
 				if (entry->waiting_backend)
 				{
