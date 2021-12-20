@@ -1927,6 +1927,8 @@ ProcessZenithFeedbackMessage(void)
 
 	ParseZenithFeedbackMessage(&reply_message, &zf);
 
+	SetZenithCurrentClusterSize(zf.currentClusterSize);
+
 	ProcessStandbyReply(zf.ps_writelsn,
 						zf.ps_flushlsn,
 						zf.ps_applylsn,
