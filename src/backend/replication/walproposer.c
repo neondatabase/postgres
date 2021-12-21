@@ -110,7 +110,7 @@ static term_t GetHighestTerm(TermHistory *th);
 static term_t GetEpoch(WalKeeper *wk);
 static void SendProposerElected(WalKeeper *wk);
 static void StartStreaming(WalKeeper *wk);
-static bool SendAppendRequests(WalKeeper *wk, uint32 events);
+static bool SendAppendRequests(WalKeeper *wk);
 
 
 /*
@@ -728,13 +728,10 @@ SendMessageToNode(int i, WalMessage *msg)
 
 	wk->currMsg = msg;
 	wk->flushWrite = false;
-	wk->state = SS_ACTIVE;
 
-	/* TODO: do we need to send messages immediately? */
-	if (!SendAppendRequests(wk, WL_SOCKET_WRITEABLE))
+	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
+	if (!SendAppendRequests(wk))
 		return;
-
-	UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->flushWrite ? WL_SOCKET_WRITEABLE : 0));
 }
 
 /*
@@ -1155,6 +1152,13 @@ StartStreaming(WalKeeper *wk)
 {
 	int wki = wk - walkeeper;
 
+	/* 
+	 * This is the only entrypoint to state SS_ACTIVE. It's executed
+	 * exactly once for a connection.
+	 */
+	wk->state = SS_ACTIVE;
+	UpdateEventSet(wk, WL_SOCKET_READABLE);
+
 	for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
 	{
 		if (msg->req.endLsn <= wk->startStreamingAt)
@@ -1168,10 +1172,6 @@ StartStreaming(WalKeeper *wk)
 			return;
 		}
 	}
-
-	/* nothing to send yet, waiting for the next message */
-	wk->state = SS_ACTIVE;
-	UpdateEventSet(wk, WL_SOCKET_READABLE);
 }
 
 /*
@@ -1238,7 +1238,7 @@ WalProposerPoll(void)
  * Returns false in this case, true otherwise.
  */
 static bool
-SendAppendRequests(WalKeeper *wk, uint32 events)
+SendAppendRequests(WalKeeper *wk)
 {
 	int wki = wk - walkeeper;
 	WalMessage *msg;
@@ -1345,17 +1345,8 @@ RecvAppendResponses(WalKeeper *wk)
 	int wki = wk - walkeeper;
 	bool readAnything = false;
 
-	/*
-	 * We shouldn't read responses ahead of wk->currMsg, because that will
-	 * look like we are receiving responses for messages that haven't been
-	 * sent yet. This can happen when message was placed in a buffer in 
-	 * SendAppendRequests, but sent through a wire only with a flush in 
-	 * reading routine.
-	 */
-	while (wk->ackMsg != NULL && wk->ackMsg != wk->currMsg)
+	while (true)
 	{
-		Assert((wk->ackMsg->ackMask & (1 << wki)) == 0);
-
 		/*
 		 * If our reading doesn't immediately succeed, any
 		 * necessary error handling or state setting is taken care
@@ -1363,6 +1354,24 @@ RecvAppendResponses(WalKeeper *wk)
 		 */
 		if (!AsyncReadFixed(wki, &wk->feedback, sizeof(wk->feedback)))
 			break;
+
+		Assert(wk->ackMsg != NULL && (wk->ackMsg->ackMask & (1 << wki)) == 0);
+
+		/*
+		 * We shouldn't read responses ahead of wk->currMsg, because that will
+		 * look like we are receiving responses for messages that haven't been
+		 * sent yet. This can happen when message was placed in a buffer in 
+		 * SendAppendRequests, but sent through a wire only with a flush inside
+		 * AsyncReadFixed. In this case, we should move wk->currMsg.
+		 */
+		if (wk->ackMsg == wk->currMsg)
+		{
+			/* Couldn't happen without flush flag */
+			Assert(wk->flushWrite);
+
+			wk->currMsg = wk->currMsg->next;
+			wk->flushWrite = false;
+		}
 
 		wk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
 											* receiving of this
@@ -1822,7 +1831,7 @@ AdvancePollState(int i, uint32 events)
 
 			case SS_ACTIVE:
 				if (events & WL_SOCKET_WRITEABLE)
-					if (!SendAppendRequests(wk, events))
+					if (!SendAppendRequests(wk))
 						return;
 
 				if (events & WL_SOCKET_READABLE)
