@@ -168,7 +168,7 @@ bool zenith_find_prefetched_buffer(SMgrRelation reln, ForkNumber forknum, BlockN
 		LWLockAcquire(prefetch_lock, LW_EXCLUSIVE);
 		entry = hash_search(prefetch_hash, &tag, HASH_FIND, NULL);
 		if (entry != NULL) {
-			if (entry->state == QUEUED || entry->lsn < lsn)
+			if (entry->state == QUEUED || entry->state == CANCELED || entry->lsn < lsn)
 			{
 				Latch* waiting_backend = entry->waiting_backend;
 				/* We have not sent this prefetch request and page is already requested.
@@ -416,12 +416,16 @@ zenith_prefetch_main(Datum arg)
 									entry->tag.forkNum,
 									LSN_FORMAT_ARGS(entry->lsn))));
 				}
-				else if (!PageIsNew(((ZenithGetPageResponse *) resp)->page)) /* page server returns zero page if requested cblock is not found */
+				else if (!PageIsNew(((ZenithGetPageResponse *) resp)->page)) /* page server returns zero page if requested block is not found */
 				{
 					prefetch_log("%lu: receive prefetched data for block %d of relation %d",
 								 GetCurrentTimestamp(), entry->tag.blockNum, entry->tag.rnode.relNode);
 					entry->state = COMPLETED;
 					memcpy(prefetch_buffer + entry->index*BLCKSZ, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
+				} else {
+					elog(WARNING, "Prefetch empty page %d of relation %d",
+						 entry->tag.blockNum, entry->tag.rnode.relNode);
+					entry->state = CANCELED;
 				}
 				if (entry->waiting_backend)
 				{
