@@ -102,7 +102,7 @@ static bool AsyncReadFixed(int i, void *value, size_t value_size);
 static bool AsyncReadMessage(int i, AcceptorProposerMessage *anymsg);
 static bool BlockingWrite(int i, void *msg, size_t msg_size, WalKeeperState success_state);
 static bool AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state);
-static bool AsyncFlush(int i, bool socket_read_ready);
+static bool AsyncFlush(WalKeeper *wk);
 static void HackyRemoveWalProposerEvent(WalKeeper *to_remove);
 static void BroadcastMessage(WalMessage *msg);
 static WalMessage *CreateMessageCommitLsnOnly(XLogRecPtr lsn);
@@ -110,6 +110,7 @@ static term_t GetHighestTerm(TermHistory *th);
 static term_t GetEpoch(WalKeeper *wk);
 static void SendProposerElected(WalKeeper *wk);
 static void StartStreaming(WalKeeper *wk);
+static bool SendAppendRequests(WalKeeper *wk);
 
 
 /*
@@ -236,8 +237,9 @@ HackyRemoveWalProposerEvent(WalKeeper *to_remove)
 			continue;
 
 		/* If this WAL keeper isn't offline, add an event for it! */
-		if ((desired_events = WalKeeperStateDesiredEvents(wk->state)))
+		if (wk->conn != NULL)
 		{
+			desired_events = WalKeeperStateDesiredEvents(wk->state);
 			wk->eventPos = AddWaitEventToSet(waitEvents, desired_events, walprop_socket(wk->conn), NULL, wk);
 		}
 	}
@@ -251,7 +253,10 @@ ShutdownConnection(WalKeeper *wk)
 		walprop_finish(wk->conn);
 	wk->conn = NULL;
 	wk->state = SS_OFFLINE;
+	wk->flushWrite = false;
 	wk->currMsg = NULL;
+	wk->ackMsg = NULL;
+
 	if (wk->voteResponse.termHistory.entries)
 		pfree(wk->voteResponse.termHistory.entries);
 	wk->voteResponse.termHistory.entries = NULL;
@@ -546,7 +551,9 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 */
 		walkeeper[n_walkeepers].conninfo[0] = '\0';
 		initStringInfo(&walkeeper[n_walkeepers].outbuf);
+		walkeeper[n_walkeepers].flushWrite = false;
 		walkeeper[n_walkeepers].currMsg = NULL;
+		walkeeper[n_walkeepers].ackMsg = NULL;
 		walkeeper[n_walkeepers].startStreamingAt = InvalidXLogRecPtr;
 		n_walkeepers += 1;
 	}
@@ -699,7 +706,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 }
 
 /*
- * Send message to the particular node
+ * Start sending message to the particular node.
  *
  * Always updates the state and event set for the WAL keeper; setting either of
  * these before calling would be redundant work.
@@ -720,27 +727,11 @@ SendMessageToNode(int i, WalMessage *msg)
 		msg = msg->next;
 
 	wk->currMsg = msg;
+	wk->flushWrite = false;
 
-	/* Only try to send the message if it's non-null */
-	if (wk->currMsg)
-	{
-		wk->currMsg->req.commitLsn = GetAcknowledgedByQuorumWALPosition();
-		wk->currMsg->req.truncateLsn = truncateLsn;
-
-		/*
-		 * Once we've selected and set up our message, actually start sending
-		 * it.
-		 */
-		wk->state = SS_SEND_WAL;
-		/* Don't ned to update the event set; that's done by AdvancePollState */
-
-		AdvancePollState(i, WL_NO_EVENTS);
-	}
-	else
-	{
-		wk->state = SS_IDLE;
-		UpdateEventSet(wk, WL_SOCKET_READABLE);
-	}
+	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
+	if (!SendAppendRequests(wk))
+		return;
 }
 
 /*
@@ -751,7 +742,7 @@ BroadcastMessage(WalMessage *msg)
 {
 	for (int i = 0; i < n_walkeepers; i++)
 	{
-		if (walkeeper[i].state == SS_IDLE && walkeeper[i].currMsg == NULL)
+		if (walkeeper[i].state == SS_ACTIVE && walkeeper[i].currMsg == NULL)
 		{
 			SendMessageToNode(i, msg);
 		}
@@ -1154,12 +1145,19 @@ SendProposerElected(WalKeeper *wk)
 }
 
 /*
- * Start streaming to safekeeper wk.
+ * Start streaming to safekeeper wk, always updates state to SS_ACTIVE.
  */
 static void
 StartStreaming(WalKeeper *wk)
 {
 	int wki = wk - walkeeper;
+
+	/* 
+	 * This is the only entrypoint to state SS_ACTIVE. It's executed
+	 * exactly once for a connection.
+	 */
+	wk->state = SS_ACTIVE;
+	UpdateEventSet(wk, WL_SOCKET_READABLE);
 
 	for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
 	{
@@ -1174,7 +1172,6 @@ StartStreaming(WalKeeper *wk)
 			return;
 		}
 	}
-	wk->state = SS_IDLE; /* nothing to send yet, safekeeper is recovered */
 }
 
 /*
@@ -1233,13 +1230,184 @@ WalProposerPoll(void)
 	}
 }
 
+/*
+ * Send queue messages starting from wk->currMsg until the end or non-writable
+ * socket, whichever comes first.
+ * 
+ * Can change state if Async* functions encounter errors and reset connection.
+ * Returns false in this case, true otherwise.
+ */
+static bool
+SendAppendRequests(WalKeeper *wk)
+{
+	int wki = wk - walkeeper;
+	WalMessage *msg;
+	AppendRequestHeader *req;
+
+	if (wk->flushWrite)
+	{
+		if (!AsyncFlush(wk))
+			/* 
+			 * AsyncFlush failed, that could happen if the socket is closed or
+			 * we have nothing to write and should wait for writeable socket.
+			 */
+			return wk->state == SS_ACTIVE;
+
+		wk->currMsg = wk->currMsg->next;
+		wk->flushWrite = false;
+	}
+
+	while (wk->currMsg)
+	{
+		msg = wk->currMsg;
+		req = &msg->req;
+
+		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
+		req->truncateLsn = truncateLsn;
+
+		Assert((msg->ackMask & (1 << wki)) == 0);
+
+		/*
+		 * If we need to send this message not from the beginning,
+		 * form the cut version. Only happens for the first
+		 * message.
+		 */
+		if (wk->startStreamingAt > msg->req.beginLsn)
+		{
+			uint32		len;
+			uint32		size;
+
+			Assert(wk->startStreamingAt < req->endLsn);
+
+			len = msg->req.endLsn - wk->startStreamingAt;
+			size = sizeof(AppendRequestHeader) + len;
+			req = malloc(size);
+			*req = msg->req;
+			req->beginLsn = wk->startStreamingAt;
+			memcpy(req + 1,
+					(char *) (&msg->req + 1) + wk->startStreamingAt -
+					msg->req.beginLsn,
+					len);
+		}
+
+		elog(LOG,
+				"sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+				req->endLsn - req->beginLsn,
+				LSN_FORMAT_ARGS(req->beginLsn),
+				LSN_FORMAT_ARGS(req->endLsn),
+				LSN_FORMAT_ARGS(req->commitLsn),
+				LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
+
+		/* if this is the first sent message, we should start processing feedback */
+		if (wk->ackMsg == NULL)
+			wk->ackMsg = wk->currMsg;
+
+		/*
+		 * We write with msg->size here because the body of the
+		 * message is stored after the end of the WalMessage
+		 * struct, in the allocation for each msg
+		 */
+		if (!AsyncWrite(wk, req,
+						sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn,
+						SS_ACTIVE))
+		{
+			if (req != &msg->req)
+				free(req);
+			if (wk->state == SS_ACTIVE)
+			{
+				wk->flushWrite = true;
+				return true;
+			}
+			return false;
+		}
+		if (req != &msg->req)
+			free(req);
+
+		/* continue writing the next message */
+		wk->currMsg = wk->currMsg->next;
+	}
+
+	return true;
+}
+
+/*
+ * Receive and process all available feedback.
+ *
+ * Can change state if Async* functions encounter errors and reset connection.
+ * Returns false in this case, true otherwise.
+ * 
+ * NB: This function can call SendMessageToNode and produce new messages.
+ */
+static bool
+RecvAppendResponses(WalKeeper *wk)
+{
+	XLogRecPtr	minQuorumLsn;
+	int wki = wk - walkeeper;
+	bool readAnything = false;
+
+	while (true)
+	{
+		/*
+		 * If our reading doesn't immediately succeed, any
+		 * necessary error handling or state setting is taken care
+		 * of. We can leave any other work until later.
+		 */
+		if (!AsyncReadFixed(wki, &wk->feedback, sizeof(wk->feedback)))
+			break;
+
+		Assert(wk->ackMsg != NULL && (wk->ackMsg->ackMask & (1 << wki)) == 0);
+
+		/*
+		 * We shouldn't read responses ahead of wk->currMsg, because that will
+		 * look like we are receiving responses for messages that haven't been
+		 * sent yet. This can happen when message was placed in a buffer in 
+		 * SendAppendRequests, but sent through a wire only with a flush inside
+		 * AsyncReadFixed. In this case, we should move wk->currMsg.
+		 */
+		if (wk->ackMsg == wk->currMsg)
+		{
+			/* Couldn't happen without flush flag */
+			Assert(wk->flushWrite);
+
+			wk->currMsg = wk->currMsg->next;
+			wk->flushWrite = false;
+		}
+
+		wk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
+											* receiving of this
+											* message */
+
+		wk->ackMsg = wk->ackMsg->next;
+		readAnything = true;
+	}
+
+	if (!readAnything)
+		return wk->state == SS_ACTIVE;
+
+	HandleWalKeeperResponse();
+
+	/*
+	 * Also send the new commit lsn to all the walkeepers.
+	 *
+	 * FIXME: This is redundant for walkeepers that have other
+	 * outbound messages pending.
+	 */
+	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
+	if (minQuorumLsn > lastSentCommitLsn)
+	{
+		BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+		lastSentCommitLsn = minQuorumLsn;
+	}
+
+	return wk->state == SS_ACTIVE;
+}
+
 /* Performs the logic for advancing the state machine of the 'i'th walkeeper,
  * given that a certain set of events has occured. */
 static void
 AdvancePollState(int i, uint32 events)
 {
 	WalKeeper  *wk = &walkeeper[i];
-
 	/*
 	 * Keep advancing the state while either: (a) the event is still
 	 * unprocessed (usually because it's the first iteration of the loop), or
@@ -1405,7 +1573,7 @@ AdvancePollState(int i, uint32 events)
 						 * generic "something went wrong"
 						 */
 					case WP_EXEC_UNEXPECTED_SUCCESS:
-						elog(WARNING, "Received bad resonse from walkeeper %s:%s query execution",
+						elog(WARNING, "Received bad response from walkeeper %s:%s query execution",
 							 wk->host, wk->port);
 						ShutdownConnection(wk);
 						return;
@@ -1607,6 +1775,12 @@ AdvancePollState(int i, uint32 events)
 							SendProposerElected(&walkeeper[i]);
 					}
 
+					/* 
+					 * The proposer has been elected, and there will be no quorum waiting
+					 * after this point. There will be no safekeeper with state SS_IDLE
+					 * also, because that state is used only for quorum waiting.
+					 */
+
 					if (syncSafekeepers)
 					{
 						/*
@@ -1636,7 +1810,7 @@ AdvancePollState(int i, uint32 events)
 				 * the flush completes. If we still have more to do, we'll
 				 * wait until the next poll comes along.
 				 */
-				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
+				if (!AsyncFlush(wk))
 					return;
 				
 				StartStreaming(wk);
@@ -1654,123 +1828,18 @@ AdvancePollState(int i, uint32 events)
 				ResetConnection(wk);
 				break;
 
-				/*
-				 * Start to send the message at wk->currMsg. Triggered only by
-				 * calls to SendMessageToNode
-				 */
-			case SS_SEND_WAL:
-				{
-					WalMessage *msg = wk->currMsg;
-					AppendRequestHeader *req = &msg->req;
 
-					/*
-					 * If we need to send this message not from the beginning,
-					 * form the cut version. Only happens for the first
-					 * message.
-					 */
-					if (wk->startStreamingAt > msg->req.beginLsn)
-					{
-						uint32		len;
-						uint32		size;
-
-						Assert(wk->startStreamingAt < req->endLsn);
-
-						len = msg->req.endLsn - wk->startStreamingAt;
-						size = sizeof(AppendRequestHeader) + len;
-						req = malloc(size);
-						*req = msg->req;
-						req->beginLsn = wk->startStreamingAt;
-						memcpy(req + 1,
-							   (char *) (&msg->req + 1) + wk->startStreamingAt -
-							   msg->req.beginLsn,
-							   len);
-					}
-
-					elog(LOG,
-						 "sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-						 req->endLsn - req->beginLsn,
-						 LSN_FORMAT_ARGS(req->beginLsn),
-						 LSN_FORMAT_ARGS(req->endLsn),
-						 LSN_FORMAT_ARGS(req->commitLsn),
-						 LSN_FORMAT_ARGS(truncateLsn), wk->host, wk->port);
-
-					/*
-					 * We write with msg->size here because the body of the
-					 * message is stored after the end of the WalMessage
-					 * struct, in the allocation for each msg
-					 */
-					if (!AsyncWrite(wk, req,
-									sizeof(AppendRequestHeader) + req->endLsn -
-									req->beginLsn,
-									SS_SEND_WAL_FLUSH))
-					{
-						if (req != &msg->req)
-							free(req);
+			case SS_ACTIVE:
+				if (events & WL_SOCKET_WRITEABLE)
+					if (!SendAppendRequests(wk))
 						return;
-					}
-					wk->state = SS_RECV_FEEDBACK;
-					if (req != &msg->req)
-						free(req);
 
-					break;
-				}
+				if (events & WL_SOCKET_READABLE)
+					if (!RecvAppendResponses(wk))
+						return;
 
-				/* Flush the WAL message we're sending from SS_SEND_WAL */
-			case SS_SEND_WAL_FLUSH:
-
-				/*
-				 * AsyncFlush ensures we only move on to SS_RECV_FEEDBACK once
-				 * the flush completes. If we still have more to do, we'll
-				 * wait until the next poll comes along.
-				 */
-				if (!AsyncFlush(i, (events & WL_SOCKET_READABLE) != 0))
-					return;
-
-				wk->state = SS_RECV_FEEDBACK;
-
+				UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE));
 				break;
-
-				/*
-				 * Start to receive the feedback from a message sent via
-				 * SS_SEND_WAL
-				 */
-			case SS_RECV_FEEDBACK:
-				{
-					WalMessage *next;
-					XLogRecPtr	minQuorumLsn;
-
-					/*
-					 * If our reading doesn't immediately succeed, any
-					 * necessary error handling or state setting is taken care
-					 * of. We can leave any other work until later.
-					 */
-					if (!AsyncReadFixed(i, &wk->feedback, sizeof(wk->feedback)))
-						return;
-
-					next = wk->currMsg->next;
-					wk->currMsg->ackMask |= 1 << i; /* this walkeeper confirms
-													 * receiving of this
-													 * message */
-
-					wk->currMsg = NULL;
-					HandleWalKeeperResponse();
-					SendMessageToNode(i, next); /* Updates state & event set */
-
-					/*
-					 * Also send the new commit lsn to all the walkeepers.
-					 *
-					 * FIXME: This is redundant for walkeepers that have other
-					 * outbound messages pending.
-					 */
-					minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-
-					if (minQuorumLsn > lastSentCommitLsn)
-					{
-						BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
-						lastSentCommitLsn = minQuorumLsn;
-					}
-					break;
-				}
 		}
 
 		/*
@@ -1983,17 +2052,15 @@ AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state
  * If flushing successfully completes returns true, otherwise false.
  */
 static bool
-AsyncFlush(int i, bool socket_read_ready)
+AsyncFlush(WalKeeper *wk)
 {
-	WalKeeper  *wk = &walkeeper[i];
-
 	/*---
 	 * PQflush returns:
 	 *   0 if successful                    [we're good to move on]
 	 *   1 if unable to send everything yet [call PQflush again]
 	 *  -1 if it failed                     [emit an error]
 	 */
-	switch (walprop_flush(wk->conn, socket_read_ready))
+	switch (walprop_flush(wk->conn))
 	{
 		case 0:
 			UpdateEventSet(wk, WL_SOCKET_READABLE); /* flush is done, unset write interest */
