@@ -22,7 +22,7 @@ static WalProposerConnectPollStatusType	libpqprop_connect_poll(WalProposerConn* 
 static bool								libpqprop_send_query(WalProposerConn* conn, char* query);
 static WalProposerExecStatusType		libpqprop_get_query_result(WalProposerConn* conn);
 static pgsocket							libpqprop_socket(WalProposerConn* conn);
-static int								libpqprop_flush(WalProposerConn* conn, bool socket_read_ready);
+static int								libpqprop_flush(WalProposerConn* conn);
 static void								libpqprop_finish(WalProposerConn* conn);
 static PGAsyncReadResult				libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount);
 static PGAsyncWriteResult				libpqprop_async_write(WalProposerConn* conn, void const* buf, size_t size);
@@ -239,13 +239,8 @@ libpqprop_socket(WalProposerConn* conn)
 }
 
 static int
-libpqprop_flush(WalProposerConn* conn, bool socket_read_ready)
+libpqprop_flush(WalProposerConn* conn)
 {
-	/* If the socket is read-ready, we have to call PQconsumeInput before
-	 * calling PQflush (according to libpq docs) */
-	if (socket_read_ready && !PQconsumeInput(conn->pg_conn))
-		return -1; /* return failure if PQconsumeInput fails */
-
 	return (PQflush(conn->pg_conn));
 }
 
