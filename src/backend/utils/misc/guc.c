@@ -2920,7 +2920,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MB,
 		},
 		&max_replication_apply_lag,
-		0, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 
@@ -2932,7 +2932,7 @@ static struct config_int ConfigureNamesInt[] =
 			GUC_UNIT_MB,
 		},
 		&max_replication_flush_lag,
-		0, 0, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 
