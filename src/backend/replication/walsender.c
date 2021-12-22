@@ -3019,8 +3019,8 @@ WalSndDone(WalSndSendDataCallback send_data)
 	 * flush location if valid, write otherwise. Tools like pg_receivewal will
 	 * usually (unless in synchronous mode) return an invalid flush location.
 	 */
-	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
-		MyWalSnd->write : MyWalSnd->flush;
+	// XXX Zenith uses flush_lsn to pass extra payload, so use write_lsn here
+	replicatedPtr = MyWalSnd->write;
 
 	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
 		!pq_is_send_pending())
@@ -3832,12 +3832,14 @@ backpressure_lag(void)
 			LSN_FORMAT_ARGS(applyPtr));
 
 		if ((flushPtr != UnknownXLogRecPtr
+			&& max_replication_flush_lag > 0
 			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
 		{
 			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
 		}
 
 		if ((applyPtr != UnknownXLogRecPtr
+			&& max_replication_apply_lag > 0
 			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
 		{
 			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);

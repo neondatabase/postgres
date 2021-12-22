@@ -406,8 +406,7 @@ HandleWalKeeperResponse(void)
 		/* advance the replication slot */
 		if (!syncSafekeepers)
 			ProcessStandbyReply(
-								// write_lsn
-								// Not used, because we use SYNCHRONOUS_COMMIT_REMOTE_FLUSH.
+								// write_lsn -  This is what durably stored in WAL service.
 								lastFeedback.flushLsn,
 								//flush_lsn - This is what durably stored in WAL service.
 								lastFeedback.flushLsn,
