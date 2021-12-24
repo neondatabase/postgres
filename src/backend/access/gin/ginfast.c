@@ -285,6 +285,15 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		memset(&sublist, 0, sizeof(GinMetaPageData));
 		makeSublist(index, collector->tuples, collector->ntuples, &sublist);
 
+		if (metadata->head != InvalidBlockNumber)
+		{
+			/*
+			 * ZENITH: Get buffer before XLogBeginInsert() to avoid recursive call
+			 * of XLogBeginInsert() by zenith_wallog_page->log_newpage_copy.
+			 */
+			buffer = ReadBuffer(index, metadata->tail);
+		}
+
 		if (needWal)
 			XLogBeginInsert();
 
@@ -316,7 +325,6 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 			data.prevTail = metadata->tail;
 			data.newRightlink = sublist.head;
 
-			buffer = ReadBuffer(index, metadata->tail);
 			LockBuffer(buffer, GIN_EXCLUSIVE);
 			page = BufferGetPage(buffer);
 
