@@ -2,7 +2,7 @@
 # Image with pre-built tools
 #
 FROM zenithdb/compute-tools:latest AS compute-deps
-# Only to get ready zenith_ctl and apply_conf binaries as deps
+# Only to get ready zenith_ctl binary as deppendency
 
 #
 # Image with Postgres build deps
@@ -56,7 +56,6 @@ RUN mkdir /var/db && useradd -m -d /var/db/postgres postgres && \
 COPY --from=pg-build /pg/compute_build/postgres_bin /usr/local
 
 # Copy binaries from compute-tools
-COPY --from=compute-deps /usr/local/bin/apply_conf /usr/local/bin/apply_conf
 COPY --from=compute-deps /usr/local/bin/zenith_ctl /usr/local/bin/zenith_ctl
 
 # Add postgres shared objects to the search path
