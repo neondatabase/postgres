@@ -19,10 +19,11 @@
 #include "access/relscan.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "optimizer/cost.h"
 #include "storage/predicate.h"
+#include "storage/itemptr.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
-
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
 static OffsetNumber _bt_binsrch(Relation rel, BTScanInsert key, Buffer buf);
@@ -1449,7 +1450,8 @@ readcomplete:
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
-
+	else if (enable_indexscan_prefetch && scan->heapRelation)
+		PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, ItemPointerGetBlockNumber(&scan->xs_heaptid));
 	return true;
 }
 
@@ -1497,8 +1499,11 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 	/* OK, itemIndex says what to return */
 	currItem = &so->currPos.items[so->currPos.itemIndex];
 	scan->xs_heaptid = currItem->heapTid;
+
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
+	else if (enable_indexscan_prefetch && scan->heapRelation)
+		PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, ItemPointerGetBlockNumber(&scan->xs_heaptid));
 
 	return true;
 }
@@ -1773,7 +1778,6 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum)
 		so->currPos.lastItem = MaxTIDsPerBTreePage - 1;
 		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
 	}
-
 	return (so->currPos.firstItem <= so->currPos.lastItem);
 }
 
@@ -2474,6 +2478,8 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 	scan->xs_heaptid = currItem->heapTid;
 	if (scan->xs_want_itup)
 		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
+	else if (enable_indexscan_prefetch && scan->heapRelation)
+		PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, ItemPointerGetBlockNumber(&scan->xs_heaptid));
 
 	return true;
 }

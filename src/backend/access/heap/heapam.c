@@ -53,6 +53,7 @@
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "port/pg_bitutils.h"
@@ -396,9 +397,17 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
+	/* Prefetch next block */
+	if (enable_seqscan_prefetch)
+	{
+		for (int i = 1; i <= seqscan_prefetch_buffers; i++)
+			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
+	}
+
 	/* read page using selected strategy */
 	scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM, page,
 									   RBM_NORMAL, scan->rs_strategy);
+
 	scan->rs_cblock = page;
 
 	if (!(scan->rs_base.rs_flags & SO_ALLOW_PAGEMODE))
