@@ -3394,6 +3394,8 @@ ProcessInterrupts(void)
 		if (lag <= 0)
 			break;
 
+		set_ps_display("backpressure throttling");
+
 		elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 		pg_usleep(BACK_PRESSURE_DELAY);
 	}
