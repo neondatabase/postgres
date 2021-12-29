@@ -3815,7 +3815,7 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 uint64
 backpressure_lag(void)
 {
-	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0)
+	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0 || max_replication_write_lag > 0)
 	{
 		XLogRecPtr writePtr;
 		XLogRecPtr flushPtr;
@@ -3830,6 +3830,13 @@ backpressure_lag(void)
 			LSN_FORMAT_ARGS(writePtr),
 			LSN_FORMAT_ARGS(flushPtr),
 			LSN_FORMAT_ARGS(applyPtr));
+
+		if ((writePtr != UnknownXLogRecPtr
+			&& max_replication_write_lag > 0
+			&& myFlushLsn > writePtr + max_replication_write_lag*MB))
+		{
+			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
+		}
 
 		if ((flushPtr != UnknownXLogRecPtr
 			&& max_replication_flush_lag > 0
