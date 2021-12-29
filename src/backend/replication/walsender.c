@@ -3815,7 +3815,7 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 uint64
 backpressure_lag(void)
 {
-	if (max_replication_apply_lag != 0 || max_replication_flush_lag != 0)
+	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0)
 	{
 		XLogRecPtr writePtr;
 		XLogRecPtr flushPtr;
