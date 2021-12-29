@@ -66,6 +66,7 @@ typedef struct
 /* GUCs */
 int			max_replication_apply_lag;
 int			max_replication_flush_lag;
+int			max_replication_write_lag;
 
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
