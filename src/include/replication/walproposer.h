@@ -173,7 +173,7 @@ typedef struct AcceptorProposerMessage
  */
 typedef struct AcceptorGreeting
 {
-	uint64		tag;
+	AcceptorProposerMessage apm;
 	term_t		term;
 } AcceptorGreeting;
 
@@ -284,11 +284,11 @@ typedef struct HotStandbyFeedback
  */
 typedef struct AppendResponse
 {
+	AcceptorProposerMessage apm;
 	/*
 	 * Current term of the safekeeper; if it is higher than proposer's, the
 	 * compute is out of date.
 	 */
-	uint64 tag;
 	term_t     term;
 	// TODO: add comment
 	XLogRecPtr flushLsn;

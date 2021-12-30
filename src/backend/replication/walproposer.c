@@ -138,7 +138,6 @@ static XLogRecPtr CalculateMinFlushLsn(void);
 static XLogRecPtr GetAcknowledgedByQuorumWALPosition(void);
 static void HandleWalKeeperResponse(void);
 static bool AsyncRead(WalKeeper *wk, char **buf, int *buf_size);
-static bool AsyncReadFixed(WalKeeper *wk, void *value, size_t value_size);
 static bool AsyncReadMessage(WalKeeper *wk, AcceptorProposerMessage *anymsg);
 static bool BlockingWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState success_state);
 static bool AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state);
@@ -908,7 +907,8 @@ RecvAcceptorGreeting(WalKeeper *wk)
 	 * error handling or state setting is taken care of. We can
 	 * leave any other work until later.
 	 */
-	if (!AsyncReadFixed(wk, &wk->greet, sizeof(wk->greet)))
+	wk->greet.apm.tag = 'g';
+	if (!AsyncReadMessage(wk, (AcceptorProposerMessage *) &wk->greet))
 		return;
 
 	/* Protocol is all good, move to voting. */
@@ -1654,7 +1654,8 @@ RecvAppendResponses(WalKeeper *wk)
 		 * necessary error handling or state setting is taken care
 		 * of. We can leave any other work until later.
 		 */
-		if (!AsyncReadFixed(wk, &wk->feedback, sizeof(wk->feedback)))
+		wk->feedback.apm.tag = 'a';
+		if (!AsyncReadMessage(wk, (AcceptorProposerMessage *) &wk->feedback))
 			break;
 
 		Assert(wk->ackMsg != NULL && (wk->ackMsg->ackMask & (1 << wki)) == 0);
@@ -1664,7 +1665,7 @@ RecvAppendResponses(WalKeeper *wk)
 		 * look like we are receiving responses for messages that haven't been
 		 * sent yet. This can happen when message was placed in a buffer in 
 		 * SendAppendRequests, but sent through a wire only with a flush inside
-		 * AsyncReadFixed. In this case, we should move wk->currMsg.
+		 * AsyncReadMessage. In this case, we should move wk->currMsg.
 		 */
 		if (wk->ackMsg == wk->currMsg)
 		{
@@ -1939,44 +1940,13 @@ AsyncRead(WalKeeper *wk, char **buf, int *buf_size)
 }
 
 /*
- * Reads a CopyData block from the 'i'th WAL keeper's postgres connection,
- * returning whether the read was successful.
- *
+ * Read next message with known type into provided struct, by reading a CopyData
+ * block from the safekeeper's postgres connection, returning whether the read
+ * was successful.
+ * 
  * If the read needs more polling, we return 'false' and keep the state
  * unmodified, waiting until it becomes read-ready to try again. If it fully
  * failed, a warning is emitted and the connection is reset.
- */
-static bool
-AsyncReadFixed(WalKeeper *wk, void *value, size_t value_size)
-{
-	char	   *buf = NULL;
-	int			buf_size = -1;
-
-	if (!(AsyncRead(wk, &buf, &buf_size)))
-		return false;
-
-	/*
-	 * If we get here, the read was ok, but we still need to check it was the
-	 * right amount
-	 */
-	if ((size_t) buf_size != value_size)
-	{
-		elog(FATAL,
-			 "Unexpected walkeeper %s:%s read length from %s state. Expected %ld, found %d",
-			 wk->host, wk->port,
-			 FormatWalKeeperState(wk->state),
-			 value_size, buf_size);
-	}
-
-	/* Copy the resulting info into place */
-	memcpy(value, buf, buf_size);
-
-	return true;
-}
-
-/*
- * Read next message with known type into provided struct. 
- * TODO: migrate AsyncReadFixed here for all messages
  */
 static bool
 AsyncReadMessage(WalKeeper *wk, AcceptorProposerMessage *anymsg)
@@ -2005,6 +1975,14 @@ AsyncReadMessage(WalKeeper *wk, AcceptorProposerMessage *anymsg)
 
 	switch (tag)
 	{
+		case 'g':
+		{
+			AcceptorGreeting *msg = (AcceptorGreeting *) anymsg;
+			msg->term = pq_getmsgint64_le(&s);
+			pq_getmsgend(&s);
+			return true;
+		}
+
 		case 'v':
 		{
 			VoteResponse *msg = (VoteResponse *) anymsg;
@@ -2020,6 +1998,20 @@ AsyncReadMessage(WalKeeper *wk, AcceptorProposerMessage *anymsg)
 				msg->termHistory.entries[i].term = pq_getmsgint64_le(&s);
 				msg->termHistory.entries[i].lsn = pq_getmsgint64_le(&s);
 			}
+			pq_getmsgend(&s);
+			return true;
+		}
+
+		case 'a':
+		{
+			AppendResponse *msg = (AppendResponse *) anymsg;
+			msg->term = pq_getmsgint64_le(&s);
+			msg->flushLsn = pq_getmsgint64_le(&s);
+			msg->commitLsn = pq_getmsgint64_le(&s);
+			msg->diskConsistentLsn = pq_getmsgint64_le(&s);
+			msg->hs.ts = pq_getmsgint64_le(&s);
+			msg->hs.xmin.value = pq_getmsgint64_le(&s);
+			msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);
 			pq_getmsgend(&s);
 			return true;
 		}
