@@ -130,6 +130,7 @@ static void SendMessageToNode(int i, WalMessage *msg);
 static void BroadcastMessage(WalMessage *msg);
 static WalMessage * CreateMessage(XLogRecPtr startpos, char *data, int len);
 static WalMessage * CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static void HandleAppendState(WalKeeper *wk, uint32 events);
 static bool SendAppendRequests(WalKeeper *wk);
 static bool RecvAppendResponses(WalKeeper *wk);
 static void CombineHotStanbyFeedbacks(HotStandbyFeedback * hs);
@@ -736,15 +737,7 @@ AdvancePollState(WalKeeper *wk, uint32 events)
 			 * Active state is used for streaming WAL and receiving feedback.
 			 */
 		case SS_ACTIVE:
-			if (events & WL_SOCKET_WRITEABLE)
-				if (!SendAppendRequests(wk))
-					return;
-
-			if (events & WL_SOCKET_READABLE)
-				if (!RecvAppendResponses(wk))
-					return;
-
-			UpdateEventSet(wk, WL_SOCKET_READABLE | (wk->currMsg == NULL ? 0 : WL_SOCKET_WRITEABLE));
+			HandleAppendState(wk, events);
 			break;
 	}
 }
@@ -1389,7 +1382,6 @@ StartStreaming(WalKeeper *wk)
 	 * exactly once for a connection.
 	 */
 	wk->state = SS_ACTIVE;
-	UpdateEventSet(wk, WL_SOCKET_READABLE);
 
 	for (WalMessage *msg = msgQueueHead; msg != NULL; msg = msg->next)
 	{
@@ -1400,16 +1392,21 @@ StartStreaming(WalKeeper *wk)
 		}
 		else
 		{
+			/* event set will be updated inside SendMessageToNode */
 			SendMessageToNode(wki, msg);
 			return;
 		}
 	}
+
+	/* Call SS_ACTIVE handler to update event set */
+	HandleAppendState(wk, WL_NO_EVENTS);
 }
 
 /*
- * Start sending message to the particular node.
+ * Start sending message to the particular node. Always updates event set.
  *
- * Can be used only for safekeepers in SS_ACTIVE state.
+ * Can be used only for safekeepers in SS_ACTIVE state. State can be changed
+ * in case of errors.
  */
 static void
 SendMessageToNode(int i, WalMessage *msg)
@@ -1428,11 +1425,9 @@ SendMessageToNode(int i, WalMessage *msg)
 		msg = msg->next;
 
 	wk->currMsg = msg;
-	wk->flushWrite = false;
 
 	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
-	if (!SendAppendRequests(wk))
-		return;
+	HandleAppendState(wk, WL_SOCKET_WRITEABLE);
 }
 
 /*
@@ -1533,8 +1528,30 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 }
 
 /*
+ * Process all events happened in SS_ACTIVE state, update event set after that.
+ */
+static void
+HandleAppendState(WalKeeper *wk, uint32 events)
+{
+	uint32 newEvents = WL_SOCKET_READABLE;
+
+	if (events & WL_SOCKET_WRITEABLE)
+		if (!SendAppendRequests(wk))
+			return;
+
+	if (events & WL_SOCKET_READABLE)
+		if (!RecvAppendResponses(wk))
+			return;
+
+	if (wk->currMsg != NULL || wk->flushWrite)
+		newEvents |= WL_SOCKET_WRITEABLE;
+
+	UpdateEventSet(wk, newEvents);
+}
+
+/*
  * Send queue messages starting from wk->currMsg until the end or non-writable
- * socket, whichever comes first.
+ * socket, whichever comes first. Caller should take care of updating event set.
  * 
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
@@ -1545,6 +1562,7 @@ SendAppendRequests(WalKeeper *wk)
 	int wki = wk - walkeeper;
 	WalMessage *msg;
 	AppendRequestHeader *req;
+	PGAsyncWriteResult writeResult;
 
 	if (wk->flushWrite)
 	{
@@ -1555,7 +1573,6 @@ SendAppendRequests(WalKeeper *wk)
 			 */
 			return wk->state == SS_ACTIVE;
 
-		wk->currMsg = wk->currMsg->next;
 		wk->flushWrite = false;
 	}
 
@@ -1609,24 +1626,39 @@ SendAppendRequests(WalKeeper *wk)
 		 * message is stored after the end of the WalMessage
 		 * struct, in the allocation for each msg
 		 */
-		if (!AsyncWrite(wk, req,
-						sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn,
-						SS_ACTIVE))
-		{
-			if (req != &msg->req)
-				free(req);
-			if (wk->state == SS_ACTIVE)
-			{
-				wk->flushWrite = true;
-				return true;
-			}
-			return false;
-		}
+		writeResult = walprop_async_write(wk->conn, req, sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn);
+		
+		/* Free up resources */
 		if (req != &msg->req)
 			free(req);
 
-		/* continue writing the next message */
+		/* Mark current message as sent, whatever the result is */
 		wk->currMsg = wk->currMsg->next;
+
+		switch (writeResult)
+		{
+			case PG_ASYNC_WRITE_SUCCESS:
+				/* Continue writing the next message */
+				break;
+
+			case PG_ASYNC_WRITE_TRY_FLUSH:
+				/*
+				 * We still need to call PQflush some more to finish the job.
+				 * Caller function will handle this by setting right event set.
+				 */
+				wk->flushWrite = true;
+				return true;
+
+			case PG_ASYNC_WRITE_FAIL:
+				elog(WARNING, "Failed to send to node %s:%s in %s state: %s",
+					wk->host, wk->port, FormatWalKeeperState(wk->state),
+					walprop_error_message(wk->conn));
+				ShutdownConnection(wk);
+				return false;
+			default:
+				Assert(false);
+				return false;
+		}
 	}
 
 	return true;
@@ -1663,18 +1695,9 @@ RecvAppendResponses(WalKeeper *wk)
 		/*
 		 * We shouldn't read responses ahead of wk->currMsg, because that will
 		 * look like we are receiving responses for messages that haven't been
-		 * sent yet. This can happen when message was placed in a buffer in 
-		 * SendAppendRequests, but sent through a wire only with a flush inside
-		 * AsyncReadMessage. In this case, we should move wk->currMsg.
+		 * sent yet.
 		 */
-		if (wk->ackMsg == wk->currMsg)
-		{
-			/* Couldn't happen without flush flag */
-			Assert(wk->flushWrite);
-
-			wk->currMsg = wk->currMsg->next;
-			wk->flushWrite = false;
-		}
+		Assert(wk->ackMsg != wk->currMsg);
 
 		wk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
 											* receiving of this

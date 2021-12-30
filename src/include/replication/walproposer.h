@@ -319,8 +319,8 @@ typedef struct WalKeeper
 	WalProposerConn*   conn;
 	StringInfoData outbuf;
 
-	bool               flushWrite;    /* set to true if we wrote currMsg, but still need to call AsyncFlush */
-	WalMessage*        currMsg;       /* message been send to the receiver */
+	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
+	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
 	WalMessage*        ackMsg;        /* message waiting ack from the receiver */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
