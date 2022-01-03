@@ -130,7 +130,7 @@ static void SendMessageToNode(int i, WalMessage *msg);
 static void BroadcastMessage(WalMessage *msg);
 static WalMessage * CreateMessage(XLogRecPtr startpos, char *data, int len);
 static WalMessage * CreateMessageCommitLsnOnly(XLogRecPtr lsn);
-static void HandleAppendState(WalKeeper *wk, uint32 events);
+static void HandleActiveState(WalKeeper *wk, uint32 events);
 static bool SendAppendRequests(WalKeeper *wk);
 static bool RecvAppendResponses(WalKeeper *wk);
 static void CombineHotStanbyFeedbacks(HotStandbyFeedback * hs);
@@ -445,7 +445,7 @@ InitEventSet(void)
  *
  * This function is called any time the WAL keeper's state switches to one where
  * it has to wait to continue. This includes the full body of AdvancePollState
- * and each call to AsyncRead/BlockingWrite/AsyncWrite/AsyncFlush.
+ * and calls to IO helper functions.
  */
 static void
 UpdateEventSet(WalKeeper *wk, uint32 events)
@@ -721,6 +721,7 @@ AdvancePollState(WalKeeper *wk, uint32 events)
 			if (!AsyncFlush(wk))
 				return;
 			
+			/* flush is done, event set and state will be updated later */
 			StartStreaming(wk);
 			break;
 
@@ -737,7 +738,7 @@ AdvancePollState(WalKeeper *wk, uint32 events)
 			 * Active state is used for streaming WAL and receiving feedback.
 			 */
 		case SS_ACTIVE:
-			HandleAppendState(wk, events);
+			HandleActiveState(wk, events);
 			break;
 	}
 }
@@ -1370,7 +1371,8 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 }
 
 /*
- * Start streaming to safekeeper wk, always updates state to SS_ACTIVE.
+ * Start streaming to safekeeper wk, always updates state to SS_ACTIVE and sets
+ * correct event set.
  */
 static void
 StartStreaming(WalKeeper *wk)
@@ -1399,7 +1401,7 @@ StartStreaming(WalKeeper *wk)
 	}
 
 	/* Call SS_ACTIVE handler to update event set */
-	HandleAppendState(wk, WL_NO_EVENTS);
+	HandleActiveState(wk, WL_NO_EVENTS);
 }
 
 /*
@@ -1427,7 +1429,7 @@ SendMessageToNode(int i, WalMessage *msg)
 	wk->currMsg = msg;
 
 	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
-	HandleAppendState(wk, WL_SOCKET_WRITEABLE);
+	HandleActiveState(wk, WL_SOCKET_WRITEABLE);
 }
 
 /*
@@ -1531,7 +1533,7 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
  * Process all events happened in SS_ACTIVE state, update event set after that.
  */
 static void
-HandleAppendState(WalKeeper *wk, uint32 events)
+HandleActiveState(WalKeeper *wk, uint32 events)
 {
 	uint32 newEvents = WL_SOCKET_READABLE;
 
@@ -1573,6 +1575,7 @@ SendAppendRequests(WalKeeper *wk)
 			 */
 			return wk->state == SS_ACTIVE;
 
+		/* Event set will be updated in the end of HandleActiveState */
 		wk->flushWrite = false;
 	}
 
@@ -2120,7 +2123,9 @@ AsyncWrite(WalKeeper *wk, void *msg, size_t msg_size, WalKeeperState flush_state
  * Flushes a previous call to AsyncWrite. This only needs to be called when the
  * socket becomes read or write ready *after* calling AsyncWrite.
  *
- * If flushing successfully completes returns true, otherwise false.
+ * If flushing successfully completes returns true, otherwise false. Event set
+ * is updated only if connection fails, otherwise caller should manually unset
+ * WL_SOCKET_WRITEABLE.
  */
 static bool
 AsyncFlush(WalKeeper *wk)
@@ -2134,7 +2139,7 @@ AsyncFlush(WalKeeper *wk)
 	switch (walprop_flush(wk->conn))
 	{
 		case 0:
-			UpdateEventSet(wk, WL_SOCKET_READABLE); /* flush is done, unset write interest */
+			/* flush is done */
 			return true;
 		case 1:
 			/* Nothing to do; try again when the socket's ready */
