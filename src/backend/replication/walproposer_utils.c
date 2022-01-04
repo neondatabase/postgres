@@ -141,6 +141,9 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 		/* 
 		 * Flush states require write-ready for flushing.
 		 * Active state does both reading and writing.
+		 * 
+		 * TODO: SS_ACTIVE sometimes doesn't need to be write-ready. We should
+		 * 	check wk->flushWrite here to set WL_SOCKET_WRITEABLE.
 		 */
 		case SS_SEND_ELECTED_FLUSH:
 		case SS_ACTIVE:
