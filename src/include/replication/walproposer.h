@@ -68,20 +68,12 @@ typedef enum
 } PGAsyncWriteResult;
 
 /*
- * WAL safekeeper state
+ * WAL safekeeper state, which is used to wait for some event.
  *
  * States are listed here in the order that they're executed.
  *
  * Most states, upon failure, will move back to SS_OFFLINE by calls to
  * ResetConnection or ShutdownConnection.
- *
- * Also note: In places we say that a state "immediately" moves to another. This
- * happens in states that only exist to execute program logic, so they run
- * exactly once (when moved into), without waiting for any socket conditions.
- *
- * For example, when we set a WalKeeper's state to SS_SEND_VOTE, we immediately
- * call AdvancePollState - during which the WalKeeper switches its state to
- * SS_WAIT_VERDICT.
  */
 typedef enum
 {
@@ -99,28 +91,18 @@ typedef enum
 	 * they execute when polled, but we have this distinction in order to
 	 * recreate the event set in HackyRemoveWalProposerEvent.
 	 *
-	 * After the connection is made, moves to SS_EXEC_STARTWALPUSH.
+	 * After the connection is made, "START_WAL_PUSH" query is sent.
 	 */
 	SS_CONNECTING_WRITE,
 	SS_CONNECTING_READ,
 
 	/*
-	 * Sending the "START_WAL_PUSH" message as an empty query to the walkeeper.
-	 * Performs a blocking send, then immediately moves to SS_WAIT_EXEC_RESULT.
-	 */
-	SS_EXEC_STARTWALPUSH,
-	/*
 	 * Waiting for the result of the "START_WAL_PUSH" command.
 	 *
-	 * After we get a successful result, moves to SS_HANDSHAKE_SEND.
+	 * After we get a successful result, sends handshake to safekeeper.
 	 */
 	SS_WAIT_EXEC_RESULT,
 
-	/*
-	 * Executing the sending half of the handshake. Performs the blocking send,
-	 * then immediately moves to SS_HANDSHAKE_RECV.
-	 */
-	SS_HANDSHAKE_SEND,
 	/*
 	 * Executing the receiving half of the handshake. After receiving, moves to
 	 * SS_VOTING.
@@ -128,32 +110,28 @@ typedef enum
 	SS_HANDSHAKE_RECV,
 
 	/*
-	 * Currently participating in voting, but a quorum hasn't yet been reached.
+	 * Waiting to participate in voting, but a quorum hasn't yet been reached.
 	 * This is an idle state - we do not expect AdvancePollState to be called.
 	 *
-	 * Moved externally to SS_SEND_VOTE or SS_WAIT_VERDICT by execution of
-	 * SS_HANDSHAKE_RECV.
+	 * Moved externally by execution of SS_HANDSHAKE_RECV, when we received a
+	 * quorum of handshakes.
 	 */
 	SS_VOTING,
-	/*
-	 * Performs a blocking send of the assigned vote, then immediately moves to
-	 * SS_WAIT_VERDICT.
-	 */
-	SS_SEND_VOTE,
+
 	/*
 	 * Already sent voting information, waiting to receive confirmation from the
-	 * node. After receiving, moves to SS_IDLE.
+	 * node. After receiving, moves to SS_IDLE, if the quorum isn't reached yet.
 	 */
 	SS_WAIT_VERDICT,
 
-	/* need to flush ProposerAnnouncement */
+	/* Need to flush ProposerElected message. */
 	SS_SEND_ELECTED_FLUSH,
 
 	/*
 	 * Waiting for quorum to send WAL. Idle state. If the socket becomes
 	 * read-ready, the connection has been closed.
 	 *
-	 * Moves to SS_ACTIVE only by calls to SendMessageToNode.
+	 * Moves to SS_ACTIVE only by call to StartStreaming.
 	 */
 	SS_IDLE,
 
@@ -195,7 +173,7 @@ typedef struct AcceptorProposerMessage
  */
 typedef struct AcceptorGreeting
 {
-	uint64		tag;
+	AcceptorProposerMessage apm;
 	term_t		term;
 } AcceptorGreeting;
 
@@ -306,11 +284,11 @@ typedef struct HotStandbyFeedback
  */
 typedef struct AppendResponse
 {
+	AcceptorProposerMessage apm;
 	/*
 	 * Current term of the safekeeper; if it is higher than proposer's, the
 	 * compute is out of date.
 	 */
-	uint64 tag;
 	term_t     term;
 	// TODO: add comment
 	XLogRecPtr flushLsn;
@@ -341,8 +319,8 @@ typedef struct WalKeeper
 	WalProposerConn*   conn;
 	StringInfoData outbuf;
 
-	bool               flushWrite;    /* set to true if we wrote currMsg, but still need to call AsyncFlush */
-	WalMessage*        currMsg;       /* message been send to the receiver */
+	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
+	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
 	WalMessage*        ackMsg;        /* message waiting ack from the receiver */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
@@ -361,7 +339,6 @@ int        CompareLsn(const void *a, const void *b);
 char*      FormatWalKeeperState(WalKeeperState state);
 void       AssertEventsOkForState(uint32 events, WalKeeper* wk);
 uint32     WalKeeperStateDesiredEvents(WalKeeperState state);
-bool       StateShouldImmediatelyExecute(WalKeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
 void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
