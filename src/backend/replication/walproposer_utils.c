@@ -48,23 +48,14 @@ FormatWalKeeperState(WalKeeperState state)
 		case SS_CONNECTING_WRITE:
 			return_val = "connecting";
 			break;
-		case SS_EXEC_STARTWALPUSH:
-			return_val = "sending 'START_WAL_PUSH' query";
-			break;
 		case SS_WAIT_EXEC_RESULT:
 			return_val = "receiving query result";
-			break;
-		case SS_HANDSHAKE_SEND:
-			return_val = "handshake (sending)";
 			break;
 		case SS_HANDSHAKE_RECV:
 			return_val = "handshake (receiving)";
 			break;
 		case SS_VOTING:
 			return_val = "voting";
-			break;
-		case SS_SEND_VOTE:
-			return_val = "sending vote";
 			break;
 		case SS_WAIT_VERDICT:
 			return_val = "wait-for-verdict";
@@ -140,24 +131,23 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 			result = WL_SOCKET_READABLE;
 			break;
 
-		/* Most writing states don't require any socket conditions */
-		case SS_EXEC_STARTWALPUSH:
-		case SS_HANDSHAKE_SEND:
-		case SS_SEND_VOTE:
-			result = WL_NO_EVENTS;
-			break;
-		/* but flushing does require read- or write-ready */
-		case SS_SEND_ELECTED_FLUSH:
-		/* Active state does both reading and writing to the socket */
-		case SS_ACTIVE:
-			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
-			break;
-
 		/* Idle states use read-readiness as a sign that the connection has been
 		 * disconnected. */
 		case SS_VOTING:
 		case SS_IDLE:
 			result = WL_SOCKET_READABLE;
+			break;
+
+		/* 
+		 * Flush states require write-ready for flushing.
+		 * Active state does both reading and writing.
+		 * 
+		 * TODO: SS_ACTIVE sometimes doesn't need to be write-ready. We should
+		 * 	check wk->flushWrite here to set WL_SOCKET_WRITEABLE.
+		 */
+		case SS_SEND_ELECTED_FLUSH:
+		case SS_ACTIVE:
+			result = WL_SOCKET_READABLE | WL_SOCKET_WRITEABLE;
 			break;
 
 		/* The offline state expects no events. */
@@ -167,16 +157,6 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 	}
 
 	return result;
-}
-
-/* Returns whether the WAL keeper state corresponds to something that should be
- * immediately executed -- i.e. it is not idle, and is not currently waiting. */
-bool
-StateShouldImmediatelyExecute(WalKeeperState state)
-{
-	/* This is actually pretty simple to determine. */
-	return WalKeeperStateDesiredEvents(state) == WL_NO_EVENTS
-		&& state != SS_OFFLINE;
 }
 
 /* Returns a human-readable string corresponding to the event set
