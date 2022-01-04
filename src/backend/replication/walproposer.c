@@ -79,16 +79,23 @@ static XLogRecPtr lastSentLsn;	/* WAL has been appended to msg queue up to
 static XLogRecPtr lastSentCommitLsn;	/* last commitLsn broadcast to
 										 * walkeepers */
 static ProposerGreeting proposerGreeting;
+static VoteRequest voteRequest; /* Vote request for walkeeper */
 static WaitEventSet *waitEvents;
 static AppendResponse lastFeedback;
 /*
- *  minimal LSN which may be needed for recovery of some safekeeper,
+ *  Minimal LSN which may be needed for recovery of some safekeeper,
  *  record-aligned (first record which might not yet received by someone).
  */
 static XLogRecPtr truncateLsn;
-static VoteRequest voteRequest; /* Vote request for walkeeper */
+/*
+ * Term of the proposer. We want our term to be highest and unique,
+ * so we collect terms from safekeepers quorum, choose max and +1.
+ * After that our term is fixed and must not change. If we observe
+ * that some safekeeper has higher term, it means that we have another
+ * running compute, so we must stop immediately.
+ */
+static term_t propTerm;
 static TermHistory propTermHistory; /* term history of the proposer */
-static term_t propTerm;			/* term of the proposer */
 static XLogRecPtr propEpochStartLsn;	/* epoch start lsn of the proposer */
 static term_t donorEpoch;		/* Most advanced acceptor epoch */
 static int	donor;				/* Most advanced acceptor */
@@ -910,20 +917,42 @@ RecvAcceptorGreeting(WalKeeper *wk)
 	wk->feedback.flushLsn = truncateLsn;
 	wk->feedback.hs.ts = 0;
 
-	/*
-	 * We want our term to be highest and unique, so choose max
-	 * and +1 once we have majority.
-	 */
-	propTerm = Max(wk->greet.term, propTerm);
+	++n_connected;
+	if (n_connected <= quorum)
+	{
+		/* We're still collecting terms from the majority. */
+		propTerm = Max(wk->greet.term, propTerm);
+
+		/* Quorum is acquried, prepare the vote request. */
+		if (n_connected == quorum)
+		{
+			propTerm++;
+			elog(LOG, "proposer connected to quorum (%d) safekeepers, propTerm=" INT64_FORMAT, quorum, propTerm);
+
+			voteRequest = (VoteRequest)
+			{
+				.tag = 'v',
+					.term = propTerm
+			};
+			memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
+		}
+	}
+	else if (wk->greet.term > propTerm)
+	{
+		/* Another compute with higher term is running. */	
+		elog(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
+				wk->host, wk->port,
+				wk->greet.term, propTerm);
+	}
 
 	/*
 	 * Check if we have quorum. If there aren't enough safekeepers,
 	 * wait and do nothing. We'll eventually get a task when the
 	 * election starts.
 	 *
-	 * If we do have quorum, we can start an election
+	 * If we do have quorum, we can start an election.
 	 */
-	if (++n_connected < quorum)
+	if (n_connected < quorum)
 	{
 		/*
 		 * SS_VOTING is an idle state; read-ready indicates the
@@ -933,18 +962,6 @@ RecvAcceptorGreeting(WalKeeper *wk)
 	}
 	else
 	{
-		if (n_connected == quorum)
-		{
-			propTerm++;
-			/* prepare voting message */
-			voteRequest = (VoteRequest)
-			{
-				.tag = 'v',
-					.term = propTerm
-			};
-			memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
-		}
-
 		/*
 		 * Now send voting request to the cohort and wait
 		 * responses
