@@ -325,9 +325,9 @@ typedef struct Safekeeper
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
 	SafekeeperState     state;         /* safekeeper state machine state */
-	AcceptorGreeting   greet;         /* acceptor greeting  */
+	AcceptorGreeting   greetResponse;         /* acceptor greeting  */
 	VoteResponse	   voteResponse;  /* the vote */
-	AppendResponse feedback;		  /* feedback to master */
+	AppendResponse appendResponse;		  /* feedback to master */
 	/*
 	 * Streaming will start here; must be record boundary.
 	 */

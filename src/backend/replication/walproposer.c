@@ -78,10 +78,10 @@ static XLogRecPtr lastSentLsn;	/* WAL has been appended to msg queue up to
 								 * this point */
 static XLogRecPtr lastSentCommitLsn;	/* last commitLsn broadcast to
 										 * safekeepers */
-static ProposerGreeting proposerGreeting;
+static ProposerGreeting greetRequest;
 static VoteRequest voteRequest; /* Vote request for safekeeper */
 static WaitEventSet *waitEvents;
-static AppendResponse lastFeedback;
+static AppendResponse quorumFeedback;
 /*
  *  Minimal LSN which may be needed for recovery of some safekeeper,
  *  record-aligned (first record which might not yet received by someone).
@@ -390,24 +390,24 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	quorum = n_safekeepers / 2 + 1;
 
 	/* Fill the greeting package */
-	proposerGreeting.tag = 'g';
-	proposerGreeting.protocolVersion = SK_PROTOCOL_VERSION;
-	proposerGreeting.pgVersion = PG_VERSION_NUM;
-	pg_strong_random(&proposerGreeting.proposerId, sizeof(proposerGreeting.proposerId));
-	proposerGreeting.systemId = systemId;
+	greetRequest.tag = 'g';
+	greetRequest.protocolVersion = SK_PROTOCOL_VERSION;
+	greetRequest.pgVersion = PG_VERSION_NUM;
+	pg_strong_random(&greetRequest.proposerId, sizeof(greetRequest.proposerId));
+	greetRequest.systemId = systemId;
 	if (!zenith_timeline_walproposer)
 		elog(FATAL, "zenith.zenith_timeline is not provided");
 	if (*zenith_timeline_walproposer != '\0' &&
-		!HexDecodeString(proposerGreeting.ztimelineid, zenith_timeline_walproposer, 16))
+		!HexDecodeString(greetRequest.ztimelineid, zenith_timeline_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_timeline, %s", zenith_timeline_walproposer);
 	if (!zenith_tenant_walproposer)
 		elog(FATAL, "zenith.zenith_tenant is not provided");
 	if (*zenith_tenant_walproposer != '\0' &&
-		!HexDecodeString(proposerGreeting.ztenantid, zenith_tenant_walproposer, 16))
+		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
 
-	proposerGreeting.timeline = ThisTimeLineID;
-	proposerGreeting.walSegSize = wal_segment_size;
+	greetRequest.timeline = ThisTimeLineID;
+	greetRequest.walSegSize = wal_segment_size;
 
 	InitEventSet();
 }
@@ -897,7 +897,7 @@ SendProposerGreeting(Safekeeper *sk)
 	 * On failure, logging & resetting the connection is handled.
 	 * We just need to handle the control flow.
 	 */
-	BlockingWrite(sk, &proposerGreeting, sizeof(proposerGreeting), SS_HANDSHAKE_RECV);
+	BlockingWrite(sk, &greetRequest, sizeof(greetRequest), SS_HANDSHAKE_RECV);
 }
 
 static void
@@ -908,20 +908,20 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	 * error handling or state setting is taken care of. We can
 	 * leave any other work until later.
 	 */
-	sk->greet.apm.tag = 'g';
-	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->greet))
+	sk->greetResponse.apm.tag = 'g';
+	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->greetResponse))
 		return;
 
 	/* Protocol is all good, move to voting. */
 	sk->state = SS_VOTING;
-	sk->feedback.flushLsn = truncateLsn;
-	sk->feedback.hs.ts = 0;
+	sk->appendResponse.flushLsn = truncateLsn;
+	sk->appendResponse.hs.ts = 0;
 
 	++n_connected;
 	if (n_connected <= quorum)
 	{
 		/* We're still collecting terms from the majority. */
-		propTerm = Max(sk->greet.term, propTerm);
+		propTerm = Max(sk->greetResponse.term, propTerm);
 
 		/* Quorum is acquried, prepare the vote request. */
 		if (n_connected == quorum)
@@ -934,15 +934,15 @@ RecvAcceptorGreeting(Safekeeper *sk)
 				.tag = 'v',
 					.term = propTerm
 			};
-			memcpy(voteRequest.proposerId.data, proposerGreeting.proposerId.data, UUID_LEN);
+			memcpy(voteRequest.proposerId.data, greetRequest.proposerId.data, UUID_LEN);
 		}
 	}
-	else if (sk->greet.term > propTerm)
+	else if (sk->greetResponse.term > propTerm)
 	{
 		/* Another compute with higher term is running. */	
 		elog(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 				sk->host, sk->port,
-				sk->greet.term, propTerm);
+				sk->greetResponse.term, propTerm);
 	}
 
 	/*
@@ -1064,7 +1064,7 @@ HandleElectedProposer(void)
 				LSN_FORMAT_ARGS(truncateLsn),
 				LSN_FORMAT_ARGS(propEpochStartLsn));
 		/* Perform recovery */
-		if (!WalProposerRecovery(donor, proposerGreeting.timeline, truncateLsn, propEpochStartLsn))
+		if (!WalProposerRecovery(donor, greetRequest.timeline, truncateLsn, propEpochStartLsn))
 			elog(FATAL, "Failed to recover state");
 	}
 	else if (syncSafekeepers)
@@ -1382,7 +1382,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 	elog(LOG, "WAL proposer starts streaming at %X/%X",
 		 LSN_FORMAT_ARGS(startpos));
 	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
-	cmd.timeline = proposerGreeting.timeline;
+	cmd.timeline = greetRequest.timeline;
 	cmd.startpoint = startpos;
 	StartReplication(&cmd);
 }
@@ -1494,7 +1494,7 @@ CreateMessage(XLogRecPtr startpos, char *data, int len)
 	msg->req.epochStartLsn = propEpochStartLsn;
 	msg->req.beginLsn = startpos;
 	msg->req.endLsn = endpos;
-	msg->req.proposerId = proposerGreeting.proposerId;
+	msg->req.proposerId = greetRequest.proposerId;
 	memcpy(&msg->req + 1, data + XLOG_HDR_SIZE, len);
 
 	Assert(msg->req.endLsn >= lastSentLsn);
@@ -1537,7 +1537,7 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 	 */
 	msg->req.beginLsn = lsn;
 	msg->req.endLsn = lsn;
-	msg->req.proposerId = proposerGreeting.proposerId;
+	msg->req.proposerId = greetRequest.proposerId;
 
 	/*
 	 * truncateLsn and commitLsn are set just before the message sent, in
@@ -1715,8 +1715,8 @@ RecvAppendResponses(Safekeeper *sk)
 		 * necessary error handling or state setting is taken care
 		 * of. We can leave any other work until later.
 		 */
-		sk->feedback.apm.tag = 'a';
-		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->feedback))
+		sk->appendResponse.apm.tag = 'a';
+		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
 		Assert(sk->ackMsg != NULL && (sk->ackMsg->ackMask & (1 << wki)) == 0);
@@ -1769,17 +1769,17 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback * hs)
 
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].feedback.hs.ts != 0)
+		if (safekeeper[i].appendResponse.hs.ts != 0)
 		{
-			if (FullTransactionIdPrecedes(safekeeper[i].feedback.hs.xmin, hs->xmin))
+			if (FullTransactionIdPrecedes(safekeeper[i].appendResponse.hs.xmin, hs->xmin))
 			{
-				hs->xmin = safekeeper[i].feedback.hs.xmin;
-				hs->ts = safekeeper[i].feedback.hs.ts;
+				hs->xmin = safekeeper[i].appendResponse.hs.xmin;
+				hs->ts = safekeeper[i].appendResponse.hs.ts;
 			}
-			if (FullTransactionIdPrecedes(safekeeper[i].feedback.hs.catalog_xmin, hs->catalog_xmin))
+			if (FullTransactionIdPrecedes(safekeeper[i].appendResponse.hs.catalog_xmin, hs->catalog_xmin))
 			{
-				hs->catalog_xmin = safekeeper[i].feedback.hs.catalog_xmin;
-				hs->ts = safekeeper[i].feedback.hs.ts;
+				hs->catalog_xmin = safekeeper[i].appendResponse.hs.catalog_xmin;
+				hs->ts = safekeeper[i].appendResponse.hs.ts;
 			}
 		}
 	}
@@ -1794,9 +1794,9 @@ CalculateDiskConsistentLsn(void)
 	XLogRecPtr lsn = UnknownXLogRecPtr;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].feedback.diskConsistentLsn < lsn)
+		if (safekeeper[i].appendResponse.diskConsistentLsn < lsn)
 		{
-			lsn = safekeeper[i].feedback.diskConsistentLsn;
+			lsn = safekeeper[i].appendResponse.diskConsistentLsn;
 		}
 	}
 	return lsn;
@@ -1812,8 +1812,8 @@ CalculateMinFlushLsn(void)
 	XLogRecPtr lsn = UnknownXLogRecPtr;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].feedback.flushLsn < lsn)
-			lsn = safekeeper[i].feedback.flushLsn;
+		if (safekeeper[i].appendResponse.flushLsn < lsn)
+			lsn = safekeeper[i].appendResponse.flushLsn;
 	}
 	return lsn;
 }
@@ -1835,8 +1835,8 @@ GetAcknowledgedByQuorumWALPosition(void)
 		 * Like in Raft, we aren't allowed to commit entries from previous
 		 * terms, so ignore reported LSN until it gets to epochStartLsn.
 		 */
-		responses[i] = safekeeper[i].feedback.flushLsn >= propEpochStartLsn ?
-			safekeeper[i].feedback.flushLsn : 0;
+		responses[i] = safekeeper[i].appendResponse.flushLsn >= propEpochStartLsn ?
+			safekeeper[i].appendResponse.flushLsn : 0;
 	}
 	qsort(responses, n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
 
@@ -1857,30 +1857,30 @@ HandleSafekeeperResponse(void)
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	diskConsistentLsn = CalculateDiskConsistentLsn();
 
-	if (minQuorumLsn > lastFeedback.flushLsn || diskConsistentLsn != lastFeedback.diskConsistentLsn)
+	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.diskConsistentLsn)
 	{
 
-		if (minQuorumLsn > lastFeedback.flushLsn)
-			lastFeedback.flushLsn = minQuorumLsn;
+		if (minQuorumLsn > quorumFeedback.flushLsn)
+			quorumFeedback.flushLsn = minQuorumLsn;
 
-		lastFeedback.diskConsistentLsn = diskConsistentLsn;
+		quorumFeedback.diskConsistentLsn = diskConsistentLsn;
 
 		/* advance the replication slot */
 		if (!syncSafekeepers)
 			ProcessStandbyReply(
 								// write_lsn -  This is what durably stored in WAL service.
-								lastFeedback.flushLsn,
+								quorumFeedback.flushLsn,
 								//flush_lsn - This is what durably stored in WAL service.
-								lastFeedback.flushLsn,
+								quorumFeedback.flushLsn,
 								//apply_lsn - This is what processed and durably saved at pageserver.
-								lastFeedback.diskConsistentLsn,
+								quorumFeedback.diskConsistentLsn,
 								GetCurrentTimestamp(), false);
 	}
 
 	CombineHotStanbyFeedbacks(&hsFeedback);
-	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &lastFeedback.hs, sizeof hsFeedback) != 0)
+	if (hsFeedback.ts != 0 && memcmp(&hsFeedback, &quorumFeedback.hs, sizeof hsFeedback) != 0)
 	{
-		lastFeedback.hs = hsFeedback;
+		quorumFeedback.hs = hsFeedback;
 		if (!syncSafekeepers)
 			ProcessStandbyHSFeedback(hsFeedback.ts,
 									 XidFromFullTransactionId(hsFeedback.xmin),
@@ -1947,7 +1947,7 @@ HandleSafekeeperResponse(void)
 		for (int i = 0; i < n_safekeepers; i++)
 		{
 			Safekeeper  *sk = &safekeeper[i];
-			bool		synced = sk->feedback.commitLsn >= propEpochStartLsn;
+			bool		synced = sk->appendResponse.commitLsn >= propEpochStartLsn;
 
 			/* alive safekeeper which is not synced yet; wait for it */
 			if (sk->state != SS_OFFLINE && !synced)
