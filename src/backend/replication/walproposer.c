@@ -1545,6 +1545,15 @@ HandleActiveState(WalKeeper *wk, uint32 events)
 		if (!RecvAppendResponses(wk))
 			return;
 
+	/*
+	 * We should wait for WL_SOCKET_WRITEABLE event if we have unflushed data
+	 * in the buffer.
+	 * 
+	 * wk->currMsg checks if we have pending unsent messages. This check isn't
+	 * necessary now, because we always send queue messages immediately after
+	 * creation. But it's good to have it here in case we change this behavior
+	 * in the future.
+	 */
 	if (wk->currMsg != NULL || wk->flushWrite)
 		newEvents |= WL_SOCKET_WRITEABLE;
 
