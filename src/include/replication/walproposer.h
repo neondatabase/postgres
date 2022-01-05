@@ -1,5 +1,5 @@
-#ifndef __WALKEEPER_H__
-#define __WALKEEPER_H__
+#ifndef __WALPROPOSER_H__
+#define __WALPROPOSER_H__
 
 #include "access/xlogdefs.h"
 #include "postgres.h"
@@ -13,7 +13,7 @@
 #define SK_MAGIC              0xCafeCeefu
 #define SK_PROTOCOL_VERSION   1
 
-#define MAX_WALKEEPERS        32
+#define MAX_SAFEKEEPERS        32
 #define XLOG_HDR_SIZE         (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
 #define XLOG_HDR_START_POS    1        /* offset of start position in wal sender message header */
 #define XLOG_HDR_END_POS      (1+8)    /* offset of end position in wal sender message header */
@@ -140,7 +140,7 @@ typedef enum
 	 * to read.
 	 */
 	SS_ACTIVE,
-} WalKeeperState;
+} SafekeeperState;
 
 /* Consensus logical timestamp. */
 typedef uint64 term_t;
@@ -153,7 +153,7 @@ typedef uint64 term_t;
 typedef struct ProposerGreeting
 {
 	uint64	   tag;				  /* message tag */
-	uint32	   protocolVersion;	  /* proposer-walkeeper protocol version */
+	uint32	   protocolVersion;	  /* proposer-safekeeper protocol version */
 	uint32	   pgVersion;
 	pg_uuid_t  proposerId;
 	uint64	   systemId;		  /* Postgres system identifier */
@@ -210,7 +210,7 @@ typedef struct VoteResponse {
      * proposer to choose the most advanced one.
 	 */
 	XLogRecPtr flushLsn;
-	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some walkeeper */
+	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some safekeeper */
 	TermHistory termHistory;
 } VoteResponse;
 
@@ -229,7 +229,7 @@ typedef struct ProposerElected
 } ProposerElected;
 
 /*
- * Header of request with WAL message sent from proposer to walkeeper.
+ * Header of request with WAL message sent from proposer to safekeeper.
  */
 typedef struct AppendRequestHeader
 {
@@ -242,7 +242,7 @@ typedef struct AppendRequestHeader
 	XLogRecPtr epochStartLsn;
 	XLogRecPtr beginLsn;    /* start position of message in WAL */
 	XLogRecPtr endLsn;      /* end position of message in WAL */
-	XLogRecPtr commitLsn;   /* LSN committed by quorum of walkeepers */
+	XLogRecPtr commitLsn;   /* LSN committed by quorum of safekeepers */
 	/*
 	 *  minimal LSN which may be needed for recovery of some safekeeper (end lsn
 	 *  + 1 of last chunk streamed to everyone)
@@ -260,7 +260,7 @@ struct WalMessage
 	WalMessage* next;      /* L1 list of messages */
 	uint32 size;           /* message size */
 	uint32 ackMask; /* mask of receivers acknowledged receiving of this message */
-	AppendRequestHeader req; /* request to walkeeper (message header) */
+	AppendRequestHeader req; /* request to safekeeper (message header) */
 
 	/* PHANTOM FIELD:
 	 *
@@ -280,7 +280,7 @@ typedef struct HotStandbyFeedback
 } HotStandbyFeedback;
 
 /*
- * Report walkeeper state to proposer
+ * Report safekeeper state to proposer
  */
 typedef struct AppendResponse
 {
@@ -302,9 +302,9 @@ typedef struct AppendResponse
 
 
 /*
- * Descriptor of walkeeper
+ * Descriptor of safekeeper
  */
-typedef struct WalKeeper
+typedef struct Safekeeper
 {
 	char const*        host;
 	char const*        port;
@@ -324,21 +324,21 @@ typedef struct WalKeeper
 	WalMessage*        ackMsg;        /* message waiting ack from the receiver */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
-	WalKeeperState     state;         /* walkeeper state machine state */
-	AcceptorGreeting   greet;         /* acceptor greeting  */
+	SafekeeperState     state;         /* safekeeper state machine state */
+	AcceptorGreeting   greetResponse;         /* acceptor greeting  */
 	VoteResponse	   voteResponse;  /* the vote */
-	AppendResponse feedback;		  /* feedback to master */
+	AppendResponse appendResponse;		  /* feedback to master */
 	/*
 	 * Streaming will start here; must be record boundary.
 	 */
 	XLogRecPtr startStreamingAt;
-} WalKeeper;
+} Safekeeper;
 
 
 int        CompareLsn(const void *a, const void *b);
-char*      FormatWalKeeperState(WalKeeperState state);
-void       AssertEventsOkForState(uint32 events, WalKeeper* wk);
-uint32     WalKeeperStateDesiredEvents(WalKeeperState state);
+char*      FormatSafekeeperState(SafekeeperState state);
+void       AssertEventsOkForState(uint32 events, Safekeeper* sk);
+uint32     SafekeeperStateDesiredEvents(SafekeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
 void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
@@ -385,7 +385,7 @@ typedef enum
 	WP_EXEC_SUCCESS_COPYBOTH,
 	/* Any success result other than a single CopyBoth was received. The specifics of the result
 	 * were already logged, but it may be useful to provide an error message indicating which
-	 * walkeeper messed up.
+	 * safekeeper messed up.
 	 *
 	 * Do not expect PQerrorMessage to be appropriately set. */
 	WP_EXEC_UNEXPECTED_SUCCESS,
@@ -441,11 +441,11 @@ typedef void (*walprop_finish_fn) (WalProposerConn* conn);
 /*
  * Ergonomic wrapper around PGgetCopyData
  *
- * Reads a CopyData block from a walkeeper, setting *amount to the number
+ * Reads a CopyData block from a safekeeper, setting *amount to the number
  * of bytes returned.
  *
  * This function is allowed to assume certain properties specific to the
- * protocol with the walkeepers, so it should not be used as-is for any
+ * protocol with the safekeepers, so it should not be used as-is for any
  * other purpose.
  *
  * Note: If possible, using <AsyncRead> is generally preferred, because it
@@ -459,7 +459,7 @@ typedef PGAsyncReadResult (*walprop_async_read_fn) (WalProposerConn* conn,
 /*
  * Ergonomic wrapper around PQputCopyData + PQflush
  *
- * Starts to write a CopyData block to a walkeeper.
+ * Starts to write a CopyData block to a safekeeper.
  *
  * For information on the meaning of return codes, refer to PGAsyncWriteResult.
  */

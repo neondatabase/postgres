@@ -267,7 +267,7 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 	 *     -2 if an error occured
 	 *  (> 0) if it was successful; that value is the amount transferred.
 	 *
-	 * The protocol we use between walproposer and walkeeper means that we
+	 * The protocol we use between walproposer and safekeeper means that we
 	 * *usually* wouldn't expect to see that the copy is done, but this can
 	 * sometimes be triggered by the server returning an ErrorResponse (which
 	 * also happens to have the effect that the copy is done).
@@ -280,7 +280,7 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 		{
 			/*
 			 * If we get -1, it's probably because of a server error; the
-			 * walkeeper won't normally send a CopyDone message.
+			 * safekeeper won't normally send a CopyDone message.
 			 *
 			 * We can check PQgetResult to make sure that the server failed;
 			 * it'll always result in PGRES_FATAL_ERROR
