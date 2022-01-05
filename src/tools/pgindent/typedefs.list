@@ -2849,7 +2849,7 @@ WaitEventTimeout
 WaitPMResult
 WalCloseMethod
 WalLevel
-WalKeeper
+Safekeeper
 WalMessage
 WalRcvData
 WalRcvExecResult
