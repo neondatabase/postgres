@@ -22,20 +22,20 @@ CompareLsn(const void *a, const void *b)
 		return 1;
 }
 
-/* Returns a human-readable string corresonding to the WalKeeperState
+/* Returns a human-readable string corresonding to the SafekeeperState
  *
  * The string should not be freed.
  *
  * The strings are intended to be used as a prefix to "state", e.g.:
  *
- *   elog(LOG, "currently in %s state", FormatWalKeeperState(wk->state));
+ *   elog(LOG, "currently in %s state", FormatSafekeeperState(sk->state));
  *
  * If this sort of phrasing doesn't fit the message, instead use something like:
  *
- *   elog(LOG, "currently in state [%s]", FormatWalKeeperState(wk->state));
+ *   elog(LOG, "currently in state [%s]", FormatSafekeeperState(sk->state));
  */
 char*
-FormatWalKeeperState(WalKeeperState state)
+FormatSafekeeperState(SafekeeperState state)
 {
 	char* return_val = NULL;
 
@@ -76,11 +76,11 @@ FormatWalKeeperState(WalKeeperState state)
 	return return_val;
 }
 
-/* Asserts that the provided events are expected for given WAL keeper's state */
+/* Asserts that the provided events are expected for given safekeeper's state */
 void
-AssertEventsOkForState(uint32 events, WalKeeper* wk)
+AssertEventsOkForState(uint32 events, Safekeeper* sk)
 {
-	uint32 expected = WalKeeperStateDesiredEvents(wk->state);
+	uint32 expected = SafekeeperStateDesiredEvents(sk->state);
 
 	/* The events are in-line with what we're expecting, under two conditions:
 	 *   (a) if we aren't expecting anything, `events` has no read- or
@@ -99,17 +99,17 @@ AssertEventsOkForState(uint32 events, WalKeeper* wk)
 	{
 		/* To give a descriptive message in the case of failure, we use elog and
 		 * then an assertion that's guaranteed to fail. */
-		elog(WARNING, "events %s mismatched for walkeeper %s:%s in state [%s]",
-			 FormatEvents(events), wk->host, wk->port, FormatWalKeeperState(wk->state));
+		elog(WARNING, "events %s mismatched for safekeeper %s:%s in state [%s]",
+			 FormatEvents(events), sk->host, sk->port, FormatSafekeeperState(sk->state));
 		Assert(events_ok_for_state);
 	}
 }
 
-/* Returns the set of events a WAL keeper in this state should be waiting on
+/* Returns the set of events a safekeeper in this state should be waiting on
  *
  * This will return WL_NO_EVENTS (= 0) for some events. */
 uint32
-WalKeeperStateDesiredEvents(WalKeeperState state)
+SafekeeperStateDesiredEvents(SafekeeperState state)
 {
 	uint32 result;
 
@@ -143,7 +143,7 @@ WalKeeperStateDesiredEvents(WalKeeperState state)
 		 * Active state does both reading and writing.
 		 * 
 		 * TODO: SS_ACTIVE sometimes doesn't need to be write-ready. We should
-		 * 	check wk->flushWrite here to set WL_SOCKET_WRITEABLE.
+		 * 	check sk->flushWrite here to set WL_SOCKET_WRITEABLE.
 		 */
 		case SS_SEND_ELECTED_FLUSH:
 		case SS_ACTIVE:
