@@ -999,7 +999,7 @@ PostmasterMain(int argc, char *argv[])
 	ApplyLauncherRegister();
 
 	/*
-	 * Start WAL proposer bgworker is wal acceptors list is not empty
+	 * Start WAL proposer bgworker if wal acceptors list is not empty
 	 */
 	WalProposerRegister();
 
