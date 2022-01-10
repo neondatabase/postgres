@@ -2854,6 +2854,10 @@ retry:
 	}
 	else
 	{
+		elog(LOG,
+			"sending message len %zu",
+			nbytes);
+
 		/*
 		 * Fill the send timestamp last, so that it is taken as late as possible.
 		 */
