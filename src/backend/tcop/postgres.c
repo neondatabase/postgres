@@ -3389,8 +3389,8 @@ ProcessInterrupts(void)
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 
-	// Don't throttle read only transactions
-	if (!TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
+	// Don't throttle read only transactions and wal sender
+	if (am_walsender || !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
 	{
 		ProcessInterrupts_pg();
 		return;
