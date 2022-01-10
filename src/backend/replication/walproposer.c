@@ -37,6 +37,7 @@
 
 #include <signal.h>
 #include <unistd.h>
+#include <inttypes.h>
 #include "access/xlogdefs.h"
 #include "replication/walproposer.h"
 #include "storage/latch.h"
@@ -68,6 +69,7 @@ char	   *zenith_pageserver_connstring_walproposer = NULL;
 WalProposerFunctionsType *WalProposerFunctions = NULL;
 
 #define WAL_PROPOSER_SLOT_NAME "wal_proposer_slot"
+#define MAX_SEND_SIZE (XLOG_BLCKSZ * 16)
 
 static int	n_safekeepers = 0;
 static int	quorum = 0;
@@ -381,6 +383,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		safekeeper[n_safekeepers].currMsg = NULL;
 		safekeeper[n_safekeepers].ackMsg = NULL;
 		safekeeper[n_safekeepers].startStreamingAt = InvalidXLogRecPtr;
+		safekeeper[n_safekeepers].streamingAt = InvalidXLogRecPtr;
 		n_safekeepers += 1;
 	}
 	if (n_safekeepers < 1)
@@ -1587,11 +1590,6 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 static bool
 SendAppendRequests(Safekeeper *sk)
 {
-	int wki = sk - safekeeper;
-	WalMessage *msg;
-	AppendRequestHeader *req;
-	PGAsyncWriteResult writeResult;
-
 	if (sk->flushWrite)
 	{
 		if (!AsyncFlush(sk))
@@ -1605,61 +1603,90 @@ SendAppendRequests(Safekeeper *sk)
 		sk->flushWrite = false;
 	}
 
+	/*
+	 * If we need to send this message not from the beginning,
+	 * form the cut version. Only happens for the first
+	 * message.
+	 */
+	if (sk->startStreamingAt > sk->streamingAt)
+	{
+		elog(LOG, "sk->startStreamingAt moved ptr from %X/%X to %X/%X",
+			 LSN_FORMAT_ARGS(sk->streamingAt),
+			 LSN_FORMAT_ARGS(sk->startStreamingAt));
+		sk->streamingAt = sk->startStreamingAt;
+	}
+
+	if (sk->currMsg != NULL && sk->currMsg->req.beginLsn > sk->streamingAt)
+	{
+		elog(LOG, "sk->currMsg->req.beginLsn moved ptr from %X/%X to %X/%X",
+			 LSN_FORMAT_ARGS(sk->streamingAt),
+			 LSN_FORMAT_ARGS(sk->currMsg->req.beginLsn));
+		sk->streamingAt = sk->currMsg->req.beginLsn;
+	}
+
 	while (sk->currMsg)
 	{
-		msg = sk->currMsg;
-		req = &msg->req;
-
-		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
-		req->truncateLsn = truncateLsn;
-
-		Assert((msg->ackMask & (1 << wki)) == 0);
-
-		/*
-		 * If we need to send this message not from the beginning,
-		 * form the cut version. Only happens for the first
-		 * message.
-		 */
-		if (sk->startStreamingAt > msg->req.beginLsn)
-		{
-			uint32		len;
-			uint32		size;
-
-			Assert(sk->startStreamingAt < req->endLsn);
-
-			len = msg->req.endLsn - sk->startStreamingAt;
-			size = sizeof(AppendRequestHeader) + len;
-			req = malloc(size);
-			*req = msg->req;
-			req->beginLsn = sk->startStreamingAt;
-			memcpy(req + 1,
-					(char *) (&msg->req + 1) + sk->startStreamingAt -
-					msg->req.beginLsn,
-					len);
-		}
-
-		elog(LOG,
-				"sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-				req->endLsn - req->beginLsn,
-				LSN_FORMAT_ARGS(req->beginLsn),
-				LSN_FORMAT_ARGS(req->endLsn),
-				LSN_FORMAT_ARGS(req->commitLsn),
-				LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port);
+		WalMessage *lastMsg = sk->currMsg;
+		uint32		len;
+		uint32		size;
+		char       *data;
+		AppendRequestHeader *req;
+		PGAsyncWriteResult writeResult;
 
 		/* if this is the first sent message, we should start processing feedback */
 		if (sk->ackMsg == NULL)
 			sk->ackMsg = sk->currMsg;
+
+		while (true)
+		{
+			WalMessage *nextMsg = lastMsg->next;
+			if (nextMsg == NULL || nextMsg->req.beginLsn != lastMsg->req.endLsn || nextMsg->req.endLsn - sk->streamingAt > MAX_SEND_SIZE)
+				break;
+
+			lastMsg = nextMsg;
+		}
+
+		len = lastMsg->req.endLsn - sk->streamingAt;
+		size = sizeof(AppendRequestHeader) + len;
+		req = (AppendRequestHeader *) malloc(size);
+		*req = lastMsg->req;
+		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
+		req->truncateLsn = truncateLsn;
+		req->beginLsn = sk->streamingAt;
+		data = (char *) req + sizeof(AppendRequestHeader);
+
+		while (true)
+		{
+			uint32 partSize = sk->currMsg->req.endLsn - sk->streamingAt;
+			Assert(sk->streamingAt >= sk->currMsg->req.beginLsn && sk->streamingAt <= sk->currMsg->req.endLsn);
+			
+			memcpy(data, (char *) (&sk->currMsg->req + 1) + sk->streamingAt - sk->currMsg->req.beginLsn, partSize);
+			data += partSize;
+			sk->streamingAt = sk->currMsg->req.endLsn;
+
+			if (sk->currMsg == lastMsg)
+				break;
+
+			sk->currMsg = sk->currMsg->next;
+		}
+
+		elog(LOG,
+				"sending message len %" PRIu32 " beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+				len,
+				LSN_FORMAT_ARGS(req->beginLsn),
+				LSN_FORMAT_ARGS(req->endLsn),
+				LSN_FORMAT_ARGS(req->commitLsn),
+				LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port);
 
 		/*
 		 * We write with msg->size here because the body of the
 		 * message is stored after the end of the WalMessage
 		 * struct, in the allocation for each msg
 		 */
-		writeResult = walprop_async_write(sk->conn, req, sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn);
+		writeResult = walprop_async_write(sk->conn, req, size);
 		
 		/* Free up resources */
-		if (req != &msg->req)
-			free(req);
+		free(req);
 
 		/* Mark current message as sent, whatever the result is */
 		sk->currMsg = sk->currMsg->next;
@@ -1719,20 +1746,24 @@ RecvAppendResponses(Safekeeper *sk)
 		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
-		Assert(sk->ackMsg != NULL && (sk->ackMsg->ackMask & (1 << wki)) == 0);
+		while (sk->ackMsg != sk->currMsg && sk->ackMsg->req.endLsn <= sk->appendResponse.flushLsn)
+		{
+			Assert(sk->ackMsg != NULL && (sk->ackMsg->ackMask & (1 << wki)) == 0);
 
-		/*
-		 * We shouldn't read responses ahead of sk->currMsg, because that will
-		 * look like we are receiving responses for messages that haven't been
-		 * sent yet.
-		 */
-		Assert(sk->ackMsg != sk->currMsg);
+			/*
+			 * We shouldn't read responses ahead of sk->currMsg, because that will
+			 * look like we are receiving responses for messages that haven't been
+			 * sent yet.
+			 */
+			Assert(sk->ackMsg != sk->currMsg);
 
-		sk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
-											* receiving of this
-											* message */
+			sk->ackMsg->ackMask |= 1 << wki; /* this safekeeper confirms
+												* receiving of this
+												* message */
 
-		sk->ackMsg = sk->ackMsg->next;
+			sk->ackMsg = sk->ackMsg->next;
+		}
+
 		readAnything = true;
 	}
 

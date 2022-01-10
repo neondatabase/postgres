@@ -332,6 +332,7 @@ typedef struct Safekeeper
 	 * Streaming will start here; must be record boundary.
 	 */
 	XLogRecPtr startStreamingAt;
+	XLogRecPtr streamingAt;
 } Safekeeper;
 
 
