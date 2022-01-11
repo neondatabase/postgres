@@ -3377,7 +3377,7 @@ ProcessInterrupts(void)
 		return;
 
 	// Don't throttle read only transactions and wal sender
-	if (am_walsender && !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
+	if (am_walsender || !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
 	{
 		ProcessInterrupts_pg();
 		return;
