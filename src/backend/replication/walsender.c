@@ -2321,7 +2321,7 @@ WalSndLoop(WalSndSendDataCallback send_data)
 			send_data();
 			if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
 				WalSndSetState(WALSNDSTATE_STREAMING);
-			WalProposerPoll();
+			WalProposerPoll(!WalSndCaughtUp);
 			WalSndCaughtUp = false;
 			continue;
 		}

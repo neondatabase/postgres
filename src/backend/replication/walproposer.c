@@ -273,10 +273,8 @@ IsCaughtUp(void)
  * to walproposer.
  */
 void
-WalProposerPoll(void)
+WalProposerPoll(bool hasPendingWAL)
 {
-	bool hasPendingWAL = false;
-
 	while (!hasPendingWAL || !IsCaughtUp())
 	{
 		Safekeeper  *sk;
@@ -444,7 +442,7 @@ static void
 WalProposerLoop(void)
 {
 	while (true)
-		WalProposerPoll();
+		WalProposerPoll(false);
 }
 
 /* Initializes the internal event set, provided that it is currently null */
