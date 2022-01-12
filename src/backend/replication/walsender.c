@@ -2319,13 +2319,10 @@ WalSndLoop(WalSndSendDataCallback send_data)
 		if (am_wal_proposer)
 		{
 			send_data();
-			if (WalSndCaughtUp)
-			{
-				if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
-					WalSndSetState(WALSNDSTATE_STREAMING);
-				WalProposerPoll();
-				WalSndCaughtUp = false;
-			}
+			if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
+				WalSndSetState(WALSNDSTATE_STREAMING);
+			WalProposerPoll();
+			WalSndCaughtUp = false;
 			continue;
 		}
 

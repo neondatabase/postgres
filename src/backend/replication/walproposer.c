@@ -254,6 +254,20 @@ WalProposerBroadcast(XLogRecPtr startpos, char *data, int len)
 }
 
 /*
+ * Return true if all available WAL was sent to at least one safekeeper.
+ */
+static bool
+IsCaughtUp(void)
+{
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (safekeeper[i].state == SS_ACTIVE && safekeeper[i].currMsg == NULL && !safekeeper[i].flushWrite)
+			return true;
+	}
+	return false;
+}
+
+/*
  * Advance the WAL proposer state machine, waiting each time for events to occur.
  * Will exit only when latch is set, i.e. new WAL should be pushed from walsender
  * to walproposer.
@@ -261,7 +275,9 @@ WalProposerBroadcast(XLogRecPtr startpos, char *data, int len)
 void
 WalProposerPoll(void)
 {
-	while (true)
+	bool hasPendingWAL = false;
+
+	while (!hasPendingWAL || !IsCaughtUp())
 	{
 		Safekeeper  *sk;
 		int			rc;
@@ -293,7 +309,7 @@ WalProposerPoll(void)
 		if (rc != 0 && (event.events & WL_LATCH_SET))
 		{
 			ResetLatch(MyLatch);
-			break;
+			hasPendingWAL = true;
 		}
 		if (rc == 0) /* timeout expired: poll state */
 		{
