@@ -1879,6 +1879,9 @@ HandleSafekeeperResponse(void)
 	if (!msgQueueHead)			/* queue is empty */
 		msgQueueTail = NULL;
 
+	/* truncateLsn always points to the first chunk in the queue */
+	Assert(msgQueueHead == NULL || (truncateLsn >= msgQueueHead->req.beginLsn && truncateLsn <= msgQueueHead->req.endLsn));
+
 	/*
 	 * Generally sync is done when majority switched the epoch so we committed
 	 * epochStartLsn and made the majority aware of it, ensuring they are
