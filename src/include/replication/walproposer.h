@@ -259,7 +259,6 @@ struct WalMessage
 {
 	WalMessage* next;      /* L1 list of messages */
 	uint32 size;           /* message size */
-	uint32 ackMask; /* mask of receivers acknowledged receiving of this message */
 	AppendRequestHeader req; /* request to safekeeper (message header) */
 
 	/* PHANTOM FIELD:
@@ -321,7 +320,6 @@ typedef struct Safekeeper
 
 	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
 	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
-	WalMessage*        ackMsg;        /* message waiting ack from the receiver */
 
 	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
 	SafekeeperState     state;         /* safekeeper state machine state */
