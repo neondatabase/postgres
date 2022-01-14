@@ -1250,14 +1250,16 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 				rec_start_lsn = pg_ntoh64(rec_start_lsn);
 				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
 				(void) CreateMessage(rec_start_lsn, buf, len);
-				elog(DEBUG1, "Recover message %X/%X length %d",
-					 LSN_FORMAT_ARGS(rec_start_lsn), len);
+				ereport(DEBUG1,
+						(errmsg("Recover message %X/%X length %d",
+								LSN_FORMAT_ARGS(rec_start_lsn), len)));
 				if (rec_end_lsn >= endpos)
 					break;
 			}
 		}
-		elog(DEBUG1, "end of replication stream at %X/%X: %m",
-			 LSN_FORMAT_ARGS(rec_end_lsn));
+		ereport(DEBUG1,
+				(errmsg("end of replication stream at %X/%X: %m",
+						LSN_FORMAT_ARGS(rec_end_lsn))));
 		walrcv_disconnect(wrconn);
 	}
 	else
@@ -1613,13 +1615,13 @@ SendAppendRequests(Safekeeper *sk)
 					len);
 		}
 
-		elog(LOG,
-				"sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
-				req->endLsn - req->beginLsn,
-				LSN_FORMAT_ARGS(req->beginLsn),
-				LSN_FORMAT_ARGS(req->endLsn),
-				LSN_FORMAT_ARGS(req->commitLsn),
-				LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port);
+		ereport(DEBUG2,
+				(errmsg("sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
+						req->endLsn - req->beginLsn,
+						LSN_FORMAT_ARGS(req->beginLsn),
+						LSN_FORMAT_ARGS(req->endLsn),
+						LSN_FORMAT_ARGS(req->commitLsn),
+						LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port)));
 
 		/*
 		 * We write with msg->size here because the body of the
