@@ -104,6 +104,7 @@ typedef struct
 typedef struct
 {
 	ZenithMessageTag tag;
+	uint32		n_blocks;
 	char		page[FLEXIBLE_ARRAY_MEMBER];
 } ZenithGetPageResponse;
 
@@ -197,6 +198,7 @@ extern void forget_cached_relsize(RelFileNode rnode, ForkNumber forknum);
 
 /* functions for local file cache */
 extern void lfc_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno, char *buffer);
+extern void lfc_bulk_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno, char *buffer, uint32 n_blocks);
 extern bool lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno, char *buffer);
 extern void lfc_init(void);
 

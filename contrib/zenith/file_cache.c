@@ -218,7 +218,7 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 
 	LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
 	entry = hash_search(lfc_hash, &tag, HASH_FIND, NULL);
-	if (entry == NULL || (entry->bitmap[chunk_offs >> 5] & (1 << (chunk_offs & 31))) == 0)
+	if (entry == NULL)
 	{
 		/* Page is not cached */
 		LWLockRelease(lfc_lock);
@@ -227,6 +227,16 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	/* Unlink entry from LRU list to pin it for the duration of IO operation */
 	if (entry->access_count++ == 0)
 		lfc_unlink(entry);
+
+	/* chunk is cached but page is absent: intialize with zeros */
+	if ((entry->bitmap[chunk_offs >> 5] & (1 << (chunk_offs & 31))) == 0)
+	{
+		if (--entry->access_count == 0)
+			lfc_link(&lfc_ctl->lru, entry);
+		memset(buffer, 0, BLCKSZ);
+		LWLockRelease(lfc_lock);
+		return true;
+	}
 	LWLockRelease(lfc_lock);
 
 	/* Open cache file if not done yet */
@@ -256,6 +266,91 @@ lfc_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	LWLockRelease(lfc_lock);
 
 	return true;
+}
+
+/*
+ * Put chunk in local file cache.
+ * If cache is full then evict some other page.
+ */
+void
+lfc_bulk_write(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
+			   char *buffer, uint32 n_blocks)
+{
+	BufferTag tag;
+	FileCacheEntry* entry;
+	ssize_t rc;
+	bool found;
+
+	Assert((blkno & (CHUNK_SIZE-1)) == 0);
+
+	if (lfc_size == 0) /* fast exit if file cache is disabled */
+		return;
+
+	tag.rnode = reln->smgr_rnode.node;
+	tag.forkNum = forkNum;
+	tag.blockNum = blkno;
+
+	/* Open cache file if not done yet */
+	if (lfc_desc == 0)
+	{
+		lfc_desc = BasicOpenFile(lfc_path, O_RDWR|O_CREAT);
+		if (lfc_desc < 0) {
+			elog(LOG, "Failed to open file cache %s: %m", lfc_path);
+			lfc_size = 0; /* disable file cache */
+			return;
+		}
+	}
+
+	LWLockAcquire(lfc_lock, LW_EXCLUSIVE);
+	entry = hash_search(lfc_hash, &tag, HASH_ENTER, &found);
+
+	if (found)
+	{
+		/* Unlink entry from LRU list to pin it for the duration of IO operation */
+		if (entry->access_count++ == 0)
+			lfc_unlink(entry);
+	}
+	else
+	{
+		/*
+		 * We have two choices if all cache pages are pinned (i.e. used in IO operations):
+		 * 1. Wait until some of this operation is completed and pages is unpinned
+		 * 2. Allocate one more chunk, so that specified cache size is more than recommendation than hard limit.
+		 * As far as probability of such event (that all pages are pinned) is considered to be very very small:
+		 * there are should be very large number of concurrent IO operations and them are limited by max_connections,
+		 * we prefer not to complicate code and use second approach.
+		 */
+		if (lfc_ctl->size >= (uint64)lfc_size && !lfc_is_empty(&lfc_ctl->lru))
+		{
+			/* Cache overflow: evict least recently used chunk */
+			FileCacheEntry* victim = lfc_ctl->lru.prev;
+			Assert(victim->access_count == 0);
+			lfc_unlink(victim);
+			entry->offset = victim->offset; /* grab victim's chunk */
+			hash_search(lfc_hash, &victim->key, HASH_REMOVE, NULL);
+			elog(LOG, "Swap file cache page");
+		}
+		else
+			entry->offset = lfc_ctl->size++; /* allocate new chunk at end of file */
+		entry->access_count = 1;
+		memset(entry->bitmap, 0, sizeof entry->bitmap);
+	}
+	for (BlockNumber blkno = 0; blkno < n_blocks; blkno++) {
+		if ((entry->bitmap[blkno >> 5] & (1 << (blkno & 31))) == 0) {
+			rc = pwrite(lfc_desc, buffer + blkno*BLCKSZ, BLCKSZ, ((off_t)entry->offset*CHUNK_SIZE + blkno)*BLCKSZ);
+			if (rc != BLCKSZ)
+			{
+				elog(INFO, "Failed to write file cache: %m");
+				lfc_size = 0; /* disable file cache */
+				return;
+			}
+			entry->bitmap[blkno >> 5] |= (1 << (blkno & 31));
+		}
+	}
+	Assert(entry->access_count > 0);
+	if (--entry->access_count == 0)
+		lfc_link(&lfc_ctl->lru, entry);
+	LWLockRelease(lfc_lock);
 }
 
 /*

@@ -63,6 +63,8 @@
 #include "pgstat.h"
 #include "catalog/pg_tablespace_d.h"
 
+#define CHUNK_SIZE 128 /* 1Mb chunk */
+
 /*
  * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
  * calls to md.c, and *also* do the calls to the Page Server. On every
@@ -203,11 +205,12 @@ zm_unpack_response(StringInfo s)
 
 		case T_ZenithGetPageResponse:
 			{
-				ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ);
+				uint32 n_blocks = pq_getmsgint(s, 4);
+				ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ*n_blocks);
 
 				msg_resp->tag = tag;
-				/* XXX:	should be varlena */
-				memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
+				msg_resp->n_blocks = n_blocks;
+				memcpy(msg_resp->page, pq_getmsgbytes(s, n_blocks*BLCKSZ), n_blocks*BLCKSZ);
 				pq_getmsgend(s);
 
 				resp = (ZenithResponse *) msg_resp;
@@ -906,6 +909,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	ZenithResponse *resp;
 	bool		latest;
 	XLogRecPtr	request_lsn;
+	BlockNumber first_chunk_blkno = blkno & ~(CHUNK_SIZE-1);
 
 	switch (reln->smgr_relpersistence)
 	{
@@ -938,7 +942,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum,
-			.blkno = blkno
+			.blkno = first_chunk_blkno
 		};
 
 		resp = page_server->request((ZenithRequest *) &request);
@@ -947,10 +951,26 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	switch (resp->tag)
 	{
 		case T_ZenithGetPageResponse:
-			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
-			lfc_write(reln, forkNum, blkno, buffer);
+		{
+			int n_blocks = ((ZenithGetPageResponse *) resp)->n_blocks;
+			char* chunk = ((ZenithGetPageResponse *) resp)->page;
+			lfc_bulk_write(reln, forkNum, first_chunk_blkno, chunk, n_blocks);
+			if (first_chunk_blkno + n_blocks <= blkno) {
+				memset(buffer, 0, BLCKSZ);
+				ereport(WARNING,
+						(errcode(ERRCODE_IO_ERROR),
+						 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+								blkno,
+								reln->smgr_rnode.node.spcNode,
+								reln->smgr_rnode.node.dbNode,
+								reln->smgr_rnode.node.relNode,
+								forkNum,
+								(uint32) (request_lsn >> 32), (uint32) request_lsn)));
+			} else {
+				memcpy(buffer, chunk + BLCKSZ*(blkno - first_chunk_blkno), BLCKSZ);
+			}
 			break;
-
+		}
 		case T_ZenithErrorResponse:
 			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
