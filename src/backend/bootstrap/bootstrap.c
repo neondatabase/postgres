@@ -53,6 +53,7 @@
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
 
+extern uint64 predefined_sysidentifier;
 
 static void CheckerModeMain(void);
 static void BootstrapModeMain(void);
@@ -225,7 +226,7 @@ AuxiliaryProcessMain(int argc, char *argv[])
 	/* If no -x argument, we are a CheckerProcess */
 	MyAuxProcType = CheckerProcess;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:x:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:s:x:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -272,6 +273,16 @@ AuxiliaryProcessMain(int argc, char *argv[])
 									PGC_S_OVERRIDE);
 				}
 				break;
+			case 's':
+			{
+				char* endptr;
+#ifdef HAVE_STRTOULL
+				predefined_sysidentifier = strtoull(optarg, &endptr, 10);
+#else
+				predefined_sysidentifier = strtoul(optarg, &endptr, 10);
+#endif
+				break;
+			}
 			case 'c':
 			case '-':
 				{

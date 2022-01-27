@@ -2948,6 +2948,7 @@ main(int argc, char *argv[])
 		{"data-checksums", no_argument, NULL, 'k'},
 		{"allow-group-access", no_argument, NULL, 'g'},
 		{"discard-caches", no_argument, NULL, 14},
+		{"sysid", required_argument, NULL, 15},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3093,6 +3094,9 @@ main(int argc, char *argv[])
 				extra_options = psprintf("%s %s",
 										 extra_options,
 										 "-c debug_discard_caches=1");
+				break;
+			case 15:
+				boot_options = psprintf("%s -s %s", boot_options, optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */
