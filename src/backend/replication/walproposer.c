@@ -1319,6 +1319,34 @@ SendProposerElected(Safekeeper *sk)
 	{
 		/* safekeeper is empty or no common point, start from the beginning */
 		sk->startStreamingAt = propTermHistory.entries[0].lsn;
+
+		if (sk->startStreamingAt < truncateLsn)
+		{
+			/*
+			 * There's a gap between the WAL starting point and a truncateLsn,
+			 * which can't appear in a normal working cluster. That gap means
+			 * that all safekeepers reported that they have persisted WAL up
+			 * to the truncateLsn before, but now current safekeeper tells
+			 * otherwise.
+			 * 
+			 * Also we have a special condition here, which is empty safekeeper
+			 * with no history. In combination with a gap, that can happen when
+			 * we introduce a new safekeeper to the cluster. This is a rare case,
+			 * which is triggered manually for now, and should be treated with 
+			 * care.
+			 */
+
+			/*
+			 * truncateLsn will not change without ack from current safekeeper,
+			 * and it's aligned to the WAL record, so we can safely start
+			 * streaming from this point.
+			 */
+			sk->startStreamingAt = truncateLsn;
+
+			elog(WARNING, "empty safekeeper joined cluster as %s:%s, historyStart=%X/%X, sk->startStreamingAt=%X/%X",
+				 sk->host, sk->port, LSN_FORMAT_ARGS(propTermHistory.entries[0].lsn),
+				 LSN_FORMAT_ARGS(sk->startStreamingAt));
+		}
 	}
 	else
 	{
