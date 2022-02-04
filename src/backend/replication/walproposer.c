@@ -1895,7 +1895,7 @@ GetLatestZentihFeedback(ZenithFeedback *zf)
 		{
 			latest_safekeeper = i;
 			replyTime = safekeeper[i].appendResponse.zf.ps_replytime;
-			elog(LOG, "safekeeper[%d] replyTime %lu", i, replyTime);
+			elog(DEBUG2, "safekeeper[%d] replyTime %lu", i, replyTime);
 		}
 	}
 
