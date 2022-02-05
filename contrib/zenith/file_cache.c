@@ -45,7 +45,7 @@
  */
 
 /* Local file storage allocation chunk.
- * Should be power of two. Using larger than page chunks can
+ * Should be power of two and not less than 32. Using larger than page chunks can
  * 1. Reduce hash-map memory footprint: 8TB database contains billion pages
  *    and size of hash entry is 40 bytes, so we need 40Gb just for hash map.
  *    1Mb chunks can reduce hash map size to 320Mb.
