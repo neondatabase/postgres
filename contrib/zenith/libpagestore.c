@@ -339,9 +339,9 @@ _PG_init(void)
 							"cluster size limit",
 							NULL,
 							&max_cluster_size,
-							-1, -1, MAX_KILOBYTES,
+							-1, -1, INT_MAX,
 							PGC_SIGHUP,
-							GUC_UNIT_BYTE,
+							GUC_UNIT_MB,
 							NULL, NULL,	NULL);
 
 	relsize_hash_init();
