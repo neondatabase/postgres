@@ -618,7 +618,6 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 {
 	bool		exists;
 	ZenithResponse *resp;
-	BlockNumber n_blocks;
 	bool		latest;
 	XLogRecPtr	request_lsn;
 
@@ -643,11 +642,6 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 
 		default:
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
-	}
-
-	if (get_cached_relsize(reln->smgr_rnode.node, forkNum, &n_blocks))
-	{
-		return true;
 	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
@@ -754,9 +748,6 @@ zenith_unlink(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	 * exist.
 	 */
 	mdunlink(rnode, forkNum, isRedo);
-	if (!RelFileNodeBackendIsTemp(rnode)) {
-		forget_cached_relsize(rnode.node, forkNum);
-	}
 }
 
 /*
