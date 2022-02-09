@@ -764,7 +764,6 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			  char *buffer, bool skipFsync)
 {
 	XLogRecPtr	lsn;
-	uint64 current_instance_size;
 
 	switch (reln->smgr_relpersistence)
 	{
@@ -783,33 +782,24 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	current_instance_size = GetZenithCurrentClusterSize();
-
-	// Do not limit autovacuum processes.
-	if (!IsAutoVacuumWorkerProcess() && max_cluster_size > 0)
+	/*
+	 * Check that the cluster size limit has not been exceeded.
+	 *
+	 * Temporary and unlogged relations are not included in the cluster size measured
+	 * by the page server, so ignore those. Autovacuum processes are also exempt.
+	 */
+	if (max_cluster_size > 0 &&
+		reln->smgr_relpersistence == RELPERSISTENCE_PERMANENT &&
+		!IsAutoVacuumWorkerProcess())
 	{
-		if (current_instance_size >= max_cluster_size)
+		uint64		current_size = GetZenithCurrentClusterSize();
+
+		if (current_size >= ((uint64) max_cluster_size) * 1024 * 1024)
 			ereport(ERROR,
 				(errcode(ERRCODE_DISK_FULL),
-					errmsg("could not extend file. Cluster size limit of %d bytes is reached",
-						max_cluster_size),
+					errmsg("could not extend file because cluster size limit (%d MB) has been exceeded",
+						   max_cluster_size),
 					errhint("This limit is defined by zenith.max_cluster_size GUC")));
-		// Throw a warning if current size is too close to the limit.
-		// `too close' is now defined as 10%
-		else if (current_instance_size >= max_cluster_size*0.1)
-		{
-			ereport(WARNING,
-				(errmsg("Current cluster size %lu bytes is close to the limit of %d bytes. ",
-						current_instance_size, max_cluster_size),
-					errhint("This limit is defined by zenith.max_cluster_size GUC")));
-		}
-		else
-		{
-			ereport(WARNING,
-					(errmsg("Current cluster size %lu bytes is not close to the limit of %d bytes. ",
-							current_instance_size, max_cluster_size),
-						errhint("This limit is defined by zenith.max_cluster_size GUC")));
-		}
 	}
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
