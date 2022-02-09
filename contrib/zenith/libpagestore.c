@@ -136,6 +136,45 @@ zenith_connect()
 	connected = true;
 }
 
+/*
+ * A wrapper around PQgetCopyData that checks for interrupts while sleeping.
+ */
+static int
+call_PQgetCopyData(PGconn *conn, char **buffer)
+{
+	int			ret;
+
+retry:
+	ret = PQgetCopyData(conn, buffer, 1 /* async */);
+
+	if (ret == 0)
+	{
+		int			wc;
+
+		/* Sleep until there's something to do */
+		wc = WaitLatchOrSocket(MyLatch,
+							   WL_LATCH_SET | WL_SOCKET_READABLE |
+							   WL_EXIT_ON_PM_DEATH,
+							   PQsocket(conn),
+							   -1L, PG_WAIT_EXTENSION);
+		ResetLatch(MyLatch);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/* Data available in socket? */
+		if (wc & WL_SOCKET_READABLE)
+		{
+			if (!PQconsumeInput(conn))
+				zenith_log(ERROR, "could not get response from pageserver: %s",
+						   PQerrorMessage(conn));
+		}
+
+		goto retry;
+	}
+
+	return ret;
+}
+
 
 static ZenithResponse *
 zenith_call(ZenithRequest *request)
@@ -183,7 +222,7 @@ zenith_call(ZenithRequest *request)
 		}
 
 		/* read response */
-		resp_buff.len = PQgetCopyData(pageserver_conn, &resp_buff.data, 0);
+		resp_buff.len = call_PQgetCopyData(pageserver_conn, &resp_buff.data);
 		resp_buff.cursor = 0;
 
 		if (resp_buff.len == -1)
