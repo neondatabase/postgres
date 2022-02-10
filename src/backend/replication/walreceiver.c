@@ -1111,7 +1111,7 @@ XLogWalRcvSendReply(bool force, bool requestReply)
 	pq_sendbyte(&reply_message, requestReply ? 1 : 0);
 
 	/* Send it */
-	elog(DEBUG2, "sending write %X/%X flush %X/%X apply %X/%X%s",
+	elog(LOG, "sending write %X/%X flush %X/%X apply %X/%X%s",
 		 LSN_FORMAT_ARGS(writePtr),
 		 LSN_FORMAT_ARGS(flushPtr),
 		 LSN_FORMAT_ARGS(applyPtr),

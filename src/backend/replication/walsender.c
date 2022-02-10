@@ -1959,14 +1959,14 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 	TimestampTz now;
 	static bool fullyAppliedLastTime = false;
 
-	if (message_level_is_interesting(DEBUG2))
+	if (message_level_is_interesting(LOG))
 	{
 		char	   *replyTimeStr;
 
 		/* Copy because timestamptz_to_str returns a static buffer */
 		replyTimeStr = pstrdup(timestamptz_to_str(replyTime));
 
-		elog(DEBUG2, "write %X/%X flush %X/%X apply %X/%X%s reply_time %s",
+		elog(LOG, "write %X/%X flush %X/%X apply %X/%X%s reply_time %s",
 			 LSN_FORMAT_ARGS(writePtr),
 			 LSN_FORMAT_ARGS(flushPtr),
 			 LSN_FORMAT_ARGS(applyPtr),
@@ -2895,6 +2895,12 @@ retry:
 	}
 	else
 	{
+		elog(LOG,
+			"sending message len %zu beginLsn=%X/%X endLsn=%X/%X",
+			nbytes,
+			LSN_FORMAT_ARGS(startptr),
+			LSN_FORMAT_ARGS(endptr));
+
 		/*
 		 * Fill the send timestamp last, so that it is taken as late as possible.
 		 */

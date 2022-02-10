@@ -1642,7 +1642,7 @@ SendAppendRequests(Safekeeper *sk)
 					len);
 		}
 
-		ereport(DEBUG2,
+		ereport(LOG,
 				(errmsg("sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
 						req->endLsn - req->beginLsn,
 						LSN_FORMAT_ARGS(req->beginLsn),
