@@ -12,6 +12,7 @@ struct WalProposerConn
 {
 	PGconn* pg_conn;
 	bool    is_nonblocking; /* whether the connection is non-blocking */
+	char   *recvbuf;	/* last received data from libpqprop_async_read */
 };
 
 /* Prototypes for exported functions */
@@ -112,6 +113,7 @@ libpqprop_connect_start(char* conninfo)
 	conn = palloc(sizeof(WalProposerConn));
 	conn->pg_conn = pg_conn;
 	conn->is_nonblocking = false; /* connections always start in blocking mode */
+	conn->recvbuf = NULL;
 	return conn;
 }
 
@@ -247,18 +249,36 @@ libpqprop_flush(WalProposerConn* conn)
 static void
 libpqprop_finish(WalProposerConn* conn)
 {
+	if (conn->recvbuf != NULL)
+		PQfreemem(conn->recvbuf);
 	PQfinish(conn->pg_conn);
 	pfree(conn);
 }
 
+/*
+ * Receive a message from the safekeeper.
+ *
+ * On success, the data is placed in *buf. It is valid until the next call
+ * to this function.
+ */
 static PGAsyncReadResult
 libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 {
 	int result;
 
+	if (conn->recvbuf != NULL)
+	{
+		PQfreemem(conn->recvbuf);
+		conn->recvbuf = NULL;
+	}
+
 	/* Call PQconsumeInput so that we have the data we need */
 	if (!PQconsumeInput(conn->pg_conn))
+	{
+		*amount = 0;
+		*buf = NULL;
 		return PG_ASYNC_READ_FAIL;
+	}
 
 	/* The docs for PQgetCopyData list the return values as:
 	 *      0 if the copy is still in progress, but no "complete row" is
@@ -272,9 +292,11 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 	 * sometimes be triggered by the server returning an ErrorResponse (which
 	 * also happens to have the effect that the copy is done).
 	 */
-	switch (result = PQgetCopyData(conn->pg_conn, buf, true))
+	switch (result = PQgetCopyData(conn->pg_conn, &conn->recvbuf, true))
 	{
 		case 0:
+			*amount = 0;
+			*buf = NULL;
 			return PG_ASYNC_READ_TRY_AGAIN;
 		case -1:
 		{
@@ -292,13 +314,18 @@ libpqprop_async_read(WalProposerConn* conn, char** buf, int* amount)
 
 			/* If there was actually an error, it'll be properly reported by
 			 * calls to PQerrorMessage -- we don't have to do anything else */
+			*amount = 0;
+			*buf = NULL;
 			return PG_ASYNC_READ_FAIL;
 		}
 		case -2:
+			*amount = 0;
+			*buf = NULL;
 			return PG_ASYNC_READ_FAIL;
 		default:
 			/* Positive values indicate the size of the returned result */
 			*amount = result;
+			*buf = conn->recvbuf;
 			return PG_ASYNC_READ_SUCCESS;
 	}
 }
