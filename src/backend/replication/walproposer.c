@@ -174,6 +174,7 @@ WalProposerMain(Datum main_arg)
 	am_wal_proposer = true;
 	am_walsender = true;
 	InitWalSender();
+	InitProcessPhase2();
 
 	/* Create replication slot for WAL proposer if not exists */
 	if (SearchNamedReplicationSlot(WAL_PROPOSER_SLOT_NAME, false) == NULL)
