@@ -916,39 +916,15 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 #endif
 }
 
-/*
- *	zenith_read() -- Read the specified block from a relation.
- */
-void
-zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
-			char *buffer)
+void zenith_read_at_lsn(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
+			XLogRecPtr request_lsn, bool request_latest, char *buffer)
 {
 	ZenithResponse *resp;
-	bool		latest;
-	XLogRecPtr	request_lsn;
 
-	switch (reln->smgr_relpersistence)
-	{
-		case 0:
-			elog(ERROR, "cannot call smgrread() on rel with unknown persistence");
-
-		case RELPERSISTENCE_PERMANENT:
-			break;
-
-		case RELPERSISTENCE_TEMP:
-		case RELPERSISTENCE_UNLOGGED:
-			mdread(reln, forkNum, blkno, buffer);
-			return;
-
-		default:
-			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
-	}
-
-	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithGetPageRequest request = {
 			.req.tag = T_ZenithGetPageRequest,
-			.req.latest = latest,
+			.req.latest = request_latest,
 			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forkNum,
@@ -1064,6 +1040,37 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		}
 	}
 #endif
+}
+
+/*
+ *	zenith_read() -- Read the specified block from a relation.
+ */
+void
+zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
+			char *buffer)
+{
+	bool		latest;
+	XLogRecPtr	request_lsn;
+
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrread() on rel with unknown persistence");
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdread(reln, forkNum, blkno, buffer);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
+	request_lsn = zenith_get_request_lsn(&latest);
+	zenith_read_at_lsn(reln, forkNum, blkno, request_lsn, latest, buffer);
 }
 
 #ifdef DEBUG_COMPARE_LOCAL
