@@ -143,6 +143,10 @@ libpqprop_connect_poll(WalProposerConn* conn)
 			elog(FATAL, "Unexpected PGRES_POLLING_ACTIVE returned from PQconnectPoll");
 			/* This return is never actually reached, but it's here to make the compiler happy */
 			return WP_CONN_POLLING_FAILED;
+
+		default:
+			Assert(false);
+			return_val = WP_CONN_POLLING_FAILED; /* keep the compiler quiet */
 	}
 
 	return return_val;
@@ -226,6 +230,10 @@ libpqprop_get_query_result(WalProposerConn* conn)
 		case PGRES_PIPELINE_ABORTED:
 			return_val = WP_EXEC_FAILED;
 			break;
+
+		default:
+			Assert(false);
+			return_val = WP_EXEC_FAILED; /* keep the compiler quiet */
 	}
 
 	if (unexpected_success)
