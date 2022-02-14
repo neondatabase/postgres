@@ -184,8 +184,10 @@ cleanup:
 static void
 die(int code, const char *str)
 {
+	/* work around gcc ignoring that it shouldn't warn on (void) result being unused */
+	ssize_t _unused pg_attribute_unused();
 	/* Best effort write to stderr */
-	(void)write(fileno(stderr), str, strlen(str));
+	_unused = write(fileno(stderr), str, strlen(str));
 
 	/* XXX: we don't want to run any atexit callbacks */
 	_exit(code);
