@@ -111,7 +111,7 @@ AssertEventsOkForState(uint32 events, Safekeeper* sk)
 uint32
 SafekeeperStateDesiredEvents(SafekeeperState state)
 {
-	uint32 result;
+	uint32 result = WL_NO_EVENTS;
 
 	/* If the state doesn't have a modifier, we can check the base state */
 	switch (state)
@@ -153,6 +153,10 @@ SafekeeperStateDesiredEvents(SafekeeperState state)
 		/* The offline state expects no events. */
 		case SS_OFFLINE:
 			result = WL_NO_EVENTS;
+			break;
+
+		default:
+			Assert(false);
 			break;
 	}
 
