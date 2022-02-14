@@ -50,6 +50,7 @@
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
 #include "storage/pmsignal.h"
+#include "storage/proc.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
