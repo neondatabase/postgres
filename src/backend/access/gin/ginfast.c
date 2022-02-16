@@ -289,7 +289,9 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		{
 			/*
 			 * ZENITH: Get buffer before XLogBeginInsert() to avoid recursive call
-			 * of XLogBeginInsert() by zenith_wallog_page->log_newpage_copy.
+			 * of XLogBeginInsert(). Reading a new buffer might evict a dirty page from
+			 * the buffer cache, and if that page happens to be an FSM or VM page, zenith_write()
+			 * will try to WAL-log an image of the page.
 			 */
 			buffer = ReadBuffer(index, metadata->tail);
 		}
