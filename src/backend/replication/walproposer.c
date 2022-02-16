@@ -1744,6 +1744,7 @@ RecvAppendResponses(Safekeeper *sk)
 	return sk->state == SS_ACTIVE;
 }
 
+/* Parse a ZenithFeedback message, or the ZenithFeedback part of an AppendResponse */
 void
 ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 {
@@ -2130,15 +2131,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			msg->hs.xmin.value = pq_getmsgint64_le(&s);
 			msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);
 			if (buf_size > APPENDRESPONSE_FIXEDPART_SIZE)
-			{
-				StringInfoData z;
-				z.data = buf + APPENDRESPONSE_FIXEDPART_SIZE;
-				z.len = buf_size - APPENDRESPONSE_FIXEDPART_SIZE;
-				z.cursor = 0;
 				ParseZenithFeedbackMessage(&s, &msg->zf);
-				//advance main StringInfo cursor, because it is checked in pq_getmsgend below
-				s.cursor += z.cursor;
-			}
 			pq_getmsgend(&s);
 			return true;
 		}
