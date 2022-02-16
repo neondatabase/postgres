@@ -10,8 +10,9 @@
  */
 #include "postgres.h"
 
-#include "access/xact.h"
 #include "access/relation.h"
+#include "access/xact.h"
+#include "access/xlog.h"
 #include "catalog/namespace.h"
 #include "fmgr.h"
 #include "funcapi.h"
@@ -28,9 +29,13 @@ PG_MODULE_MAGIC;
 PG_FUNCTION_INFO_V1(test_consume_xids);
 PG_FUNCTION_INFO_V1(clear_buffer_cache);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn);
+PG_FUNCTION_INFO_V1(get_raw_page_at_lsn_ex);
 
-
-extern void zenith_read_at_lsn(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
+/*
+ * This function is defined in the zenith extension, such declaration is fragile.
+ * The signature here would need to be updated whenever function parameters change in pagestore_smgr.c
+ */
+extern void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
 			XLogRecPtr request_lsn, bool request_latest, char *buffer);
 
 /*
@@ -132,21 +137,34 @@ clear_buffer_cache(PG_FUNCTION_ARGS)
 
 
 /*
- * A version to read page for at a specific LSN
+ * Reads the page from page server without buffer cache
+ * usage mimics get_raw_page() in pageinspect, but offers reading versions at specific LSN
+ * NULL read lsn will result in reading the latest version.
+ *
+ * Note: reading latest version will result in waiting for latest changes to reach the page server,
+ *       if this is undesirable, use pageinspect' get_raw_page that uses buffered access to the latest page
  */
 Datum
 get_raw_page_at_lsn(PG_FUNCTION_ARGS)
 {
-	text	   *relname = PG_GETARG_TEXT_PP(0);
-	text	   *forkname = PG_GETARG_TEXT_PP(1);
-	uint32		blkno = PG_GETARG_UINT32(2);
-	uint64 read_lsn = PG_GETARG_INT64(3);
-
 	bytea	   *raw_page;
 	ForkNumber	forknum;
 	RangeVar   *relrv;
 	Relation	rel;
 	char	   *raw_page_data;
+	text	   *relname;
+	text	   *forkname;
+	uint32		blkno;
+
+	bool request_latest = PG_ARGISNULL(3);
+	uint64 read_lsn = request_latest ? GetXLogInsertRecPtr() : PG_GETARG_INT64(3);
+
+	if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
+		PG_RETURN_NULL();
+
+	relname = PG_GETARG_TEXT_PP(0);
+	forkname = PG_GETARG_TEXT_PP(1);
+	blkno = PG_GETARG_UINT32(2);
 
 	if (!superuser())
 		ereport(ERROR,
@@ -196,20 +214,59 @@ get_raw_page_at_lsn(PG_FUNCTION_ARGS)
 
 	forknum = forkname_to_number(text_to_cstring(forkname));
 
-	if (blkno >= RelationGetNumberOfBlocksInFork(rel, forknum))
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("block number %u is out of range for relation \"%s\"",
-						blkno, RelationGetRelationName(rel))));
-
 	/* Initialize buffer to copy to */
 	raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
 	SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
 	raw_page_data = VARDATA(raw_page);
 
-	zenith_read_at_lsn(rel->rd_smgr, forknum, blkno, read_lsn, false /* request_latest */, raw_page_data);
+	zenith_read_at_lsn(rel->rd_node, forknum, blkno, read_lsn, request_latest, raw_page_data);
 
 	relation_close(rel, AccessShareLock);
 
 	PG_RETURN_BYTEA_P(raw_page);
+}
+
+/*
+ * Another option to read a relation page from page server without cache
+ * this version doesn't validate input and allows reading blocks of dropped relations
+ *
+ * Note: reading latest version will result in waiting for latest changes to reach the page server,
+ *  if this is undesirable, use pageinspect' get_raw_page that uses buffered access to the latest page
+ */
+Datum
+get_raw_page_at_lsn_ex(PG_FUNCTION_ARGS)
+{
+	char	   *raw_page_data;
+
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				errmsg("must be superuser to use raw page functions")));
+
+	if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) ||
+		PG_ARGISNULL(3) || PG_ARGISNULL(4))
+		PG_RETURN_NULL();
+
+	{
+		RelFileNode rnode = {
+			.spcNode = PG_GETARG_OID(0),
+			.dbNode  = PG_GETARG_OID(1),
+			.relNode = PG_GETARG_OID(2)
+		};
+
+		ForkNumber forknum = PG_GETARG_UINT32(3);
+
+		uint32 blkno = PG_GETARG_UINT32(4);
+		bool request_latest = PG_ARGISNULL(5);
+		uint64 read_lsn = request_latest ? GetXLogInsertRecPtr() : PG_GETARG_INT64(5);
+
+
+		/* Initialize buffer to copy to */
+		bytea *raw_page = (bytea *) palloc(BLCKSZ + VARHDRSZ);
+		SET_VARSIZE(raw_page, BLCKSZ + VARHDRSZ);
+		raw_page_data = VARDATA(raw_page);
+
+		zenith_read_at_lsn(rnode, forknum, blkno, read_lsn, request_latest, raw_page_data);
+		PG_RETURN_BYTEA_P(raw_page);
+	}
 }
