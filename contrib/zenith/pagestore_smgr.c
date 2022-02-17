@@ -57,6 +57,8 @@
 #include "postmaster/interrupt.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/relfilenode.h"
+#include "storage/buf_internals.h"
 #include "storage/md.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -105,6 +107,21 @@ typedef enum
 
 static SMgrRelation unlogged_build_rel = NULL;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+
+typedef struct PrefetchedBuffer
+{
+	BufferTag  tag;
+	XLogRecPtr lsn;
+	char       page[BLCKSZ];
+} PrefetchedBuffer;
+
+#define PREFETCH_CACHE_SIZE 8 /* should be small eniugh because of sequential lookup */
+
+BufferTag prefetch_requests[PREFETCH_CACHE_SIZE];
+PrefetchedBuffer prefetched_buffers[PREFETCH_CACHE_SIZE];
+int n_prefetch_requests;
+int n_prefetched_buffers;
+int n_prefetch_hits;
 
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
@@ -873,9 +890,15 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	/* not implemented */
-	elog(SmgrTrace, "[ZENITH_SMGR] prefetch noop");
-	return true;
+	if (n_prefetch_requests < PREFETCH_CACHE_SIZE)
+	{
+		prefetch_requests[n_prefetch_requests].rnode = reln->smgr_rnode.node;
+		prefetch_requests[n_prefetch_requests].forkNum = forknum;
+		prefetch_requests[n_prefetch_requests].blockNum = blocknum;
+		n_prefetch_requests += 1;
+		return true;
+	}
+	return false;
 }
 
 /*
@@ -925,6 +948,40 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 {
 	ZenithResponse *resp;
 
+	bool		latest;
+	XLogRecPtr	request_lsn;
+	int			i;
+
+	switch (reln->smgr_relpersistence)
+	{
+		case 0:
+			elog(ERROR, "cannot call smgrread() on rel with unknown persistence");
+
+		case RELPERSISTENCE_PERMANENT:
+			break;
+
+		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_UNLOGGED:
+			mdread(reln, forkNum, blkno, buffer);
+			return;
+
+		default:
+			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
+	}
+
+	for (i = 0; i < n_prefetched_buffers; i++)
+	{
+		if (RelFileNodeEquals(prefetched_buffers[i].tag.rnode, reln->smgr_rnode.node) &&
+			prefetched_buffers[i].tag.forkNum == forkNum &&
+			prefetched_buffers[i].tag.blockNum == blkno &&
+			prefetched_buffers[i].lsn >= request_lsn)
+		{
+			n_prefetch_hits += 1;
+			memcpy(buffer, prefetched_buffers[i].page, BLCKSZ);
+			return;
+		}
+	}
+
 	{
 		ZenithGetPageRequest request = {
 			.req.tag = T_ZenithGetPageRequest,
@@ -934,10 +991,44 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			.forknum = forkNum,
 			.blkno = blkno
 		};
+		if (n_prefetch_requests > 0)
+		{
+			page_server->send((ZenithRequest *) &request);
+			for (i = 0; i < n_prefetch_requests; i++)
+			{
+				request.rnode = prefetch_requests[i].rnode;
+				request.forknum = prefetch_requests[i].forkNum;
+				request.blkno = prefetch_requests[i].blockNum;
+				page_server->send((ZenithRequest *) &request);
+			}
+			page_server->flush();
+			resp = page_server->receive();
 
-		resp = page_server->request((ZenithRequest *) &request);
+			if (resp->tag == T_ZenithGetPageResponse)
+			{
+				for (i = 0; i < n_prefetch_requests; i++)
+				{
+					ZenithResponse *prefetch_resp = page_server->receive();
+					if (prefetch_resp->tag == T_ZenithGetPageResponse) {
+						prefetched_buffers[i].tag = prefetch_requests[i];
+						prefetched_buffers[i].lsn = request_lsn;
+						memcpy(&prefetched_buffers[i].page, ((ZenithGetPageResponse *) prefetch_resp)->page, BLCKSZ);
+						pfree(prefetch_resp);
+					} else {
+						pfree(prefetch_resp);
+						break;
+					}
+				}
+				if (i > n_prefetched_buffers)
+					n_prefetched_buffers = i;
+			}
+			n_prefetch_requests = 0;
+		}
+		else
+		{
+			resp = page_server->request((ZenithRequest *) &request);
+		}
 	}
-
 	switch (resp->tag)
 	{
 		case T_ZenithGetPageResponse:

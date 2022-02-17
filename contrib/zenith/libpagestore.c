@@ -44,11 +44,6 @@ PGconn	   *pageserver_conn = NULL;
 
 char	   *page_server_connstring_raw;
 
-static ZenithResponse *zenith_call(ZenithRequest *request);
-page_server_api api = {
-	.request = zenith_call
-};
-
 static void
 zenith_connect()
 {
@@ -175,99 +170,126 @@ retry:
 	return ret;
 }
 
+static void
+zenith_disconnect(void)
+{
+	/*
+	 * If anything goes wrong while we were sending a request, it's not
+	 * clear what state the connection is in. For example, if we sent the
+	 * request but didn't receive a response yet, we might receive the
+	 * response some time later after we have already sent a new unrelated
+	 * request. Close the connection to avoid getting confused.
+	 */
+	if (connected)
+	{
+		zenith_log(LOG, "dropping connection to page server due to error");
+		PQfinish(pageserver_conn);
+		pageserver_conn = NULL;
+		connected = false;
+	}
+}
 
-static ZenithResponse *
-zenith_call(ZenithRequest *request)
+static void
+zenith_send(ZenithRequest* request)
 {
 	StringInfoData req_buff;
+
+	/* If the connection was lost for some reason, reconnect */
+	if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
+	{
+		PQfinish(pageserver_conn);
+		pageserver_conn = NULL;
+		connected = false;
+	}
+
+	if (!connected)
+		zenith_connect();
+
+	req_buff = zm_pack_request(request);
+
+	/*
+	 * Send request.
+	 *
+	 * In principle, this could block if the output buffer is full, and we
+	 * should use async mode and check for interrupts while waiting. In
+	 * practice, our requests are small enough to always fit in the output and
+	 * TCP buffer.
+	 */
+	if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0)
+	{
+		char* msg = PQerrorMessage(pageserver_conn);
+		zenith_disconnect();
+		zenith_log(ERROR, "failed to send page request: %s", msg);
+	}
+	pfree(req_buff.data);
+
+	if (message_level_is_interesting(PqPageStoreTrace))
+	{
+		char	   *msg = zm_to_string((ZenithMessage *) request);
+
+		zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
+		pfree(msg);
+	}
+}
+
+
+static ZenithResponse *
+zenith_receive(void)
+{
 	StringInfoData resp_buff;
 	ZenithResponse *resp;
 
-	PG_TRY();
+	/* read response */
+	resp_buff.len = call_PQgetCopyData(pageserver_conn, &resp_buff.data);
+	resp_buff.cursor = 0;
+
+	if (resp_buff.len < 0)
 	{
-		/* If the connection was lost for some reason, reconnect */
-		if (connected && PQstatus(pageserver_conn) == CONNECTION_BAD)
-		{
-			PQfinish(pageserver_conn);
-			pageserver_conn = NULL;
-			connected = false;
-		}
-
-		if (!connected)
-			zenith_connect();
-
-		req_buff = zm_pack_request(request);
-
-		/*
-		 * Send request.
-		 *
-		 * In principle, this could block if the output buffer is full, and we
-		 * should use async mode and check for interrupts while waiting. In
-		 * practice, our requests are small enough to always fit in the output and
-		 * TCP buffer.
-		 */
-		if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
-		{
-			zenith_log(ERROR, "failed to send page request: %s",
-					   PQerrorMessage(pageserver_conn));
-		}
-		pfree(req_buff.data);
-
-		if (message_level_is_interesting(PqPageStoreTrace))
-		{
-			char	   *msg = zm_to_string((ZenithMessage *) request);
-
-			zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
-			pfree(msg);
-		}
-
-		/* read response */
-		resp_buff.len = call_PQgetCopyData(pageserver_conn, &resp_buff.data);
-		resp_buff.cursor = 0;
-
+		char* msg = PQerrorMessage(pageserver_conn);
+		zenith_disconnect();
 		if (resp_buff.len == -1)
 			zenith_log(ERROR, "end of COPY");
 		else if (resp_buff.len == -2)
-			zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
-
-		resp = zm_unpack_response(&resp_buff);
-		PQfreemem(resp_buff.data);
-
-		if (message_level_is_interesting(PqPageStoreTrace))
-		{
-			char	   *msg = zm_to_string((ZenithMessage *) resp);
-
-			zenith_log(PqPageStoreTrace, "Got response: %s", msg);
-			pfree(msg);
-		}
-
-		/*
-		 * XXX: zm_to_string leak strings. Check with what memory contex all this
-		 * methods are called.
-		 */
+			zenith_log(ERROR, "could not read COPY data: %s", msg);
 	}
-	PG_CATCH();
+	resp = zm_unpack_response(&resp_buff);
+	PQfreemem(resp_buff.data);
+
+	if (message_level_is_interesting(PqPageStoreTrace))
 	{
-		/*
-		 * If anything goes wrong while we were sending a request, it's not
-		 * clear what state the connection is in. For example, if we sent the
-		 * request but didn't receive a response yet, we might receive the
-		 * response some time later after we have already sent a new unrelated
-		 * request. Close the connection to avoid getting confused.
-		 */
-		if (connected)
-		{
-			zenith_log(LOG, "dropping connection to page server due to error");
-			PQfinish(pageserver_conn);
-			pageserver_conn = NULL;
-			connected = false;
-		}
-		PG_RE_THROW();
-	}
-	PG_END_TRY();
+		char	   *msg = zm_to_string((ZenithMessage *) resp);
 
+		zenith_log(PqPageStoreTrace, "Got response: %s", msg);
+		pfree(msg);
+	}
 	return (ZenithResponse *) resp;
 }
+
+static void
+zenith_flush(void)
+{
+	if (PQflush(pageserver_conn))
+	{
+		char* msg = PQerrorMessage(pageserver_conn);
+		zenith_disconnect();
+		zenith_log(ERROR, "failed to flush page requests: %s", msg);
+	}
+}
+
+static ZenithResponse *
+zenith_call(ZenithRequest* request)
+{
+	zenith_send(request);
+	zenith_flush();
+	return zenith_receive();
+}
+
+page_server_api api = {
+	.request = zenith_call,
+	.send = zenith_send,
+	.flush = zenith_flush,
+	.receive = zenith_receive
+};
 
 
 static bool

@@ -46,6 +46,8 @@ typedef struct
 } ZenithMessage;
 
 #define messageTag(m)		(((const ZenithMessage *)(m))->tag)
+//#define prefetch_log(fmt, ...) elog(LOG, fmt,  ## __VA_ARGS__)
+#define prefetch_log(fmt, ...)
 
 /*
  * supertype of all the Zenith*Request structs below
@@ -124,7 +126,10 @@ extern char *zm_to_string(ZenithMessage *msg);
 typedef struct
 {
 	ZenithResponse *(*request) (ZenithRequest *request);
-} page_server_api;
+	void (*send) (ZenithRequest *request);
+	ZenithResponse *(*receive) (void);
+	void (*flush) (void);
+}			page_server_api;
 
 extern page_server_api *page_server;
 
