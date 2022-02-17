@@ -151,6 +151,7 @@ static bool BlockingWrite(Safekeeper *sk, void *msg, size_t msg_size, Safekeeper
 static bool AsyncWrite(Safekeeper *sk, void *msg, size_t msg_size, SafekeeperState flush_state);
 static bool AsyncFlush(Safekeeper *sk);
 
+
 /*
  * WAL proposer bgworker entry point.
  */
@@ -1884,6 +1885,52 @@ GetAcknowledgedByQuorumWALPosition(void)
 	return responses[n_safekeepers - quorum];
 }
 
+
+static ZenithFeedbackState *zf_state;
+
+/*
+ * ZenithFeedbackShmemSize --- report amount of shared memory space needed
+ */
+Size
+ZenithFeedbackShmemSize(void)
+{
+	return sizeof(ZenithFeedbackState);
+}
+
+bool
+ZenithFeedbackShmemInit(void)
+{
+	bool		found;
+
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+	zf_state = ShmemInitStruct("Zenith Feedback",
+								sizeof(ZenithFeedbackState),
+								&found);
+	LWLockRelease(AddinShmemInitLock);
+
+	return found;
+}
+
+void
+zenith_feedback_set(ZenithFeedback *zf)
+{
+	SpinLockAcquire(&zf_state->mutex);
+	memcpy(&zf_state->feedback, zf, sizeof(ZenithFeedback));
+	SpinLockRelease(&zf_state->mutex);
+}
+
+
+void
+zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
+{
+	SpinLockAcquire(&zf_state->mutex);
+	*writeLsn = zf_state->feedback.ps_writelsn;
+	*flushLsn = zf_state->feedback.ps_flushlsn;
+	*applyLsn = zf_state->feedback.ps_applylsn;
+	SpinLockRelease(&zf_state->mutex);
+}
+
+
 /*
  * Get ZenithFeedback fields from the most advanced safekeeper
  */
@@ -1891,13 +1938,13 @@ static void
 GetLatestZentihFeedback(ZenithFeedback *zf)
 {
 	int latest_safekeeper = 0;
-	uint64 replyTime = 0;
+	XLogRecPtr ps_writelsn = InvalidXLogRecPtr;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].appendResponse.zf.ps_replytime > replyTime)
+		if (safekeeper[i].appendResponse.zf.ps_writelsn > ps_writelsn)
 		{
 			latest_safekeeper = i;
-			replyTime = safekeeper[i].appendResponse.zf.ps_replytime;
+			ps_writelsn = safekeeper[i].appendResponse.zf.ps_writelsn;
 		}
 	}
 
@@ -1906,6 +1953,16 @@ GetLatestZentihFeedback(ZenithFeedback *zf)
 	zf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_flushlsn;
 	zf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_applylsn;
 	zf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.zf.ps_replytime;
+
+	elog(DEBUG2, "GetLatestZentihFeedback: currentClusterSize %lu,"
+			  " ps_writelsn %X/%X, ps_flushlsn %X/%X, ps_applylsn %X/%X, ps_replytime %lu",
+		zf->currentClusterSize,
+		LSN_FORMAT_ARGS(zf->ps_writelsn),
+		LSN_FORMAT_ARGS(zf->ps_flushlsn),
+		LSN_FORMAT_ARGS(zf->ps_applylsn),
+		zf->ps_replytime);
+
+	zenith_feedback_set(zf);
 }
 
 static void
@@ -1919,11 +1976,11 @@ HandleSafekeeperResponse(void)
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	diskConsistentLsn = quorumFeedback.zf.ps_flushlsn;
-	// Get ZenithFeedback fields from the most advanced safekeeper
-	GetLatestZentihFeedback(&quorumFeedback.zf);
 
 	if (!syncSafekeepers)
 	{
+		// Get ZenithFeedback fields from the most advanced safekeeper
+		GetLatestZentihFeedback(&quorumFeedback.zf);
 		SetZenithCurrentClusterSize(quorumFeedback.zf.currentClusterSize);
 	}
 
