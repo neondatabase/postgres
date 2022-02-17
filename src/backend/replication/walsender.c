@@ -1964,6 +1964,8 @@ ProcessZenithFeedbackMessage(void)
 
 	ParseZenithFeedbackMessage(&reply_message, &zf);
 
+	zenith_feedback_set(&zf);
+
 	SetZenithCurrentClusterSize(zf.currentClusterSize);
 
 	ProcessStandbyReply(zf.ps_writelsn,
@@ -3854,10 +3856,10 @@ backpressure_lag(void)
 		XLogRecPtr applyPtr;
 		XLogRecPtr myFlushLsn = GetFlushRecPtr();
 
-		GetMinReplicaLsn(&writePtr, &flushPtr, &applyPtr);
+		zenith_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
 		#define MB ((XLogRecPtr)1024*1024)
 
-		elog(DEBUG2, "current flushLsn %X/%X StandbyReply: write %X/%X flush %X/%X apply %X/%X",
+		elog(DEBUG2, "current flushLsn %X/%X ZenithFeedback: write %X/%X flush %X/%X apply %X/%X",
 			LSN_FORMAT_ARGS(myFlushLsn),
 			LSN_FORMAT_ARGS(writePtr),
 			LSN_FORMAT_ARGS(flushPtr),
