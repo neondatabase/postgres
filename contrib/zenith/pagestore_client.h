@@ -156,6 +156,10 @@ extern bool zenith_prefetch(SMgrRelation reln, ForkNumber forknum,
 							BlockNumber blocknum);
 extern void zenith_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 						char *buffer);
+
+extern void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+			XLogRecPtr request_lsn, bool request_latest, char *buffer);
+
 extern void zenith_write(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum, char *buffer, bool skipFsync);
 extern void zenith_writeback(SMgrRelation reln, ForkNumber forknum,

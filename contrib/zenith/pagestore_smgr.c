@@ -917,13 +917,61 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 }
 
 /*
+ * While function is defined in the zenith extension it's used within zenith_test_utils directly.
+ * To avoid breaking tests in the runtime please keep function signature in sync.
+ */
+void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+			XLogRecPtr request_lsn, bool request_latest, char *buffer)
+{
+	ZenithResponse *resp;
+
+	{
+		ZenithGetPageRequest request = {
+			.req.tag = T_ZenithGetPageRequest,
+			.req.latest = request_latest,
+			.req.lsn = request_lsn,
+			.rnode = rnode,
+			.forknum = forkNum,
+			.blkno = blkno
+		};
+
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag)
+	{
+		case T_ZenithGetPageResponse:
+			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
+			break;
+
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+							blkno,
+							rnode.spcNode,
+							rnode.dbNode,
+							rnode.relNode,
+							forkNum,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s",
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
+	pfree(resp);
+}
+
+/*
  *	zenith_read() -- Read the specified block from a relation.
  */
 void
 zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			char *buffer)
 {
-	ZenithResponse *resp;
 	bool		latest;
 	XLogRecPtr	request_lsn;
 
@@ -945,44 +993,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	}
 
 	request_lsn = zenith_get_request_lsn(&latest);
-	{
-		ZenithGetPageRequest request = {
-			.req.tag = T_ZenithGetPageRequest,
-			.req.latest = latest,
-			.req.lsn = request_lsn,
-			.rnode = reln->smgr_rnode.node,
-			.forknum = forkNum,
-			.blkno = blkno
-		};
-
-		resp = page_server->request((ZenithRequest *) &request);
-	}
-
-	switch (resp->tag)
-	{
-		case T_ZenithGetPageResponse:
-			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
-			break;
-
-		case T_ZenithErrorResponse:
-			ereport(ERROR,
-					(errcode(ERRCODE_IO_ERROR),
-					 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
-							blkno,
-							reln->smgr_rnode.node.spcNode,
-							reln->smgr_rnode.node.dbNode,
-							reln->smgr_rnode.node.relNode,
-							forkNum,
-							(uint32) (request_lsn >> 32), (uint32) request_lsn),
-					 errdetail("page server returned error: %s",
-							   ((ZenithErrorResponse *) resp)->message)));
-			break;
-
-		default:
-			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
-	}
-
-	pfree(resp);
+	zenith_read_at_lsn(reln->smgr_rnode.node, forkNum, blkno, request_lsn, latest, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
