@@ -112,6 +112,8 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
 
+XLogRecPtr  MySnapshotLsn;
+
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
 #endif

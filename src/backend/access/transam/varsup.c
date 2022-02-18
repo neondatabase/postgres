@@ -59,6 +59,9 @@ GetNewTransactionId(bool isSubXact)
 	if (IsInParallelMode())
 		elog(ERROR, "cannot assign TransactionIds during a parallel operation");
 
+	if (!XLogRecPtrIsInvalid(MySnapshotLsn))
+		elog(ERROR, "cannot assign TransactionIds in read-only snapshot");
+
 	/*
 	 * During bootstrap initialization, we return the special bootstrap
 	 * transaction id.
