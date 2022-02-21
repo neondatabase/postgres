@@ -429,6 +429,7 @@ _PG_init(void)
 							NULL, NULL,	NULL);
 
 	relsize_hash_init();
+	EmitWarningsOnPlaceholders("zenith");
 
 	if (page_server != NULL)
 		zenith_log(ERROR, "libpqpagestore already loaded");
