@@ -977,6 +977,7 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			prefetched_buffers[i].lsn >= request_lsn)
 		{
 			n_prefetch_hits += 1;
+			n_prefetch_requests  = 0;
 			memcpy(buffer, prefetched_buffers[i].page, BLCKSZ);
 			return;
 		}
@@ -1003,7 +1004,6 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			}
 			page_server->flush();
 			resp = page_server->receive();
-
 			if (resp->tag == T_ZenithGetPageResponse)
 			{
 				for (i = 0; i < n_prefetch_requests; i++)
