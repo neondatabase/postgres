@@ -136,12 +136,8 @@ static void
 consume_prefetch_responses(void)
 {
 	for (int i = n_prefetched_buffers; i < n_prefetch_responses; i++) {
-		ZenithMessageTag tag;
 		ZenithResponse*	resp = page_server->receive();
-		tag = resp->tag;
 		pfree(resp);
-		if (tag != T_ZenithGetPageResponse)
-			break;
 	}
 	n_prefetched_buffers = 0;
 	n_prefetch_responses = 0;
@@ -979,27 +975,7 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			XLogRecPtr request_lsn, bool request_latest, char *buffer)
 {
 	ZenithResponse *resp;
-
-	bool		latest;
-	XLogRecPtr	request_lsn;
-	int			i;
-
-	switch (reln->smgr_relpersistence)
-	{
-		case 0:
-			elog(ERROR, "cannot call smgrread() on rel with unknown persistence");
-
-		case RELPERSISTENCE_PERMANENT:
-			break;
-
-		case RELPERSISTENCE_TEMP:
-		case RELPERSISTENCE_UNLOGGED:
-			mdread(reln, forkNum, blkno, buffer);
-			return;
-
-		default:
-			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
-	}
+	int			    i;
 
 	/*
 	 * Try to find prefetched page.
@@ -1011,7 +987,7 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 	{
 		resp = page_server->receive();
 		if (resp->tag == T_ZenithGetPageResponse &&
-			RelFileNodeEquals(prefetch_responses[i].rnode, reln->smgr_rnode.node) &&
+			RelFileNodeEquals(prefetch_responses[i].rnode, rnode) &&
 			prefetch_responses[i].forkNum == forkNum &&
 			prefetch_responses[i].blockNum == blkno)
 		{
