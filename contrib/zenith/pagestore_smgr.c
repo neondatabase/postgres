@@ -108,20 +108,52 @@ typedef enum
 static SMgrRelation unlogged_build_rel = NULL;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
 
-typedef struct PrefetchedBuffer
-{
-	BufferTag  tag;
-	XLogRecPtr lsn;
-	char       page[BLCKSZ];
-} PrefetchedBuffer;
 
-#define PREFETCH_CACHE_SIZE 8 /* should be small eniugh because of sequential lookup */
+/*
+ * Prefetch implementation:
+ * Prefetch is performed locally by each backend.
+ * There can be up to MAX_PREFETCH_REQUESTS registered using smgr_prefetch
+ * before smgr_read. All this requests are appended to primary smgr_read request.
+ * It is assumed that pages will be requested in prefetch order.
+ * Reading of prefetch responses is delayed until them are actually needed (smgr_read).
+ * It make it possible to parallelize processing and receiving of prefetched pages.
+ * In case of prefetch miss or any other SMGR request other than smgr_read,
+ * all prefetch responses has to be consumed.
+ */
 
-BufferTag prefetch_requests[PREFETCH_CACHE_SIZE];
-PrefetchedBuffer prefetched_buffers[PREFETCH_CACHE_SIZE];
+#define MAX_PREFETCH_REQUESTS 128
+
+BufferTag prefetch_requests[MAX_PREFETCH_REQUESTS];
+BufferTag prefetch_responses[MAX_PREFETCH_REQUESTS];
 int n_prefetch_requests;
+int n_prefetch_responses;
 int n_prefetched_buffers;
 int n_prefetch_hits;
+int n_prefetch_misses;
+XLogRecPtr prefetch_lsn;
+
+static void
+consume_prefetch_responses(void)
+{
+	for (int i = n_prefetched_buffers; i < n_prefetch_responses; i++) {
+		ZenithMessageTag tag;
+		ZenithResponse*	resp = page_server->receive();
+		tag = resp->tag;
+		pfree(resp);
+		if (tag != T_ZenithGetPageResponse)
+			break;
+	}
+	n_prefetched_buffers = 0;
+	n_prefetch_responses = 0;
+}
+
+static ZenithResponse*
+page_server_request(void const* req)
+{
+	consume_prefetch_responses();
+	return page_server->request((ZenithRequest*)req);
+}
+
 
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
@@ -671,7 +703,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 			.forknum = forkNum
 		};
 
-		resp = page_server->request((ZenithRequest *) &request);
+		resp = page_server_request(&request);
 	}
 
 	switch (resp->tag)
@@ -890,7 +922,7 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	if (n_prefetch_requests < PREFETCH_CACHE_SIZE)
+	if (n_prefetch_requests < MAX_PREFETCH_REQUESTS)
 	{
 		prefetch_requests[n_prefetch_requests].rnode = reln->smgr_rnode.node;
 		prefetch_requests[n_prefetch_requests].forkNum = forknum;
@@ -969,19 +1001,45 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	for (i = 0; i < n_prefetched_buffers; i++)
+	/*
+	 * Try to find prefetched page.
+	 * It is assumed that pages will be requested in the same order as them are prefetched,
+	 * but some other backend may load page in shared buffers, so some prefetch responses should
+	 * be skipped.
+	 */
+	for (i = n_prefetched_buffers; i < n_prefetch_responses; i++)
 	{
-		if (RelFileNodeEquals(prefetched_buffers[i].tag.rnode, reln->smgr_rnode.node) &&
-			prefetched_buffers[i].tag.forkNum == forkNum &&
-			prefetched_buffers[i].tag.blockNum == blkno &&
-			prefetched_buffers[i].lsn >= request_lsn)
+		resp = page_server->receive();
+		if (resp->tag == T_ZenithGetPageResponse &&
+			RelFileNodeEquals(prefetch_responses[i].rnode, reln->smgr_rnode.node) &&
+			prefetch_responses[i].forkNum == forkNum &&
+			prefetch_responses[i].blockNum == blkno)
 		{
-			n_prefetch_hits += 1;
-			n_prefetch_requests  = 0;
-			memcpy(buffer, prefetched_buffers[i].page, BLCKSZ);
-			return;
+			char* page = ((ZenithGetPageResponse *) resp)->page;
+			/*
+			 * Check if prefetched page is still relevant.
+			 * If it is updated by some other backend, then it should not
+			 * be requested from smgr unless it is evicted from shared buffers.
+			 * In the last case last_evicted_lsn should be updated and
+			 * request_lsn should be greater than prefetch_lsn.
+			 * Maximum with page LSN is used because page returned by page server
+			 * may have LSN either greater either smaller than requested.
+			 */
+			if (Max(prefetch_lsn, PageGetLSN(page)) >= request_lsn)
+			{
+				n_prefetched_buffers = i+1;
+				n_prefetch_hits += 1;
+				n_prefetch_requests = 0;
+				memcpy(buffer, page, BLCKSZ);
+				pfree(resp);
+				return;
+			}
 		}
+		pfree(resp);
 	}
+	n_prefetched_buffers = 0;
+	n_prefetch_responses = 0;
+	n_prefetch_misses += 1;
 
 	{
 		ZenithGetPageRequest request = {
@@ -994,35 +1052,21 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 		};
 		if (n_prefetch_requests > 0)
 		{
+			/* Combine all prefetch requests with primary request */
 			page_server->send((ZenithRequest *) &request);
 			for (i = 0; i < n_prefetch_requests; i++)
 			{
 				request.rnode = prefetch_requests[i].rnode;
 				request.forknum = prefetch_requests[i].forkNum;
 				request.blkno = prefetch_requests[i].blockNum;
+				prefetch_responses[i] = prefetch_requests[i];
 				page_server->send((ZenithRequest *) &request);
 			}
 			page_server->flush();
-			resp = page_server->receive();
-			if (resp->tag == T_ZenithGetPageResponse)
-			{
-				for (i = 0; i < n_prefetch_requests; i++)
-				{
-					ZenithResponse *prefetch_resp = page_server->receive();
-					if (prefetch_resp->tag == T_ZenithGetPageResponse) {
-						prefetched_buffers[i].tag = prefetch_requests[i];
-						prefetched_buffers[i].lsn = request_lsn;
-						memcpy(&prefetched_buffers[i].page, ((ZenithGetPageResponse *) prefetch_resp)->page, BLCKSZ);
-						pfree(prefetch_resp);
-					} else {
-						pfree(prefetch_resp);
-						break;
-					}
-				}
-				if (i > n_prefetched_buffers)
-					n_prefetched_buffers = i;
-			}
+			n_prefetch_responses = n_prefetch_requests;
 			n_prefetch_requests = 0;
+			prefetch_lsn = request_lsn;
+			resp = page_server->receive();
 		}
 		else
 		{
@@ -1298,7 +1342,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 			.forknum = forknum,
 		};
 
-		resp = page_server->request((ZenithRequest *) &request);
+		resp = page_server_request(&request);
 	}
 
 	switch (resp->tag)
