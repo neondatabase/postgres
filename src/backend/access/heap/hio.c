@@ -23,6 +23,7 @@
 #include "storage/freespace.h"
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
+#include "miscadmin.h"
 
 
 /*
@@ -231,6 +232,24 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 			elog(ERROR, "page %u of relation \"%s\" should be empty but is not",
 				 BufferGetBlockNumber(buffer),
 				 RelationGetRelationName(relation));
+
+		/*
+		 * ZENITH: Log Heap bulk extension,
+		 * This removed possibility of reading a page beyond EOF
+		 * The logging is done via XLOG_FPI and encodes the header only
+		 */
+		if (RelationNeedsWAL(relation))
+		{
+			PageInit(page, 8192, 0);
+			START_CRIT_SECTION();
+
+			log_newpage_buffer(buffer, true);
+
+			/* Keep track of buffer's LSN */
+			MarkBufferDirty(buffer);
+
+			END_CRIT_SECTION();
+		}
 
 		/*
 		 * Add the page to the FSM without initializing. If we were to

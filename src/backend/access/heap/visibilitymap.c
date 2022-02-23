@@ -95,6 +95,7 @@
 #include "storage/lmgr.h"
 #include "storage/smgr.h"
 #include "utils/inval.h"
+#include "miscadmin.h"
 
 
 /*#define TRACE_VISIBILITYMAP */
@@ -662,6 +663,24 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 
 		PageInit((Page) page, BLCKSZ, 0);
 		PageSetChecksumInplace(page, vm_nblocks_now);
+
+		/*
+		 * ZENITH: Log VM fork extension
+		 * This will prevent reading uninitialized pages in the normal flow
+		 * To minimize impact on WAL size, use XLOG_FPI encoding only page header
+		 * This is okay only when VM page contains no useful data
+		 */
+		if (RelationNeedsWAL(rel))
+		{
+			START_CRIT_SECTION();
+			log_newpage_buffer(buffer, true);
+
+			/* Keep track of buffer's LSN */
+			MarkBufferDirty(buffer);
+
+			END_CRIT_SECTION();
+		}
+
 		MarkBufferDirty(buffer);
 		UnlockReleaseBuffer(buffer);
 
