@@ -10,11 +10,14 @@ EXTENSION = zenith_test_utils
 DATA = zenith_test_utils--1.0.sql
 PGFILEDESC = "zenith_test_utils - helpers for zenith testing and debugging"
 
+EXTRA_INSTALL=contrib/zenith
+
 ifdef USE_PGXS
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
 else
+PG_CPPFLAGS = -I$(top_srcdir)/contrib
 subdir = contrib/zenith_test_utils
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
