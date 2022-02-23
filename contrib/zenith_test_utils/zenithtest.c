@@ -22,9 +22,11 @@
 #include "utils/builtins.h"
 #include "utils/rel.h"
 #include "utils/varlena.h"
-
+#include "zenith/pagestore_client.h"
 
 PG_MODULE_MAGIC;
+
+extern void _PG_init(void);
 
 PG_FUNCTION_INFO_V1(test_consume_xids);
 PG_FUNCTION_INFO_V1(clear_buffer_cache);
@@ -32,11 +34,28 @@ PG_FUNCTION_INFO_V1(get_raw_page_at_lsn);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn_ex);
 
 /*
- * This function is defined in the zenith extension, such declaration is fragile.
+ * Linkage to functions in zenith module.
  * The signature here would need to be updated whenever function parameters change in pagestore_smgr.c
  */
-extern void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+typedef void (*zenith_read_at_lsn_type)(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
 			XLogRecPtr request_lsn, bool request_latest, char *buffer);
+
+static zenith_read_at_lsn_type zenith_read_at_lsn_ptr;
+
+/*
+ * Module initialize function: fetch function pointers for cross-module calls.
+ */
+void
+_PG_init(void)
+{
+	/* Asserts verify that typedefs above match original declarations */
+	AssertVariableIsOfType(&zenith_read_at_lsn, zenith_read_at_lsn_type);
+	zenith_read_at_lsn_ptr = (zenith_read_at_lsn_type)
+		load_external_function("$libdir/zenith", "zenith_read_at_lsn",
+							   true, NULL);
+}
+
+#define zenith_read_at_lsn zenith_read_at_lsn_ptr
 
 /*
  * test_consume_xids(int4), for rapidly consuming XIDs, to test wraparound.
