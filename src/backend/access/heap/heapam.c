@@ -400,7 +400,13 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	/* Prefetch next block */
 	if (enable_seqscan_prefetch)
 	{
-		for (int i = 1; i <= seqscan_prefetch_buffers; i++)
+		int prefetch_limit = seqscan_prefetch_buffers;
+		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
+		if (pbscanwork != NULL && pbscanwork->phsw_chunk_remaining < prefetch_limit)
+			prefetch_limit = pbscanwork->phsw_chunk_remaining;
+		if (page + prefetch_limit >= scan->rs_nblocks)
+			prefetch_limit = scan->rs_nblocks - page - 1;
+		for (int i = 1; i <= prefetch_limit; i++)
 			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
 	}
 
