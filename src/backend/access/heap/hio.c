@@ -240,6 +240,7 @@ RelationAddExtraBlocks(Relation relation, BulkInsertState bistate)
 		 */
 		if (RelationNeedsWAL(relation))
 		{
+			Assert(!InRecovery);
 			PageInit(page, 8192, 0);
 			START_CRIT_SECTION();
 

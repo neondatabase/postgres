@@ -670,7 +670,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 		 * To minimize impact on WAL size, use XLOG_FPI encoding only page header
 		 * This is okay only when VM page contains no useful data
 		 */
-		if (RelationNeedsWAL(rel))
+		if (!InRecovery && RelationNeedsWAL(rel))
 		{
 			START_CRIT_SECTION();
 			log_newpage_buffer(buffer, true);
