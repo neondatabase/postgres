@@ -32,6 +32,7 @@
 #include "catalog/pg_database.h"
 #include "catalog/pg_db_role_setting.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_remote_tablespace.h"
 #include "catalog/pg_replication_origin.h"
 #include "catalog/pg_shdepend.h"
 #include "catalog/pg_shdescription.h"
@@ -251,6 +252,7 @@ IsSharedRelation(Oid relationId)
 		relationId == SharedSecLabelRelationId ||
 		relationId == TableSpaceRelationId ||
 		relationId == DbRoleSettingRelationId ||
+		relationId == RemoteTablespaceRelationId ||
 		relationId == ReplicationOriginRelationId ||
 		relationId == SubscriptionRelationId)
 		return true;
@@ -268,6 +270,7 @@ IsSharedRelation(Oid relationId)
 		relationId == TablespaceOidIndexId ||
 		relationId == TablespaceNameIndexId ||
 		relationId == DbRoleSettingDatidRolidIndexId ||
+		relationId == RemoteTablespaceSpcIdIndexId ||
 		relationId == ReplicationOriginIdentIndex ||
 		relationId == ReplicationOriginNameIndex ||
 		relationId == SubscriptionObjectIndexId ||

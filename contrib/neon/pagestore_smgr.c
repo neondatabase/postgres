@@ -60,6 +60,7 @@
 #include "storage/md.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "multiregion.h"
 #include "pgstat.h"
 #include "catalog/pg_tablespace_d.h"
 #include "postmaster/autovacuum.h"
@@ -119,26 +120,30 @@ zm_pack_request(ZenithRequest *msg)
 		case T_ZenithExistsRequest:
 			{
 				ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
+				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
+				pq_sendint32(&s, regionid);
 
 				break;
 			}
 		case T_ZenithNblocksRequest:
 			{
 				ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
+				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
+				pq_sendint32(&s, regionid);
 
 				break;
 			}
@@ -155,14 +160,16 @@ zm_pack_request(ZenithRequest *msg)
 		case T_ZenithGetPageRequest:
 			{
 				ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
+				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
 				pq_sendint32(&s, msg_req->blkno);
+				pq_sendint32(&s, regionid);
 
 				break;
 			}
