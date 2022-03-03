@@ -21,6 +21,7 @@ OBJS = \
 	logicalmsgdesc.o \
 	mxactdesc.o \
 	nbtdesc.o \
+	pagestoredesc.o \
 	relmapdesc.o \
 	replorigindesc.o \
 	seqdesc.o \

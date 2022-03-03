@@ -45,6 +45,7 @@
  */
 #include "postgres.h"
 
+#include "access/pagestore_xlog.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
@@ -802,7 +803,11 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 					errhint("This limit is defined by zenith.max_cluster_size GUC")));
 	}
 
-	zenith_wallog_page(reln, forkNum, blkno, buffer);
+	if (!RecoveryInProgress())
+	{
+		log_relsize(reln->smgr_rnode.node, forkNum, blkno);
+	}
+
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, blkno + 1);
 
 	lsn = PageGetLSN(buffer);

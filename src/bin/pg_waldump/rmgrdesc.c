@@ -18,6 +18,7 @@
 #include "access/heapam_xlog.h"
 #include "access/multixact.h"
 #include "access/nbtxlog.h"
+#include "access/pagestore_xlog.h"
 #include "access/rmgr.h"
 #include "access/spgxlog.h"
 #include "access/xact.h"
