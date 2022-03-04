@@ -144,9 +144,9 @@ typedef struct xl_heap_truncate
  */
 typedef struct xl_heap_header
 {
+	uint32      t_cid;
 	uint16		t_infomask2;
 	uint16		t_infomask;
-	uint32      t_cid;
 	uint8		t_hoff;
 } xl_heap_header;
 
