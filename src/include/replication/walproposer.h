@@ -258,14 +258,7 @@ typedef struct AppendRequestHeader
 struct WalMessage
 {
 	WalMessage* next;      /* L1 list of messages */
-	uint32 size;           /* message size */
 	AppendRequestHeader req; /* request to safekeeper (message header) */
-
-	/* PHANTOM FIELD:
-	 *
-	 * All WalMessages are allocated with exactly (size - sizeof(AppendRequestHeader)) additional bytes
-	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
-	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
 };
 
 /*
@@ -342,7 +335,14 @@ typedef struct Safekeeper
 	 * reach SS_ACTIVE; not before.
 	 */
 	WalProposerConn*   conn;
+	/*
+	 * Temporary buffer for the message being sent to the safekeeper.
+	 */
 	StringInfoData outbuf;
+	/*
+	 * WAL reader, allocated for each safekeeper.
+	 */
+	XLogReaderState* xlogreader;
 
 	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
 	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
@@ -365,14 +365,16 @@ void       AssertEventsOkForState(uint32 events, Safekeeper* sk);
 uint32     SafekeeperStateDesiredEvents(SafekeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
-void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
+void       WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos);
 bool       HexDecodeString(uint8 *result, char *input, int nbytes);
 uint32     pq_getmsgint32_le(StringInfo msg);
 uint64     pq_getmsgint64_le(StringInfo msg);
-void	   pq_sendint32_le(StringInfo buf, uint32 i);
-void	   pq_sendint64_le(StringInfo buf, uint64 i);
+void       pq_sendint32_le(StringInfo buf, uint32 i);
+void       pq_sendint64_le(StringInfo buf, uint64 i);
 void       WalProposerPoll(void);
 void       WalProposerRegister(void);
+void       XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr);
+void       XLogWalPropClose(XLogRecPtr recptr);
 void       ProcessStandbyReply(XLogRecPtr	writePtr,
 							   XLogRecPtr	flushPtr,
 							   XLogRecPtr	applyPtr,

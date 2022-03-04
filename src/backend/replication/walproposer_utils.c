@@ -8,6 +8,15 @@
 #include <netinet/tcp.h>
 #include <unistd.h>
 
+/*
+ * These variables are used similarly to openLogFile/SegNo,
+ * but for walproposer to write the XLOG during recovery. recvFileTLI is the TimeLineID
+ * corresponding the filename of recvFile.
+ */
+static int	recvFile = -1;
+static TimeLineID recvFileTLI = 0;
+static XLogSegNo recvSegNo = 0;
+
 int
 CompareLsn(const void *a, const void *b)
 {
@@ -293,4 +302,101 @@ pq_sendint64_le(StringInfo buf, uint64 i)
 	enlargeStringInfo(buf, sizeof(uint64));
 	memcpy(buf->data + buf->len, &i, sizeof(uint64));
 	buf->len += sizeof(uint64);
+}
+
+/*
+ * Write XLOG data to disk.
+ */
+void
+XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
+{
+	int			startoff;
+	int			byteswritten;
+
+	while (nbytes > 0)
+	{
+		int			segbytes;
+
+		/* Close the current segment if it's completed */
+		if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+			XLogWalPropClose(recptr);
+
+		if (recvFile < 0)
+		{
+			bool		use_existent = true;
+
+			/* Create/use new log file */
+			XLByteToSeg(recptr, recvSegNo, wal_segment_size);
+			recvFile = XLogFileInit(recvSegNo, &use_existent, false);
+			recvFileTLI = ThisTimeLineID;
+		}
+
+		/* Calculate the start offset of the received logs */
+		startoff = XLogSegmentOffset(recptr, wal_segment_size);
+
+		if (startoff + nbytes > wal_segment_size)
+			segbytes = wal_segment_size - startoff;
+		else
+			segbytes = nbytes;
+
+		/* OK to write the logs */
+		errno = 0;
+
+		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		if (byteswritten <= 0)
+		{
+			char		xlogfname[MAXFNAMELEN];
+			int			save_errno;
+
+			/* if write didn't set errno, assume no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
+
+			save_errno = errno;
+			XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+			errno = save_errno;
+			ereport(PANIC,
+					(errcode_for_file_access(),
+					 errmsg("could not write to log segment %s "
+							"at offset %u, length %lu: %m",
+							xlogfname, startoff, (unsigned long) segbytes)));
+		}
+
+		/* Update state for write */
+		recptr += byteswritten;
+
+		nbytes -= byteswritten;
+		buf += byteswritten;
+	}
+
+	/*
+	 * Close the current segment if it's fully written up in the last cycle of
+	 * the loop.
+	 */
+	if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+	{
+		XLogWalPropClose(recptr);
+	}
+}
+
+/*
+ * Close the current segment.
+ */
+void
+XLogWalPropClose(XLogRecPtr recptr)
+{
+	Assert(recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size));
+
+	if (close(recvFile) != 0)
+	{
+		char		xlogfname[MAXFNAMELEN];
+		XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+
+		ereport(PANIC,
+				(errcode_for_file_access(),
+				 errmsg("could not close log segment %s: %m",
+						xlogfname)));
+	}
+
+	recvFile = -1;
 }

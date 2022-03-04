@@ -37,7 +37,9 @@
 
 #include <signal.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "access/xlogdefs.h"
+#include "access/xlogutils.h"
 #include "replication/walproposer.h"
 #include "storage/latch.h"
 #include "miscadmin.h"
@@ -136,8 +138,7 @@ static void WalProposerStartStreaming(XLogRecPtr startpos);
 static void StartStreaming(Safekeeper *sk);
 static void SendMessageToNode(Safekeeper *sk, WalMessage *msg);
 static void BroadcastMessage(WalMessage *msg);
-static WalMessage * CreateMessage(XLogRecPtr startpos, char *data, int len);
-static WalMessage * CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static WalMessage * CreateMessage(XLogRecPtr startpos, XLogRecPtr endpos);
 static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
@@ -198,7 +199,10 @@ WalProposerMain(Datum main_arg)
 void
 WalProposerSync(int argc, char *argv[])
 {
+	struct stat stat_buf;
+
 	syncSafekeepers = true;
+	ThisTimeLineID = 1;
 
 	InitStandaloneProcess(argv[0]);
 
@@ -233,6 +237,22 @@ WalProposerSync(int argc, char *argv[])
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set postmaster death monitoring pipe to nonblocking mode: %m")));
 
+	ChangeToDataDir();
+
+	/* Create pg_wal directory, if it doesn't exist */
+	if (stat(XLOGDIR, &stat_buf) != 0)
+	{
+		ereport(LOG, (errmsg("creating missing WAL directory \"%s\"", XLOGDIR)));
+		if (MakePGDirectory(XLOGDIR) < 0)
+		{
+			ereport(ERROR,
+					(errcode_for_file_access(),
+						errmsg("could not create directory \"%s\": %m",
+							XLOGDIR)));
+			exit(1);
+		}
+	}
+
 	WalProposerInit(0, 0);
 
 	process_shared_preload_libraries_in_progress = false;
@@ -247,9 +267,9 @@ WalProposerSync(int argc, char *argv[])
  * called from walsender every time the new WAL is available.
  */
 void
-WalProposerBroadcast(XLogRecPtr startpos, char *data, int len)
+WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos)
 {
-	WalMessage *msg = CreateMessage(startpos, data, len);
+	WalMessage *msg = CreateMessage(startpos, endpos);
 
 	if (msg != NULL)
 		BroadcastMessage(msg);
@@ -305,7 +325,7 @@ WalProposerPoll(void)
 			 */
 			if (lastSentLsn != InvalidXLogRecPtr)
 			{
-				BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+				BroadcastMessage(CreateMessage(lastSentLsn, lastSentLsn));
 			}
 		}
 	}
@@ -379,6 +399,9 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 */
 		safekeeper[n_safekeepers].conninfo[0] = '\0';
 		initStringInfo(&safekeeper[n_safekeepers].outbuf);
+		safekeeper[n_safekeepers].xlogreader = XLogReaderAllocate(wal_segment_size, NULL, XL_ROUTINE(.segment_open = wal_segment_open, .segment_close = wal_segment_close), NULL);
+		if (safekeeper[n_safekeepers].xlogreader == NULL)
+			elog(FATAL, "Failed to allocate xlog reader");
 		safekeeper[n_safekeepers].flushWrite = false;
 		safekeeper[n_safekeepers].currMsg = NULL;
 		safekeeper[n_safekeepers].startStreamingAt = InvalidXLogRecPtr;
@@ -1093,7 +1116,7 @@ HandleElectedProposer(void)
 			* sync-safeekepers who doesn't generate any real new
 			* records. Will go away once we switch to async acks.
 			*/
-		BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
+		BroadcastMessage(CreateMessage(propEpochStartLsn, propEpochStartLsn));
 
 		/* keep polling until all safekeepers are synced */
 		return;
@@ -1249,7 +1272,13 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 					   sizeof rec_start_lsn);
 				rec_start_lsn = pg_ntoh64(rec_start_lsn);
 				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
-				(void) CreateMessage(rec_start_lsn, buf, len);
+
+				/* write WAL to disk */
+				XLogWalPropWrite(&buf[XLOG_HDR_SIZE], len - XLOG_HDR_SIZE, rec_start_lsn);
+
+				/* add AppendRequest to the queue */
+				(void) CreateMessage(rec_start_lsn, rec_end_lsn);
+
 				ereport(DEBUG1,
 						(errmsg("Recover message %X/%X length %d",
 								LSN_FORMAT_ARGS(rec_start_lsn), len)));
@@ -1475,51 +1504,18 @@ BroadcastMessage(WalMessage *msg)
 }
 
 static WalMessage *
-CreateMessage(XLogRecPtr startpos, char *data, int len)
+CreateMessage(XLogRecPtr startpos, XLogRecPtr endpos)
 {
 	/* Create new message and append it to message queue */
 	WalMessage *msg;
-	XLogRecPtr	endpos;
 
-	len -= XLOG_HDR_SIZE;
-	endpos = startpos + len;
-	if (msgQueueTail && msgQueueTail->req.endLsn >= endpos)
+	Assert(endpos >= startpos);
+
+	if (msgQueueTail && msgQueueTail->req.endLsn > endpos)
 	{
 		/* Message already queued */
 		return NULL;
 	}
-	Assert(len >= 0);
-	msg = (WalMessage *) malloc(sizeof(WalMessage) + len);
-	if (msgQueueTail != NULL)
-		msgQueueTail->next = msg;
-	else
-		msgQueueHead = msg;
-	msgQueueTail = msg;
-
-	msg->size = sizeof(AppendRequestHeader) + len;
-	msg->next = NULL;
-	msg->req.tag = 'a';
-	msg->req.term = propTerm;
-	msg->req.epochStartLsn = propEpochStartLsn;
-	msg->req.beginLsn = startpos;
-	msg->req.endLsn = endpos;
-	msg->req.proposerId = greetRequest.proposerId;
-	memcpy(&msg->req + 1, data + XLOG_HDR_SIZE, len);
-
-	Assert(msg->req.endLsn >= lastSentLsn);
-	lastSentLsn = msg->req.endLsn;
-	return msg;
-}
-
-/*
- * Create WAL message with no data, just to let the safekeepers
- * know that commit lsn has advanced.
- */
-static WalMessage *
-CreateMessageCommitLsnOnly(XLogRecPtr lsn)
-{
-	/* Create new message and append it to message queue */
-	WalMessage *msg;
 
 	msg = (WalMessage *) malloc(sizeof(WalMessage));
 	if (msgQueueTail != NULL)
@@ -1528,29 +1524,16 @@ CreateMessageCommitLsnOnly(XLogRecPtr lsn)
 		msgQueueHead = msg;
 	msgQueueTail = msg;
 
-	msg->size = sizeof(AppendRequestHeader);
 	msg->next = NULL;
 	msg->req.tag = 'a';
 	msg->req.term = propTerm;
 	msg->req.epochStartLsn = propEpochStartLsn;
-
-	/*
-	 * This serves two purposes: 1) After all msgs from previous epochs are
-	 * pushed we queue empty WalMessage with lsn set to epochStartLsn which
-	 * commands to switch the epoch, which allows to do the switch without
-	 * creating new epoch records (we especially want to avoid such in --sync
-	 * mode). Walproposer can advance commit_lsn only after the switch, so
-	 * this lsn (reported back) also is the first possible advancement point.
-	 * 2) Maintain common invariant of queue entries sorted by LSN.
-	 */
-	msg->req.beginLsn = lsn;
-	msg->req.endLsn = lsn;
+	msg->req.beginLsn = startpos;
+	msg->req.endLsn = endpos;
 	msg->req.proposerId = greetRequest.proposerId;
 
-	/*
-	 * truncateLsn and commitLsn are set just before the message sent, in
-	 * SendAppendRequests()
-	 */
+	Assert(msg->req.endLsn >= lastSentLsn);
+	lastSentLsn = msg->req.endLsn;
 	return msg;
 }
 
@@ -1598,6 +1581,7 @@ SendAppendRequests(Safekeeper *sk)
 	WalMessage *msg;
 	AppendRequestHeader *req;
 	PGAsyncWriteResult writeResult;
+	WALReadError errinfo;
 
 	if (sk->flushWrite)
 	{
@@ -1627,20 +1611,11 @@ SendAppendRequests(Safekeeper *sk)
 		 */
 		if (sk->startStreamingAt > msg->req.beginLsn)
 		{
-			uint32		len;
-			uint32		size;
-
 			Assert(sk->startStreamingAt < req->endLsn);
 
-			len = msg->req.endLsn - sk->startStreamingAt;
-			size = sizeof(AppendRequestHeader) + len;
-			req = malloc(size);
+			req = (AppendRequestHeader *) malloc(sizeof(AppendRequestHeader));
 			*req = msg->req;
 			req->beginLsn = sk->startStreamingAt;
-			memcpy(req + 1,
-					(char *) (&msg->req + 1) + sk->startStreamingAt -
-					msg->req.beginLsn,
-					len);
 		}
 
 		ereport(DEBUG2,
@@ -1651,12 +1626,25 @@ SendAppendRequests(Safekeeper *sk)
 						LSN_FORMAT_ARGS(req->commitLsn),
 						LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port)));
 
-		/*
-		 * We write with msg->size here because the body of the
-		 * message is stored after the end of the WalMessage
-		 * struct, in the allocation for each msg
-		 */
-		writeResult = walprop_async_write(sk->conn, req, sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn);
+		resetStringInfo(&sk->outbuf);
+
+		/* write AppendRequest header */
+		appendBinaryStringInfo(&sk->outbuf, (char*) req, sizeof(AppendRequestHeader));
+
+		/* write the WAL itself */
+		enlargeStringInfo(&sk->outbuf, req->endLsn - req->beginLsn);
+		if (!WALRead(sk->xlogreader,
+				 &sk->outbuf.data[sk->outbuf.len],
+				 req->beginLsn,
+				 req->endLsn - req->beginLsn,
+				 ThisTimeLineID,
+				 &errinfo))
+		{
+			WALReadRaiseError(&errinfo);
+		}
+		sk->outbuf.len += req->endLsn - req->beginLsn;
+
+		writeResult = walprop_async_write(sk->conn, sk->outbuf.data, sk->outbuf.len);
 		
 		/* Free up resources */
 		if (req != &msg->req)
@@ -1736,7 +1724,7 @@ RecvAppendResponses(Safekeeper *sk)
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastSentCommitLsn)
 	{
-		BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+		BroadcastMessage(CreateMessage(lastSentLsn, lastSentLsn));
 		lastSentCommitLsn = minQuorumLsn;
 	}
 
@@ -2040,7 +2028,7 @@ HandleSafekeeperResponse(void)
 		WalMessage *msg = msgQueueHead;
 		msgQueueHead = msg->next;
 
-		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
+		memset(msg, 0xDF, sizeof(WalMessage));
 		free(msg);
 	}
 	if (!msgQueueHead)			/* queue is empty */
