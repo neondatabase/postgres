@@ -495,6 +495,13 @@ WalReceiverMain(void)
 					break;
 
 				/*
+				 * Update WAL statistics, which are produced inside
+				 * issue_xlog_fsync function. This is useful for counting
+				 * WAL flushes, by querying pg_stat_wal.
+				 */
+				pgstat_send_wal(true);
+
+				/*
 				 * Ideally we would reuse a WaitEventSet object repeatedly
 				 * here to avoid the overheads of WaitLatchOrSocket on epoll
 				 * systems, but we can't be sure that libpq (or any other
