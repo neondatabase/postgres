@@ -720,6 +720,18 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 		 reln->smgr_rnode.node.relNode,
 		 forkNum);
 
+	/*
+	 * Newly created relation is empty, remember that in the relsize cache.
+	 *
+	 * FIXME: This is currently not just an optimization, but required for
+	 * correctness. Postgres can call smgrnblocks() on the newly-created
+	 * relation. Currently, we don't call SetLastWrittenPageLSN() when a new
+	 * relation created, so if we didn't remember the size in the relsize
+	 * cache, we might call smgrnblocks() on the newly-created relation before
+	 * the creation WAL record hass been received by the page server.
+	 */
+	set_cached_relsize(reln->smgr_rnode.node, forkNum, 0);
+
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
 		mdcreate(reln, forkNum, isRedo);
