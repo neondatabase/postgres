@@ -93,6 +93,8 @@ char	   *zenith_timeline;
 char	   *zenith_tenant;
 bool		wal_redo = false;
 int32		max_cluster_size;
+bool		zenith_slru_clog;
+bool		zenith_slru_multixact;
 
 /* unlogged relation build states */
 typedef enum
@@ -157,11 +159,25 @@ zm_pack_request(ZenithRequest *msg)
 
 				break;
 			}
+		case T_ZenithGetSlruPageRequest:
+			{
+				ZenithGetSlruPageRequest *msg_req = (ZenithGetSlruPageRequest* ) msg;
+
+				pq_sendbyte(&s, msg_req->req.latest);
+				pq_sendint64(&s, msg_req->req.lsn);
+				pq_sendbyte(&s, msg_req->kind);
+				pq_sendint32(&s, msg_req->segno);
+				pq_sendint32(&s, msg_req->blkno);
+				pq_sendbyte(&s, msg_req->check_exists_only);
+
+				break;
+			}
 
 			/* pagestore -> pagestore_client. We never need to create these. */
 		case T_ZenithExistsResponse:
 		case T_ZenithNblocksResponse:
 		case T_ZenithGetPageResponse:
+		case T_ZenithGetSlruPageResponse:
 		case T_ZenithErrorResponse:
 		default:
 			elog(ERROR, "unexpected zenith message tag 0x%02x", msg->tag);
@@ -213,6 +229,25 @@ zm_unpack_response(StringInfo s)
 				pq_getmsgend(s);
 
 				resp = (ZenithResponse *) msg_resp;
+				break;
+			}
+		
+		case T_ZenithGetSlruPageResponse:
+			{
+				ZenithGetSlruPageResponse *msg_resp = palloc0(offsetof(ZenithGetSlruPageResponse, page) + BLCKSZ);
+
+				msg_resp->tag = tag;
+				msg_resp->seg_exists = pq_getmsgbyte(s);
+				msg_resp->page_exists = pq_getmsgbyte(s);
+				if (msg_resp->page_exists)
+				{
+					/* XXX:	should be varlena */
+					memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
+				}
+				pq_getmsgend(s);
+
+				resp = (ZenithResponse *) msg_resp;
+
 				break;
 			}
 
@@ -304,6 +339,21 @@ zm_to_string(ZenithMessage *msg)
 								 msg_req->rnode.relNode);
 				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
 				appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
+				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
+				appendStringInfoChar(&s, '}');
+				break;
+			}
+
+		case T_ZenithGetSlruPageRequest:
+			{
+				ZenithGetSlruPageRequest *msg_req = (ZenithGetSlruPageRequest *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"ZenithGetSlruPageRequest\"");
+				appendStringInfo(&s, ", \"kind\": %d", msg_req->kind);
+				appendStringInfo(&s, ", \"segno\": %d", msg_req->segno);
+				appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
+				appendStringInfo(&s, ", \"check_exists_only\": %d", msg_req->check_exists_only);
 				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
 				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
 				appendStringInfoChar(&s, '}');
@@ -920,8 +970,9 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
  * While function is defined in the zenith extension it's used within zenith_test_utils directly.
  * To avoid breaking tests in the runtime please keep function signature in sync.
  */
-void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
-			XLogRecPtr request_lsn, bool request_latest, char *buffer)
+void
+zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+				   XLogRecPtr request_lsn, bool request_latest, char *buffer)
 {
 	ZenithResponse *resp;
 
@@ -1554,4 +1605,214 @@ smgr_init_zenith(void)
 
 	smgr_init_standard();
 	zenith_init();
+}
+
+const char *
+slru_kind_to_string(ZenithSlruKind kind)
+{
+	switch (kind)
+	{
+		case ZENITH_CLOG:
+			return "pg_xact";
+		case ZENITH_MULTI_XACT_MEMBERS:
+			return "pg_multixact/members";
+		case ZENITH_MULTI_XACT_OFFSETS:
+			return "pg_multixact/offsets";
+		default:
+			return "invalid";
+	}
+}
+
+bool
+slru_kind_from_string(const char* str, ZenithSlruKind* kind)
+{
+	if (strcmp(str, "pg_xact") == 0)
+	{
+		*kind = ZENITH_CLOG;
+		return true;
+	}
+	else if (strcmp(str, "pg_multixact/members") == 0)
+	{
+		*kind = ZENITH_MULTI_XACT_MEMBERS;
+		return true;
+	}
+	else if (strcmp(str, "pg_multixact/offsets") == 0)
+	{
+		*kind = ZENITH_MULTI_XACT_OFFSETS;
+		return true;
+	}
+	return false;
+}
+
+/**
+ * zenith_slru_kind_check() - Check if the SLRU kind is supported by the pageserver
+ */
+const char *
+zenith_slru_kind_check(SlruCtl ctl)
+{
+	const char *dir = ctl->Dir;
+
+	if (strcmp(dir, "pg_xact") == 0 && zenith_slru_clog)
+	{
+		return dir;
+	}
+
+	if ((strcmp(dir, "pg_multixact/members") == 0 || strcmp(dir, "pg_multixact/offsets") == 0) &&
+		zenith_slru_multixact)
+	{
+		return dir;
+	}
+
+	return NULL;
+}
+
+/**
+ * zenith_slru_read_page() -- Read the specified block from a Simple LRU.
+ *
+ * NOTE: Never call ereport(ERROR) in here to comply with the behavior expected in slru.c
+ */
+bool
+zenith_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *buffer)
+{
+	ZenithResponse 				*resp;
+	ZenithGetSlruPageResponse 	*get_slru_page_resp;
+	ZenithSlruKind	kind;
+	bool			latest;
+	XLogRecPtr		request_lsn;
+	bool 			read_ok = false;
+
+	if (!slru_kind_from_string(slru_kind_str, &kind))
+	{
+		ereport(WARNING, errmsg("unexpected slru kind \"%s\"", slru_kind_str));
+		return false;
+	}
+
+	request_lsn = zenith_get_request_lsn(&latest);
+
+	/**
+	 * During recovery, if there is no WAL redoing, the function GetXLogReplayRecPtr will return
+	 * a lsn 0, causing zenith_get_request_lsn to give out an invalid lsn with "latest" being false,
+	 * which is later rejected by the page server.
+	 * 
+	 * For this corner case to occur, a backend has to request a page during recovery
+	 * mode and no WAL redoing actually happens, so this rarely happens with normal backends. 
+	 * However, since the startup process calls TrimCLOG and TrimMultiXact towards the end of
+	 * the recovery process, this case always happens with the startup process whenever there
+	 * is no WAL redoing.
+	 * 
+	 * It is safe to just grab the latest page here because TrimCLOG and TrimMultiXact are called
+	 * after log redoing.
+	 */
+	if (RecoveryInProgress() && request_lsn == InvalidXLogRecPtr) 
+		latest = true;
+
+	{
+		ZenithGetSlruPageRequest request = {
+			.req.tag = T_ZenithGetSlruPageRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
+			.kind = kind,
+			.segno = segno,
+			.blkno = offset,
+			.check_exists_only = false
+		};
+
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag)
+	{
+		case T_ZenithGetSlruPageResponse:
+			get_slru_page_resp = (ZenithGetSlruPageResponse *) resp;
+
+			/* see notes about reading truncated segment in recovery in SlruPhysicalWritePage in slru.c */
+			if (get_slru_page_resp->seg_exists)
+			{
+				memcpy(buffer, get_slru_page_resp->page, BLCKSZ);
+			}
+			else if (InRecovery)
+			{
+				ereport(LOG,
+						(errmsg("segment \"%s/%d\" doesn't exist, reading as zeroes",
+								slru_kind_to_string(kind), segno)));
+				MemSet(buffer, 0, BLCKSZ);
+			}
+
+			read_ok = true;
+			break;
+
+		case T_ZenithErrorResponse:
+			ereport(WARNING,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read block %lu in SLRU %s/%u from page server at lsn %X/%08X",
+							offset,
+							slru_kind_to_string(kind),
+							segno,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s",
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(WARNING, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
+	pfree(resp);
+
+	return read_ok;
+}
+
+bool
+zenith_slru_page_exists(const char* slru_kind_str, int segno, off_t offset)
+{
+	ZenithResponse	*resp;
+	ZenithSlruKind	kind;
+	bool			latest;
+	XLogRecPtr		request_lsn;
+
+	if (!slru_kind_from_string(slru_kind_str, &kind))
+	{
+		ereport(ERROR, errmsg("unexpected slru kind \"%s\"", slru_kind_str));
+		return false;
+	}
+
+	request_lsn = zenith_get_request_lsn(&latest);
+	{
+		ZenithGetSlruPageRequest request = {
+			.req.tag = T_ZenithGetSlruPageRequest,
+			.req.latest = latest,
+			.req.lsn = request_lsn,
+			.kind = kind,
+			.segno = segno,
+			.blkno = offset,
+			.check_exists_only = true
+		};
+
+		resp = page_server->request((ZenithRequest *) &request);
+	}
+
+	switch (resp->tag)
+	{
+		case T_ZenithGetSlruPageResponse:
+			return ((ZenithGetSlruPageResponse *) resp)->page_exists;
+
+		case T_ZenithErrorResponse:
+			ereport(ERROR,
+					(errcode(ERRCODE_IO_ERROR),
+					 errmsg("could not read block %lu in SLRU %s/%u from page server at lsn %X/%08X",
+							offset,
+							slru_kind_to_string(kind),
+							segno,
+							(uint32) (request_lsn >> 32), (uint32) request_lsn),
+					 errdetail("page server returned error: %s",
+							   ((ZenithErrorResponse *) resp)->message)));
+			break;
+
+		default:
+			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
+	}
+
+	pfree(resp);
+
+	return false;
 }
