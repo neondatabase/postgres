@@ -41,6 +41,9 @@ inmem_init(void)
 {
 	HASHCTL		hashCtl;
 
+	if (inmem_files && hash_get_num_entries(inmem_files) == 0)
+		return;
+
 	hashCtl.keysize = sizeof(WrNodeKey);
 	hashCtl.entrysize = sizeof(WrNode);
 

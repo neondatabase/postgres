@@ -800,6 +800,8 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 							 mode, strategy, &hit);
 }
 
+extern bool am_wal_redo_postgres;
+
 
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
@@ -815,7 +817,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	Block		bufBlock;
 	bool		found;
 	bool		isExtend;
-	bool		isLocalBuf = SmgrIsTemp(smgr);
+	bool		isLocalBuf = SmgrIsTemp(smgr) || am_wal_redo_postgres;
 
 	*hit = false;
 
