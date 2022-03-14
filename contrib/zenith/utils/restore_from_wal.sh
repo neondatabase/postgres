@@ -1,7 +1,8 @@
 WAL_PATH=$1
 SYSID=`od -A n -j 24 -N 8 -t d8 $WAL_PATH/000000010000000000000002* | cut -c 3-`
 rm -fr pgsql.0
-INITDB=`type initdb`
+INITDB=`type -p initdb`
+echo $INITDB
 env -i $INITDB -E utf8 -U zenith_admin -D pgsql.0 --sysid=$SYSID
 REDO_POS=0x`pg_controldata -D pgsql.0 | fgrep "REDO location"| cut -c 42-`
 declare -i WAL_SIZE=$REDO_POS+114
