@@ -1,16 +1,19 @@
-WAL_PATH=$1
+PG_BIN=$1
+WAL_PATH=$2
+OUTPUT_DIR=$3
+DATA_DIR=$OUTPUT_DIR/pgdata-vanilla
 SYSID=`od -A n -j 24 -N 8 -t d8 $WAL_PATH/000000010000000000000002* | cut -c 3-`
-rm -fr pgsql.0
-INITDB=`type -p initdb`
-echo $INITDB
-env -i $INITDB -E utf8 -U zenith_admin -D pgsql.0 --sysid=$SYSID
-REDO_POS=0x`pg_controldata -D pgsql.0 | fgrep "REDO location"| cut -c 42-`
+rm -fr $DATA_DIR
+env -i $PG_BIN/initdb -E utf8 -D $DATA_DIR --sysid=$SYSID
+REDO_POS=0x`$PG_BIN/pg_controldata -D $DATA_DIR | fgrep "REDO location"| cut -c 42-`
 declare -i WAL_SIZE=$REDO_POS+114
-pg_ctl -D pgsql.0 -l logfile start
-pg_ctl -D pgsql.0 -l logfile stop -m immediate
-cp pgsql.0/pg_wal/000000010000000000000001 .
-cp $WAL_PATH/* pgsql.0/pg_wal/
-(cd pgsql.0/pg_wal ; for partial in *.partial ; do mv $partial `basename $partial .partial`; done)
-dd if=000000010000000000000001 of=pgsql.0/pg_wal/000000010000000000000001 bs=$WAL_SIZE count=1 conv=notrunc
-rm -f logfile 000000010000000000000001
-pg_ctl -D pgsql.0 -l logfile start
+$PG_BIN/pg_ctl -D $DATA_DIR -l logfile start
+$PG_BIN/pg_ctl -D $DATA_DIR -l logfile stop -m immediate
+cp $DATA_DIR/pg_wal/000000010000000000000001 .
+cp $WAL_PATH/* $DATA_DIR/pg_wal/
+if [ -f $DATA_DIR/pg_wal/*.partial ]
+then
+	(cd $DATA_DIR/pg_wal ; for partial in \*.partial ; do mv $partial `basename $partial .partial` ; done)
+fi
+dd if=000000010000000000000001 of=$DATA_DIR/pg_wal/000000010000000000000001 bs=$WAL_SIZE count=1 conv=notrunc
+rm -f 000000010000000000000001
