@@ -262,6 +262,11 @@ struct XLogReaderState
 	XLogRecPtr	missingContrecPtr;
 	/* Set when XLP_FIRST_IS_OVERWRITE_CONTRECORD is found */
 	XLogRecPtr	overwrittenRecPtr;
+
+	/* Disable validation to allow dumpng corrupt WAL */
+	bool skip_page_validation;
+	bool skip_invalid_records;
+	bool skip_lsn_checks;
 };
 
 /* Get a new XLogReader */
