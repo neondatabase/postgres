@@ -380,6 +380,7 @@ void       ProcessStandbyReply(XLogRecPtr	writePtr,
 							   XLogRecPtr	applyPtr,
 							   TimestampTz replyTime,
 							   bool		replyRequested);
+void       PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
 void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackXmin,
 									uint32		feedbackEpoch,

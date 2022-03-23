@@ -1864,7 +1864,7 @@ ProcessStandbyMessage(void)
 /*
  * Remember that a walreceiver just confirmed receipt of lsn `lsn`.
  */
-static void
+void
 PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
@@ -2029,6 +2029,13 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
+
+	/* 
+	 * walproposer use trunclateLsn instead of flushPtr for confirmed
+	 * received location, so we shouldn't update restart_lsn here.
+	 */
+	if (am_wal_proposer)
+		return;
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.

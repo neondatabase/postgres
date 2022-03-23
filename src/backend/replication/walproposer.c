@@ -2017,7 +2017,12 @@ HandleSafekeeperResponse(void)
 	 */
 	minFlushLsn = CalculateMinFlushLsn();
 	if (minFlushLsn > truncateLsn)
+	{
 		truncateLsn = minFlushLsn;
+
+		/* advance the replication slot to free up old WAL files */
+		PhysicalConfirmReceivedLocation(truncateLsn);
+	}
 
 	/*
 	 * Cleanup message queue up to truncateLsn. These messages were processed
