@@ -75,12 +75,8 @@ WalProposerFunctionsType *WalProposerFunctions = NULL;
 static int	n_safekeepers = 0;
 static int	quorum = 0;
 static Safekeeper safekeeper[MAX_SAFEKEEPERS];
-static WalMessage *msgQueueHead;
-static WalMessage *msgQueueTail;
-static XLogRecPtr lastSentLsn;	/* WAL has been appended to msg queue up to
-								 * this point */
-static XLogRecPtr lastSentCommitLsn;	/* last commitLsn broadcast to
-										 * safekeepers */
+static XLogRecPtr availableLsn;	/* WAL has been generated up to this point */
+static XLogRecPtr lastSentCommitLsn; /* last commitLsn broadcast to safekeepers */
 static ProposerGreeting greetRequest;
 static VoteRequest voteRequest; /* Vote request for safekeeper */
 static WaitEventSet *waitEvents;
@@ -136,9 +132,8 @@ static bool WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr start
 static void SendProposerElected(Safekeeper *sk);
 static void WalProposerStartStreaming(XLogRecPtr startpos);
 static void StartStreaming(Safekeeper *sk);
-static void SendMessageToNode(Safekeeper *sk, WalMessage *msg);
-static void BroadcastMessage(WalMessage *msg);
-static WalMessage * CreateMessage(XLogRecPtr startpos, XLogRecPtr endpos);
+static void SendMessageToNode(Safekeeper *sk);
+static void BroadcastAppendRequest(void);
 static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
@@ -269,10 +264,9 @@ WalProposerSync(int argc, char *argv[])
 void
 WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos)
 {
-	WalMessage *msg = CreateMessage(startpos, endpos);
-
-	if (msg != NULL)
-		BroadcastMessage(msg);
+	Assert(startpos == availableLsn && endpos >= availableLsn);
+	availableLsn = endpos;
+	BroadcastAppendRequest();
 }
 
 /*
@@ -323,9 +317,9 @@ WalProposerPoll(void)
 			 * If no WAL was generated during timeout (and we have already
 			 * collected the quorum), then send pool message
 			 */
-			if (lastSentLsn != InvalidXLogRecPtr)
+			if (availableLsn != InvalidXLogRecPtr)
 			{
-				BroadcastMessage(CreateMessage(lastSentLsn, lastSentLsn));
+				BroadcastAppendRequest();
 			}
 		}
 	}
@@ -403,8 +397,8 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		if (safekeeper[n_safekeepers].xlogreader == NULL)
 			elog(FATAL, "Failed to allocate xlog reader");
 		safekeeper[n_safekeepers].flushWrite = false;
-		safekeeper[n_safekeepers].currMsg = NULL;
 		safekeeper[n_safekeepers].startStreamingAt = InvalidXLogRecPtr;
+		safekeeper[n_safekeepers].streamingAt = InvalidXLogRecPtr;
 		n_safekeepers += 1;
 	}
 	if (n_safekeepers < 1)
@@ -536,7 +530,7 @@ ShutdownConnection(Safekeeper *sk)
 	sk->conn = NULL;
 	sk->state = SS_OFFLINE;
 	sk->flushWrite = false;
-	sk->currMsg = NULL;
+	sk->streamingAt = InvalidXLogRecPtr;
 
 	if (sk->voteResponse.termHistory.entries)
 		pfree(sk->voteResponse.termHistory.entries);
@@ -1110,13 +1104,13 @@ HandleElectedProposer(void)
 	if (syncSafekeepers)
 	{
 		/*
-			* Queue empty message to enforce receiving feedback
-			* even from nodes who are fully recovered; this is
-			* required to learn they switched epoch which finishes
-			* sync-safeekepers who doesn't generate any real new
-			* records. Will go away once we switch to async acks.
-			*/
-		BroadcastMessage(CreateMessage(propEpochStartLsn, propEpochStartLsn));
+		 * Send empty message to enforce receiving feedback
+		 * even from nodes who are fully recovered; this is
+		 * required to learn they switched epoch which finishes
+		 * sync-safeekepers who doesn't generate any real new
+		 * records. Will go away once we switch to async acks.
+		 */
+		BroadcastAppendRequest();
 
 		/* keep polling until all safekeepers are synced */
 		return;
@@ -1194,6 +1188,12 @@ DetermineEpochStartLsn(void)
 	 */
 	Assert((truncateLsn != InvalidXLogRecPtr) ||
 		   (syncSafekeepers && truncateLsn == propEpochStartLsn));
+
+	/*
+	 * We will be generating WAL since propEpochStartLsn, so we should set
+	 * availableLsn to mark this LSN as the latest available position.
+	 */
+	availableLsn = propEpochStartLsn;
 
 	/*
 	 * Proposer's term history is the donor's + its own entry.
@@ -1275,9 +1275,6 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 
 				/* write WAL to disk */
 				XLogWalPropWrite(&buf[XLOG_HDR_SIZE], len - XLOG_HDR_SIZE, rec_start_lsn);
-
-				/* add AppendRequest to the queue */
-				(void) CreateMessage(rec_start_lsn, rec_end_lsn);
 
 				ereport(DEBUG1,
 						(errmsg("Recover message %X/%X length %d",
@@ -1399,7 +1396,7 @@ SendProposerElected(Safekeeper *sk)
 		}
 	}
 
-	Assert(msgQueueHead == NULL || sk->startStreamingAt >= msgQueueHead->req.beginLsn);
+	Assert(sk->startStreamingAt >= truncateLsn && sk->startStreamingAt <= availableLsn);
 
 	msg.tag = 'e';
 	msg.term = propTerm;
@@ -1451,38 +1448,28 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 static void
 StartStreaming(Safekeeper *sk)
 {
-	WalMessage *startMsg = msgQueueHead;
-
 	/* 
 	 * This is the only entrypoint to state SS_ACTIVE. It's executed
 	 * exactly once for a connection.
 	 */
 	sk->state = SS_ACTIVE;
-
-	while (startMsg != NULL && startMsg->req.endLsn <= sk->startStreamingAt)
-		startMsg = startMsg->next;
-
-	/* We should always have WAL to start from sk->startStreamingAt */
-	Assert(startMsg == NULL || startMsg->req.beginLsn <= sk->startStreamingAt);
+	sk->streamingAt = sk->startStreamingAt;
 
 	/* event set will be updated inside SendMessageToNode */
-	SendMessageToNode(sk, startMsg);
+	SendMessageToNode(sk);
 }
 
 /*
- * Start sending message to the particular node. Always updates event set.
+ * Try to send message to the particular node. Always updates event set. Will
+ * send at least one message, if socket is ready.
  *
  * Can be used only for safekeepers in SS_ACTIVE state. State can be changed
  * in case of errors.
  */
 static void
-SendMessageToNode(Safekeeper *sk, WalMessage *msg)
+SendMessageToNode(Safekeeper *sk)
 {
-	/* we shouldn't be already sending something */
-	Assert(sk->currMsg == NULL);
 	Assert(sk->state == SS_ACTIVE);
-
-	sk->currMsg = msg;
 
 	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
 	HandleActiveState(sk, WL_SOCKET_WRITEABLE);
@@ -1492,49 +1479,25 @@ SendMessageToNode(Safekeeper *sk, WalMessage *msg)
  * Broadcast new message to all caught-up safekeepers
  */
 static void
-BroadcastMessage(WalMessage *msg)
+BroadcastAppendRequest()
 {
 	for (int i = 0; i < n_safekeepers; i++)
-	{
-		if (safekeeper[i].state == SS_ACTIVE && safekeeper[i].currMsg == NULL)
-		{
-			SendMessageToNode(&safekeeper[i], msg);
-		}
-	}
+		if (safekeeper[i].state == SS_ACTIVE)
+			SendMessageToNode(&safekeeper[i]);
 }
 
-static WalMessage *
-CreateMessage(XLogRecPtr startpos, XLogRecPtr endpos)
+static void
+PrepareAppendRequest(AppendRequestHeader *req, XLogRecPtr beginLsn, XLogRecPtr endLsn)
 {
-	/* Create new message and append it to message queue */
-	WalMessage *msg;
-
-	Assert(endpos >= startpos);
-
-	if (msgQueueTail && msgQueueTail->req.endLsn > endpos)
-	{
-		/* Message already queued */
-		return NULL;
-	}
-
-	msg = (WalMessage *) malloc(sizeof(WalMessage));
-	if (msgQueueTail != NULL)
-		msgQueueTail->next = msg;
-	else
-		msgQueueHead = msg;
-	msgQueueTail = msg;
-
-	msg->next = NULL;
-	msg->req.tag = 'a';
-	msg->req.term = propTerm;
-	msg->req.epochStartLsn = propEpochStartLsn;
-	msg->req.beginLsn = startpos;
-	msg->req.endLsn = endpos;
-	msg->req.proposerId = greetRequest.proposerId;
-
-	Assert(msg->req.endLsn >= lastSentLsn);
-	lastSentLsn = msg->req.endLsn;
-	return msg;
+	Assert(endLsn >= beginLsn);
+	req->tag = 'a';
+	req->term = propTerm;
+	req->epochStartLsn = propEpochStartLsn;
+	req->beginLsn = beginLsn;
+	req->endLsn = endLsn;
+	req->commitLsn = GetAcknowledgedByQuorumWALPosition();
+	req->truncateLsn = truncateLsn;
+	req->proposerId = greetRequest.proposerId;
 }
 
 /*
@@ -1557,20 +1520,22 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 	 * We should wait for WL_SOCKET_WRITEABLE event if we have unflushed data
 	 * in the buffer.
 	 * 
-	 * sk->currMsg checks if we have pending unsent messages. This check isn't
-	 * necessary now, because we always send queue messages immediately after
-	 * creation. But it's good to have it here in case we change this behavior
+	 * LSN comparison checks if we have pending unsent messages. This check isn't
+	 * necessary now, because we always send append messages immediately after
+	 * arrival. But it's good to have it here in case we change this behavior
 	 * in the future.
 	 */
-	if (sk->currMsg != NULL || sk->flushWrite)
+	if (sk->streamingAt != availableLsn || sk->flushWrite)
 		newEvents |= WL_SOCKET_WRITEABLE;
 
 	UpdateEventSet(sk, newEvents);
 }
 
 /*
- * Send queue messages starting from sk->currMsg until the end or non-writable
+ * Send WAL messages starting from sk->streamingAt until the end or non-writable
  * socket, whichever comes first. Caller should take care of updating event set.
+ * Even if no unsent WAL is available, at least one empty message will be sent 
+ * as a heartbeat, if socket is ready.
  * 
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
@@ -1578,10 +1543,11 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 static bool
 SendAppendRequests(Safekeeper *sk)
 {
-	WalMessage *msg;
+	XLogRecPtr endLsn;
 	AppendRequestHeader *req;
 	PGAsyncWriteResult writeResult;
 	WALReadError errinfo;
+	bool sentAnything = false;
 
 	if (sk->flushWrite)
 	{
@@ -1596,27 +1562,20 @@ SendAppendRequests(Safekeeper *sk)
 		sk->flushWrite = false;
 	}
 
-	while (sk->currMsg)
+	while (sk->streamingAt != availableLsn || !sentAnything)
 	{
-		msg = sk->currMsg;
-		req = &msg->req;
+		sentAnything = true;
 
-		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
-		req->truncateLsn = truncateLsn;
+		endLsn = sk->streamingAt;
+		endLsn += MAX_SEND_SIZE;
 
-		/*
-		 * If we need to send this message not from the beginning,
-		 * form the cut version. Only happens for the first
-		 * message.
-		 */
-		if (sk->startStreamingAt > msg->req.beginLsn)
-		{
-			Assert(sk->startStreamingAt < req->endLsn);
-
-			req = (AppendRequestHeader *) malloc(sizeof(AppendRequestHeader));
-			*req = msg->req;
-			req->beginLsn = sk->startStreamingAt;
+		/* if we went beyond available WAL, back off */
+		if (endLsn > availableLsn) {
+			endLsn = availableLsn;
 		}
+
+		req = &sk->appendRequest;
+		PrepareAppendRequest(&sk->appendRequest, sk->streamingAt, endLsn);
 
 		ereport(DEBUG2,
 				(errmsg("sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
@@ -1646,12 +1605,8 @@ SendAppendRequests(Safekeeper *sk)
 
 		writeResult = walprop_async_write(sk->conn, sk->outbuf.data, sk->outbuf.len);
 		
-		/* Free up resources */
-		if (req != &msg->req)
-			free(req);
-
 		/* Mark current message as sent, whatever the result is */
-		sk->currMsg = sk->currMsg->next;
+		sk->streamingAt = endLsn;
 
 		switch (writeResult)
 		{
@@ -1707,6 +1662,13 @@ RecvAppendResponses(Safekeeper *sk)
 		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
+		ereport(DEBUG2,
+				(errmsg("received message term=" INT64_FORMAT " flushLsn=%X/%X commitLsn=%X/%X from %s:%s",
+						sk->appendResponse.term,
+						LSN_FORMAT_ARGS(sk->appendResponse.flushLsn),
+						LSN_FORMAT_ARGS(sk->appendResponse.commitLsn),
+						sk->host, sk->port)));
+
 		readAnything = true;
 	}
 
@@ -1717,14 +1679,11 @@ RecvAppendResponses(Safekeeper *sk)
 
 	/*
 	 * Also send the new commit lsn to all the safekeepers.
-	 *
-	 * FIXME: This is redundant for safekeepers that have other
-	 * outbound messages pending.
 	 */
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastSentCommitLsn)
 	{
-		BroadcastMessage(CreateMessage(lastSentLsn, lastSentLsn));
+		BroadcastAppendRequest();
 		lastSentCommitLsn = minQuorumLsn;
 	}
 
@@ -2020,27 +1979,13 @@ HandleSafekeeperResponse(void)
 	{
 		truncateLsn = minFlushLsn;
 
-		/* advance the replication slot to free up old WAL files */
-		PhysicalConfirmReceivedLocation(truncateLsn);
+		/*
+		 * Advance the replication slot to free up old WAL files. Note
+		 * that slot doesn't exist if we are in syncSafekeepers mode.
+		 */
+		if (MyReplicationSlot)
+			PhysicalConfirmReceivedLocation(truncateLsn);
 	}
-
-	/*
-	 * Cleanup message queue up to truncateLsn. These messages were processed
-	 * by all safekeepers because they all reported flushLsn greater than endLsn.
-	 */
-	while (msgQueueHead != NULL && msgQueueHead->req.endLsn < truncateLsn)
-	{
-		WalMessage *msg = msgQueueHead;
-		msgQueueHead = msg->next;
-
-		memset(msg, 0xDF, sizeof(WalMessage));
-		free(msg);
-	}
-	if (!msgQueueHead)			/* queue is empty */
-		msgQueueTail = NULL;
-
-	/* truncateLsn always points to the first chunk in the queue */
-	Assert(msgQueueHead == NULL || (truncateLsn >= msgQueueHead->req.beginLsn && truncateLsn <= msgQueueHead->req.endLsn));
 
 	/*
 	 * Generally sync is done when majority switched the epoch so we committed
