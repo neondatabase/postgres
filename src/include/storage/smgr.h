@@ -46,6 +46,9 @@ typedef struct SMgrRelationData
 	/* copy of pg_class.relpersistence, or 0 if not known */
 	char		smgr_relpersistence;
 
+	/* region of this relation */
+	int			smgr_region;
+
 	/* pointer to owning pointer, or NULL if none */
 	struct SMgrRelationData **smgr_owner;
 
@@ -143,7 +146,7 @@ extern const f_smgr *smgr_standard(BackendId backend, RelFileNode rnode);
 extern const f_smgr *smgr(BackendId backend, RelFileNode rnode);
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend, char relpersistence);
+extern SMgrRelation smgropen(RelFileNode rnode, BackendId backend, char relpersistence, int region);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);

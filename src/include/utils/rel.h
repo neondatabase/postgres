@@ -63,6 +63,7 @@ typedef struct RelationData
 	bool		rd_indexvalid;	/* is rd_indexlist valid? (also rd_pkindex and
 								 * rd_replidindex) */
 	bool		rd_statvalid;	/* is rd_statlist valid? */
+	int 		rd_region;		/* id of the region this relation belongs to */
 
 	/*----------
 	 * rd_createSubid is the ID of the highest subtransaction the rel has
@@ -534,7 +535,8 @@ typedef struct ViewOptions
 	do { \
 		if ((relation)->rd_smgr == NULL) \
 			smgrsetowner(&((relation)->rd_smgr), \
-						 smgropen((relation)->rd_node, (relation)->rd_backend, (relation)->rd_rel->relpersistence)); \
+						 smgropen((relation)->rd_node, (relation)->rd_backend, \
+						 		  (relation)->rd_rel->relpersistence, (relation)->rd_region)); \
 	} while (0)
 
 /*

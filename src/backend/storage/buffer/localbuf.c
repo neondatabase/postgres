@@ -17,6 +17,7 @@
 
 #include "access/parallel.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_remote_tablespace.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
 #include "storage/buf_internals.h"
@@ -225,9 +226,9 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 
 		/* Find smgr relation for buffer */
 		if (am_wal_redo_postgres && MyBackendId == InvalidBackendId)
-			oreln = smgropen(bufHdr->tag.rnode, MyBackendId, RELPERSISTENCE_PERMANENT);
+			oreln = smgropen(bufHdr->tag.rnode, MyBackendId, RELPERSISTENCE_PERMANENT, current_region);
 		else
-			oreln = smgropen(bufHdr->tag.rnode, MyBackendId, RELPERSISTENCE_TEMP);
+			oreln = smgropen(bufHdr->tag.rnode, MyBackendId, RELPERSISTENCE_TEMP, current_region);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 

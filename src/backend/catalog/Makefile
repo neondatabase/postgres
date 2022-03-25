@@ -39,6 +39,7 @@ OBJS = \
 	pg_proc.o \
 	pg_publication.o \
 	pg_range.o \
+	pg_remote_tablespace.o \
 	pg_shdepend.o \
 	pg_subscription.o \
 	pg_type.o \
