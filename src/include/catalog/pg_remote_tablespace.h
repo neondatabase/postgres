@@ -22,7 +22,7 @@
  *		typedef struct FormData_pg_remote_tablespace
  * ----------------
  */
-CATALOG(pg_remote_tablespace,8000,RemoteTablespaceRelationId) BKI_SHARED_RELATION
+CATALOG(pg_remote_tablespace,8000,RemoteTablespaceRelationId) BKI_SHARED_RELATION BKI_ROWTYPE_OID(8001,RemoteTablespaceRelation_Rowtype_Id) BKI_SCHEMA_MACRO
 {
 	/* Oid of the tablespace */
 	Oid			spcid BKI_LOOKUP(pg_tablespace);
@@ -37,7 +37,14 @@ CATALOG(pg_remote_tablespace,8000,RemoteTablespaceRelationId) BKI_SHARED_RELATIO
  */
 typedef FormData_pg_remote_tablespace *Form_pg_remote_tablespace;
 
-DECLARE_UNIQUE_INDEX_PKEY(pg_remote_tablespace_spcid_index, 8001, on pg_remote_tablespace using btree(spcid oid_ops));
-#define RemoteTablespaceSpcIdIndexId  8001
+DECLARE_UNIQUE_INDEX_PKEY(pg_remote_tablespace_spcid_index, 8002, on pg_remote_tablespace using btree(spcid oid_ops));
+#define RemoteTablespaceSpcIdIndexId  8002
+
+/* GUC variable */
+extern int current_region;
+
+#define GLOBAL_REGION 0
+
+#define IsMultiRegion() (current_region != GLOBAL_REGION)
 
 #endif							/* PG_REMOTE_TABLESPACE */

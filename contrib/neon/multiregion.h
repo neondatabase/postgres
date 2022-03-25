@@ -2,7 +2,7 @@
  *
  * multiregion.h
  * 
- * contrib/zenith/multiregion.h
+ * contrib/neon/multiregion.h
  *
  *-------------------------------------------------------------------------
  */
@@ -11,15 +11,9 @@
 
 #include "postgres.h"
 
-#include "libpq-fe.h"
-
-extern int zenith_current_region;
+extern char *neon_region_timelines;
 
 void DefineMultiRegionCustomVariables(void);
-
-bool zenith_multiregion_enabled(void);
-void zenith_multiregion_connect(PGconn **pageserver_conn, bool *connected);
-
-int lookup_region(Oid spcid, Oid relid);
+bool neon_multiregion_enabled(void);
 
 #endif

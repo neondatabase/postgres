@@ -50,6 +50,7 @@
 #include "access/xloginsert.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_remote_tablespace.h"
 #include "pagestore_client.h"
 #include "pagestore_client.h"
 #include "storage/smgr.h"
@@ -106,6 +107,9 @@ typedef enum
 static SMgrRelation unlogged_build_rel = NULL;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
 
+static void zenith_read_at_lsn_multi_region(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+											int region, XLogRecPtr request_lsn, bool request_latest, char *buffer);
+
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
 {
@@ -120,30 +124,28 @@ zm_pack_request(ZenithRequest *msg)
 		case T_ZenithExistsRequest:
 			{
 				ZenithExistsRequest *msg_req = (ZenithExistsRequest *) msg;
-				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
+				pq_sendint64(&s, msg_req->req.lsn);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
-				pq_sendint32(&s, regionid);
+				pq_sendint32(&s, msg_req->region);
 
 				break;
 			}
 		case T_ZenithNblocksRequest:
 			{
 				ZenithNblocksRequest *msg_req = (ZenithNblocksRequest *) msg;
-				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
+				pq_sendint64(&s, msg_req->req.lsn);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
-				pq_sendint32(&s, regionid);
+				pq_sendint32(&s, msg_req->region);
 
 				break;
 			}
@@ -160,16 +162,15 @@ zm_pack_request(ZenithRequest *msg)
 		case T_ZenithGetPageRequest:
 			{
 				ZenithGetPageRequest *msg_req = (ZenithGetPageRequest *) msg;
-				int regionid = lookup_region(msg_req->rnode.spcNode, msg_req->rnode.relNode);
 
 				pq_sendbyte(&s, msg_req->req.latest);
-				pq_sendint64(&s, regionid == zenith_current_region ? msg_req->req.lsn : 0);
+				pq_sendint64(&s, msg_req->req.lsn);
 				pq_sendint32(&s, msg_req->rnode.spcNode);
 				pq_sendint32(&s, msg_req->rnode.dbNode);
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
 				pq_sendint32(&s, msg_req->blkno);
-				pq_sendint32(&s, regionid);
+				pq_sendint32(&s, msg_req->region);
 
 				break;
 			}
@@ -301,6 +302,7 @@ zm_to_string(ZenithMessage *msg)
 								 msg_req->rnode.dbNode,
 								 msg_req->rnode.relNode);
 				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+				appendStringInfo(&s, ", \"region\": %d", msg_req->region);
 				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
 				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
 				appendStringInfoChar(&s, '}');
@@ -317,6 +319,7 @@ zm_to_string(ZenithMessage *msg)
 								 msg_req->rnode.dbNode,
 								 msg_req->rnode.relNode);
 				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
+				appendStringInfo(&s, ", \"region\": %d", msg_req->region);
 				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
 				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
 				appendStringInfoChar(&s, '}');
@@ -334,6 +337,7 @@ zm_to_string(ZenithMessage *msg)
 								 msg_req->rnode.relNode);
 				appendStringInfo(&s, ", \"forknum\": %d", msg_req->forknum);
 				appendStringInfo(&s, ", \"blkno\": %u", msg_req->blkno);
+				appendStringInfo(&s, ", \"region\": %d", msg_req->region);
 				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_req->req.lsn));
 				appendStringInfo(&s, ", \"latest\": %d", msg_req->req.latest);
 				appendStringInfoChar(&s, '}');
@@ -610,7 +614,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(bool *latest)
+zenith_get_request_lsn(int region, bool *latest)
 {
 	XLogRecPtr	lsn;
 
@@ -621,11 +625,14 @@ zenith_get_request_lsn(bool *latest)
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
-	else if (am_walsender)
+	else if (am_walsender || region != current_region)
 	{
 		*latest = true;
 		lsn = InvalidXLogRecPtr;
-		elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
+		if (region == current_region)
+			elog(DEBUG1, "remote region lsn 0");
+		else
+			elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
 	}
 	else
 	{
@@ -723,14 +730,15 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		return false;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest);
+	request_lsn = zenith_get_request_lsn(reln->smgr_region, &latest);
 	{
 		ZenithExistsRequest request = {
 			.req.tag = T_ZenithExistsRequest,
 			.req.latest = latest,
 			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
-			.forknum = forkNum
+			.forknum = forkNum,
+			.region = reln->smgr_region
 		};
 
 		resp = page_server->request((ZenithRequest *) &request);
@@ -745,11 +753,12 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		case T_ZenithErrorResponse:
 			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
-					 errmsg("could not read relation existence of rel %u/%u/%u.%u from page server at lsn %X/%08X",
+					 errmsg("could not read relation existence of rel %u/%u/%u.%u in region %d from page server at lsn %X/%08X",
 							reln->smgr_rnode.node.spcNode,
 							reln->smgr_rnode.node.dbNode,
 							reln->smgr_rnode.node.relNode,
 							forkNum,
+							reln->smgr_region,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
 					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
@@ -1017,6 +1026,12 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
 			XLogRecPtr request_lsn, bool request_latest, char *buffer)
 {
+	zenith_read_at_lsn_multi_region(rnode, forkNum, blkno, current_region, request_lsn, request_latest, buffer);
+}
+
+static void zenith_read_at_lsn_multi_region(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
+											int region, XLogRecPtr request_lsn, bool request_latest, char *buffer)
+{
 	ZenithResponse *resp;
 
 	{
@@ -1026,7 +1041,8 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			.req.lsn = request_lsn,
 			.rnode = rnode,
 			.forknum = forkNum,
-			.blkno = blkno
+			.blkno = blkno,
+			.region = region
 		};
 
 		resp = page_server->request((ZenithRequest *) &request);
@@ -1041,11 +1057,12 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 		case T_ZenithErrorResponse:
 			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
-					 errmsg("could not read block %u in rel %u/%u/%u.%u from page server at lsn %X/%08X",
+					 errmsg("could not read block %u in rel %u/%u/%u.%u in region %d, from page server at lsn %X/%08X",
 							blkno,
 							rnode.spcNode,
 							rnode.dbNode,
 							rnode.relNode,
+							region,
 							forkNum,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
 					 errdetail("page server returned error: %s",
@@ -1086,9 +1103,8 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest);
-	zenith_read_at_lsn(reln->smgr_rnode.node, forkNum, blkno, request_lsn, latest, buffer);
-
+	request_lsn = zenith_get_request_lsn(reln->smgr_region, &latest);
+	zenith_read_at_lsn_multi_region(reln->smgr_rnode.node, forkNum, blkno, reln->smgr_region, request_lsn, latest, buffer);
 #ifdef DEBUG_COMPARE_LOCAL
 	if (forkNum == MAIN_FORKNUM && IS_LOCAL_REL(reln))
 	{
@@ -1291,7 +1307,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		return n_blocks;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest);
+	request_lsn = zenith_get_request_lsn(reln->smgr_region,&latest);
 	{
 		ZenithNblocksRequest request = {
 			.req.tag = T_ZenithNblocksRequest,
@@ -1299,6 +1315,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 			.req.lsn = request_lsn,
 			.rnode = reln->smgr_rnode.node,
 			.forknum = forknum,
+			.region = reln->smgr_region
 		};
 
 		resp = page_server->request((ZenithRequest *) &request);
@@ -1313,11 +1330,12 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		case T_ZenithErrorResponse:
 			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
-					 errmsg("could not read relation size of rel %u/%u/%u.%u from page server at lsn %X/%08X",
+					 errmsg("could not read relation size of rel %u/%u/%u.%u in region %d from page server at lsn %X/%08X",
 							reln->smgr_rnode.node.spcNode,
 							reln->smgr_rnode.node.dbNode,
 							reln->smgr_rnode.node.relNode,
 							forknum,
+							reln->smgr_region,
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
 					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
@@ -1328,11 +1346,12 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 	}
 	update_cached_relsize(reln->smgr_rnode.node, forknum, n_blocks);
 
-	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u (request LSN %X/%08X): %u blocks",
+	elog(SmgrTrace, "zenith_nblocks: rel %u/%u/%u fork %u region %d (request LSN %X/%08X): %u blocks",
 		 reln->smgr_rnode.node.spcNode,
 		 reln->smgr_rnode.node.dbNode,
 		 reln->smgr_rnode.node.relNode,
 		 forknum,
+		 reln->smgr_region,
 		 (uint32) (request_lsn >> 32), (uint32) request_lsn,
 		 n_blocks);
 
@@ -1351,7 +1370,7 @@ zenith_dbsize(Oid dbNode)
 	XLogRecPtr request_lsn;
 	bool		latest;
 
-	request_lsn = zenith_get_request_lsn(&latest);
+	request_lsn = zenith_get_request_lsn(GLOBAL_REGION, &latest);
 	{
 		ZenithDbSizeRequest request = {
 			.req.tag = T_ZenithDbSizeRequest,

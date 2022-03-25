@@ -70,6 +70,7 @@ typedef struct
 	ZenithRequest req;
 	RelFileNode rnode;
 	ForkNumber	forknum;
+	int	region;
 } ZenithExistsRequest;
 
 typedef struct
@@ -77,6 +78,7 @@ typedef struct
 	ZenithRequest req;
 	RelFileNode rnode;
 	ForkNumber	forknum;
+	int	region;
 } ZenithNblocksRequest;
 
 
@@ -93,6 +95,7 @@ typedef struct
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
+	int	region;
 } ZenithGetPageRequest;
 
 /* supertype of all the Zenith*Response structs below */
