@@ -136,8 +136,10 @@ static int	slru_errno;
 
 static void SimpleLruZeroLSNs(SlruCtl ctl, int slotno);
 static void SimpleLruWaitIO(SlruCtl ctl, int slotno);
+static bool SimpleLruDoesPhysicalPageExistDefault(SlruCtl ctl, int pageno);
 static void SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata);
 static bool SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno);
+static bool SlruPhysicalReadPageDefault(SlruCtl ctl, int pageno, int slotno);
 static bool SlruPhysicalWritePage(SlruCtl ctl, int pageno, int slotno,
 								  SlruWriteAll fdata);
 static void SlruReportIOError(SlruCtl ctl, int pageno, TransactionId xid);
@@ -146,6 +148,11 @@ static int	SlruSelectLRUPage(SlruCtl ctl, int pageno);
 static bool SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename,
 									  int segpage, void *data);
 static void SlruInternalDeleteSegment(SlruCtl ctl, int segno);
+
+/* Hook for plugins to get control in slru */
+slru_kind_check_hook_type slru_kind_check_hook = NULL;
+slru_page_exists_hook_type slru_page_exists_hook = NULL;
+slru_read_page_hook_type slru_read_page_hook = NULL;
 
 /*
  * Initialization of shared memory
@@ -618,11 +625,41 @@ SimpleLruWritePage(SlruCtl ctl, int slotno)
 /*
  * Return whether the given page exists on disk.
  *
- * A false return means that either the file does not exist, or that it's not
- * large enough to contain the given page.
+ * If extension hooks are set, call to see if the slru is supported by
+ * the extension and use page existence check hook function if it is,
+ * otherwise, fall back to the default function.
  */
 bool
 SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
+{
+	if (slru_kind_check_hook) {
+		const char *slru_kind_str = (*slru_kind_check_hook)(ctl);
+
+		if (slru_kind_str)
+		{
+			int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
+			int			rpageno = pageno % SLRU_PAGES_PER_SEGMENT;
+			BlockNumber	blkno = rpageno * BLCKSZ;
+
+			Assert(slru_page_exists_hook);
+
+			pgstat_count_slru_page_exists(ctl->shared->slru_stats_idx);
+
+			return (*slru_page_exists_hook)(slru_kind_str, segno, blkno);
+		}
+	}
+
+	return SimpleLruDoesPhysicalPageExistDefault(ctl, pageno);
+}
+
+/*
+ * Return whether the given page exists on disk.
+ *
+ * A false return means that either the file does not exist, or that it's not
+ * large enough to contain the given page.
+ */
+static bool
+SimpleLruDoesPhysicalPageExistDefault(SlruCtl ctl, int pageno)
 {
 	int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
 	int			rpageno = pageno % SLRU_PAGES_PER_SEGMENT;
@@ -670,6 +707,45 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 }
 
 /*
+ * Physical read of a (previously existing) page into a buffer slot with hooks.
+ *
+ * If extension hooks are set, call to see if the slru is supported by
+ * the extension and use read hook function if it is, otherwise, fall back
+ * to the default read function.
+ */
+static bool
+SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
+{
+	if (slru_kind_check_hook) {
+		const char *slru_kind_str = (*slru_kind_check_hook)(ctl);
+
+		if (slru_kind_str)
+		{
+			SlruShared	shared = ctl->shared;
+			int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
+			int			rpageno = pageno % SLRU_PAGES_PER_SEGMENT;
+			BlockNumber	blkno = rpageno * BLCKSZ;
+
+			Assert(slru_read_page_hook);
+
+			pgstat_report_wait_start(WAIT_EVENT_SLRU_READ);
+			if (!(*slru_read_page_hook)(slru_kind_str, segno, blkno, shared->page_buffer[slotno]))
+			{
+				pgstat_report_wait_end();
+				slru_errcause = SLRU_READ_FAILED;
+				slru_errno = EIO;
+				return false;
+			}
+			pgstat_report_wait_end();
+
+			return true;
+		}
+	}
+
+	return SlruPhysicalReadPageDefault(ctl, pageno, slotno);
+}
+
+/*
  * Physical read of a (previously existing) page into a buffer slot
  *
  * On failure, we cannot just ereport(ERROR) since caller has put state in
@@ -680,7 +756,7 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
  * read/write operations.  We could cache one virtual file pointer ...
  */
 static bool
-SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
+SlruPhysicalReadPageDefault(SlruCtl ctl, int pageno, int slotno)
 {
 	SlruShared	shared = ctl->shared;
 	int			segno = pageno / SLRU_PAGES_PER_SEGMENT;
