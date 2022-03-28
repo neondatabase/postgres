@@ -650,6 +650,23 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		return true;
 	}
 
+	/*
+	 * \d+ on a view calls smgrexists with 0/0/0 relfilenode. The page server
+	 * will error out if you check that, because the whole dbdir for tablespace
+	 * 0, db 0 doesn't exists. We possibly should change the page server to
+	 * accept that and return 'false', to be consistent with mdexists(). But
+	 * we probably also should fix pg_table_size() to not call smgrexists()
+	 * with bogus relfilenode.
+	 *
+	 * For now, handle that special case here.
+	 */
+	if (reln->smgr_rnode.node.spcNode == 0 &&
+		reln->smgr_rnode.node.dbNode == 0 &&
+		reln->smgr_rnode.node.relNode == 0)
+	{
+		return false;
+	}
+
 	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithExistsRequest request = {
