@@ -914,8 +914,6 @@ RecvAcceptorGreeting(Safekeeper *sk)
 
 	/* Protocol is all good, move to voting. */
 	sk->state = SS_VOTING;
-	sk->appendResponse.flushLsn = truncateLsn;
-	sk->appendResponse.hs.ts = 0;
 
 	++n_connected;
 	if (n_connected <= quorum)
