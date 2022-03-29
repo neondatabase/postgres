@@ -11,6 +11,9 @@
 
 #include "access/remotexact.h"
 
+/* GUC variable */
+int current_region;
+
 static void
 default_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xid)
 {

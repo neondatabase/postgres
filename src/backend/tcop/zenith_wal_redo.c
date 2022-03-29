@@ -69,11 +69,11 @@
 #include "rusagestub.h"
 #endif
 
+#include "access/remotexact.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
 #include "catalog/pg_class.h"
-#include "catalog/pg_remote_tablespace.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
@@ -534,7 +534,7 @@ BeginRedoForBlock(StringInfo input_message)
 		 target_redo_tag.forkNum,
 		 target_redo_tag.blockNum);
 
-	reln = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT, current_region);
+	reln = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT, UNKNOWN_REGION);
 	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
 		reln->smgr_cached_nblocks[forknum] < blknum + 1)
 	{

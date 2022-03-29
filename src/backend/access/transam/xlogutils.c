@@ -20,10 +20,10 @@
 #include <unistd.h>
 
 #include "access/timeline.h"
+#include "access/remotexact.h"
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
-#include "catalog/pg_remote_tablespace.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/smgr.h"
@@ -464,7 +464,7 @@ XLogReadBufferExtended(RelFileNode rnode, ForkNumber forknum,
 	Assert(blkno != P_NEW);
 
 	/* Open the relation at smgr level */
-	smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT, current_region);
+	smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT, UNKNOWN_REGION);
 
 	/*
 	 * Create the target file if it doesn't already exist.  This lets us cope
