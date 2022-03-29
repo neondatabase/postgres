@@ -17,6 +17,7 @@
 #include "multiregion.h"
 #include "pagestore_client.h"
 #include "fmgr.h"
+#include "access/remotexact.h"
 #include "access/xlog.h"
 
 #include "libpq-fe.h"
@@ -167,6 +168,10 @@ pageserver_call(ZenithRequest *request)
 	StringInfoData req_buff;
 	StringInfoData resp_buff;
 	ZenithResponse *resp;
+
+	// This doesn't seem to cause any problem now. But if this assert
+	// is triggered, we can set the region to current_region.
+	Assert(request->region != UNKNOWN_REGION);
 
 	PG_TRY();
 	{

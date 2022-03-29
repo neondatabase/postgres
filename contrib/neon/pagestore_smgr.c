@@ -45,12 +45,12 @@
  */
 #include "postgres.h"
 
+#include "access/remotexact.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_class.h"
-#include "catalog/pg_remote_tablespace.h"
 #include "pagestore_client.h"
 #include "pagestore_client.h"
 #include "storage/smgr.h"

@@ -12,6 +12,14 @@
 #include "utils/relcache.h"
 #include "storage/itemptr.h"
 
+#define UNKNOWN_REGION -1
+#define GLOBAL_REGION 0
+
+#define IsMultiRegion() (current_region != GLOBAL_REGION)
+
+/* GUC variable */
+extern int current_region;
+
 typedef struct
 {
 	void		(*collect_read_tuple) (Relation relation, ItemPointer tid, TransactionId tuple_xid);

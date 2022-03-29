@@ -17,6 +17,7 @@
  */
 #include "postgres.h"
 
+#include "access/remotexact.h"
 #include "access/xlog.h"
 #include "catalog/pg_tablespace.h"
 #include "lib/ilist.h"
@@ -201,7 +202,16 @@ smgropen(RelFileNode rnode, BackendId backend, char relpersistence, int region)
 					 relpersistence, reln->smgr_relpersistence);
 		}
 
-		Assert(reln->smgr_region == region);
+		if (reln->smgr_region == UNKNOWN_REGION)
+			reln->smgr_region = region;
+		else if (region != UNKNOWN_REGION && reln->smgr_region != region)
+			ereport(WARNING,
+					errmsg("Given region (%d) does not match with previously retrieved region (%d) for relation %u/%u/%u",
+						   region,
+						   reln->smgr_region,
+						   rnode.spcNode,
+						   rnode.dbNode,
+						   rnode.relNode));
 	}
 
 	return reln;
