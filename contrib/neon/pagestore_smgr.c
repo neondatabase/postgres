@@ -52,7 +52,6 @@
 #include "access/xlog_internal.h"
 #include "catalog/pg_class.h"
 #include "pagestore_client.h"
-#include "pagestore_client.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
 #include "postmaster/interrupt.h"
@@ -219,6 +218,7 @@ zm_unpack_response(StringInfo s)
 				ZenithExistsResponse *msg_resp = palloc0(sizeof(ZenithExistsResponse));
 
 				msg_resp->tag = tag;
+				msg_resp->lsn = pq_getmsgint64(s);
 				msg_resp->exists = pq_getmsgbyte(s);
 				pq_getmsgend(s);
 
@@ -231,6 +231,7 @@ zm_unpack_response(StringInfo s)
 				ZenithNblocksResponse *msg_resp = palloc0(sizeof(ZenithNblocksResponse));
 
 				msg_resp->tag = tag;
+				msg_resp->lsn = pq_getmsgint64(s);
 				msg_resp->n_blocks = pq_getmsgint(s, 4);
 				pq_getmsgend(s);
 
@@ -243,6 +244,7 @@ zm_unpack_response(StringInfo s)
 				ZenithGetPageResponse *msg_resp = palloc0(offsetof(ZenithGetPageResponse, page) + BLCKSZ);
 
 				msg_resp->tag = tag;
+				msg_resp->lsn = pq_getmsgint64(s);
 				/* XXX:	should be varlena */
 				memcpy(msg_resp->page, pq_getmsgbytes(s, BLCKSZ), BLCKSZ);
 				pq_getmsgend(s);
@@ -268,6 +270,7 @@ zm_unpack_response(StringInfo s)
 				ZenithGetSlruPageResponse *msg_resp = palloc0(offsetof(ZenithGetSlruPageResponse, page) + BLCKSZ);
 
 				msg_resp->tag = tag;
+				msg_resp->lsn = pq_getmsgint64(s);
 				msg_resp->seg_exists = pq_getmsgbyte(s);
 				msg_resp->page_exists = pq_getmsgbyte(s);
 				if (msg_resp->page_exists)
@@ -413,6 +416,7 @@ zm_to_string(ZenithMessage *msg)
 				ZenithExistsResponse *msg_resp = (ZenithExistsResponse *) msg;
 
 				appendStringInfoString(&s, "{\"type\": \"ZenithExistsResponse\"");
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_resp->lsn));
 				appendStringInfo(&s, ", \"exists\": %d}",
 								 msg_resp->exists
 					);
@@ -425,6 +429,7 @@ zm_to_string(ZenithMessage *msg)
 				ZenithNblocksResponse *msg_resp = (ZenithNblocksResponse *) msg;
 
 				appendStringInfoString(&s, "{\"type\": \"ZenithNblocksResponse\"");
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_resp->lsn));
 				appendStringInfo(&s, ", \"n_blocks\": %u}",
 								 msg_resp->n_blocks
 					);
@@ -434,11 +439,10 @@ zm_to_string(ZenithMessage *msg)
 			}
 		case T_ZenithGetPageResponse:
 			{
-#if 0
 				ZenithGetPageResponse *msg_resp = (ZenithGetPageResponse *) msg;
-#endif
 
 				appendStringInfoString(&s, "{\"type\": \"ZenithGetPageResponse\"");
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_resp->lsn));
 				appendStringInfo(&s, ", \"page\": \"XXX\"}");
 				appendStringInfoChar(&s, '}');
 				break;
@@ -680,7 +684,7 @@ zenith_get_request_lsn(int region, bool *latest)
 	{
 		*latest = true;
 		lsn = InvalidXLogRecPtr;
-		if (region == current_region)
+		if (region != current_region)
 			elog(DEBUG1, "remote region lsn 0");
 		else
 			elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");

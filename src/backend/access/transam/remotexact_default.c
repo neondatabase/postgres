@@ -62,6 +62,7 @@ GetRemoteXactHook(void)
 	return remote_xact_hook;
 }
 
+// TODO: probably can use RegisterXactCallback for this
 void
 AtEOXact_RemoteXact(void)
 {
