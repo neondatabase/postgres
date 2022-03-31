@@ -170,7 +170,8 @@ pageserver_call(ZenithRequest *request)
 	ZenithResponse *resp;
 
 	// This doesn't seem to cause any problem now. But if this assert
-	// is triggered, we can set the region to current_region.
+	// is triggered, it seems we can set the region to current_region
+	// as a last resort.
 	Assert(request->region != UNKNOWN_REGION);
 
 	PG_TRY();
@@ -222,6 +223,8 @@ pageserver_call(ZenithRequest *request)
 
 		resp = zm_unpack_response(&resp_buff);
 		PQfreemem(resp_buff.data);
+
+		set_region_lsn(request->region, resp);
 
 		if (message_level_is_interesting(PageStoreTrace))
 		{

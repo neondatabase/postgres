@@ -447,6 +447,18 @@ zm_to_string(ZenithMessage *msg)
 				appendStringInfoChar(&s, '}');
 				break;
 			}
+		case T_ZenithGetSlruPageResponse:
+			{
+				ZenithGetSlruPageResponse *msg_resp = (ZenithGetSlruPageResponse *) msg;
+
+				appendStringInfoString(&s, "{\"type\": \"ZenithGetSlruPageResponse\"");
+				appendStringInfo(&s, ", \"lsn\": \"%X/%X\"", LSN_FORMAT_ARGS(msg_resp->lsn));
+				appendStringInfo(&s, ", \"seg_exists\": %d", msg_resp->seg_exists);
+				appendStringInfo(&s, ", \"page_exists\": %d", msg_resp->page_exists);
+				appendStringInfo(&s, ", \"page\": \"XXX\"}");
+				appendStringInfoChar(&s, '}');
+				break;
+			}
 		case T_ZenithErrorResponse:
 			{
 				ZenithErrorResponse *msg_resp = (ZenithErrorResponse *) msg;
@@ -680,14 +692,22 @@ zenith_get_request_lsn(int region, bool *latest)
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
-	else if (am_walsender || region != current_region)
+	else if (am_walsender)
 	{
 		*latest = true;
 		lsn = InvalidXLogRecPtr;
-		if (region != current_region)
-			elog(DEBUG1, "remote region lsn 0");
-		else
-			elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
+		elog(DEBUG1, "am walsender zenith_get_request_lsn lsn 0 ");
+	}
+	// Since only keep track of the latest written LSN of the current region, we need to 
+	// rely on zenith to find the latest LSN. Hence, it is insufficient to use RegionIsRemote(region)
+	// because the global region is also separate from the current region.
+	else if (IsMultiRegion() && region != current_region)
+	{
+		*latest = false;
+		lsn = get_region_lsn(region);
+		elog(LOG, "get lsn %X/%X for region %d", LSN_FORMAT_ARGS(lsn), region);
+		if (lsn == InvalidXLogRecPtr)
+			*latest = true;
 	}
 	else
 	{
@@ -1107,6 +1127,16 @@ static void zenith_read_at_lsn_multi_region(RelFileNode rnode, ForkNumber forkNu
 	{
 		case T_ZenithGetPageResponse:
 			memcpy(buffer, ((ZenithGetPageResponse *) resp)->page, BLCKSZ);
+			if (RegionIsRemote(region))
+			{
+				XLogRecPtr lsn = ((ZenithGetPageResponse *) resp)->lsn;
+				/*
+					Set the LSN on the page to be equal to the LSN snapshot of the current transaction
+					so that we don't need to evict the page from local buffer if we use the same LSN
+					snapshot for the subsequent transactions.
+				*/
+				PageSetLSN((Page) buffer, lsn);
+			}
 			break;
 
 		case T_ZenithErrorResponse:
@@ -1712,10 +1742,13 @@ AtEOXact_zenith(XactEvent event, void *arg)
 			 */
 			unlogged_build_rel = NULL;
 			unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
+			clear_region_lsns();
 			break;
 
 		case XACT_EVENT_COMMIT:
 		case XACT_EVENT_PARALLEL_COMMIT:
+			clear_region_lsns();
+			/* fall through */
 		case XACT_EVENT_PREPARE:
 		case XACT_EVENT_PRE_COMMIT:
 		case XACT_EVENT_PARALLEL_PRE_COMMIT:
@@ -1753,6 +1786,8 @@ static const struct f_smgr zenith_smgr =
 	.smgr_start_unlogged_build = zenith_start_unlogged_build,
 	.smgr_finish_unlogged_build_phase_1 = zenith_finish_unlogged_build_phase_1,
 	.smgr_end_unlogged_build = zenith_end_unlogged_build,
+
+	.smgr_getregionallsn = get_region_lsn,
 };
 
 
@@ -1863,7 +1898,7 @@ neon_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *bu
 	}
 
 	// FIXME: select the right region for specific slru kinds
-	request_lsn = zenith_get_request_lsn(current_region, &latest);
+	request_lsn = zenith_get_request_lsn(region, &latest);
 
 	/**
 	 * During recovery, if there is no WAL redoing, the function GetXLogReplayRecPtr will return
@@ -1958,7 +1993,7 @@ neon_slru_page_exists(const char* slru_kind_str, int segno, off_t offset)
 	}
 
 	// FIXME: select the right region for specific slru kinds
-	request_lsn = zenith_get_request_lsn(current_region, &latest);
+	request_lsn = zenith_get_request_lsn(region, &latest);
 	{
 		ZenithGetSlruPageRequest request = {
 			.req.tag = T_ZenithGetSlruPageRequest,

@@ -11,7 +11,6 @@
 #include "postgres.h"
 
 #include "multiregion.h"
-#include "pagestore_client.h"
 
 #include "access/remotexact.h"
 #include "catalog/catalog.h"
@@ -21,12 +20,21 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "utils/guc.h"
+#include "utils/memutils.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
 #include "walproposer_utils.h"
 
+#define NEON_TAG "[NEON_SMGR] "
+#define neon_log(tag, fmt, ...) ereport(tag, \
+		(errmsg(NEON_TAG fmt, ## __VA_ARGS__), \
+		 errhidestmt(true), errhidecontext(true)))
+
 /* GUCs */
 char *neon_region_timelines;
+
+static XLogRecPtr	*region_lsns = NULL;
+static int	num_regions = 1;
 
 static bool
 check_neon_region_timelines(char **newval, void **extra, GucSource source)
@@ -64,10 +72,23 @@ check_neon_region_timelines(char **newval, void **extra, GucSource source)
 		}
 	}
 
+	*extra = malloc(sizeof(int));
+	if (!*extra)
+		return false;
+
+	*((int *) *extra) = list_length(timelines);
+
 	pfree(rawstring);
 	list_free(timelines);
 	return true;
 }
+
+static void assign_neon_region_timelines(const char *newval, void *extra)
+{
+	/* Add 1 for the global region */
+	num_regions = *((int *) extra) + 1;
+}
+
 
 void DefineMultiRegionCustomVariables(void)
 {
@@ -77,11 +98,92 @@ void DefineMultiRegionCustomVariables(void)
 								&neon_region_timelines,
 								"",
 								PGC_POSTMASTER,
-								0, /* no flags required */
-								check_neon_region_timelines, NULL, NULL);
+								GUC_LIST_INPUT,
+								check_neon_region_timelines, assign_neon_region_timelines, NULL);
 }
 
 bool neon_multiregion_enabled(void)
 {
 	return neon_region_timelines && neon_region_timelines[0];
+}
+
+static void
+init_region_lsns()
+{
+	region_lsns = (XLogRecPtr *)
+			MemoryContextAllocZero(TopTransactionContext,
+								   num_regions * sizeof(XLogRecPtr));
+}
+
+/*
+ * Set the LSN for a given region if it wasn't previously set. The set LSN is use
+ * for that region throughout the life of the transaction.
+ */
+void
+set_region_lsn(int region, ZenithResponse *msg)
+{
+	XLogRecPtr lsn;
+
+	if (!IsMultiRegion() || !RegionIsRemote(region))
+		return;
+
+	AssertArg(region < num_regions);
+
+	switch (messageTag(msg))
+	{
+		case T_ZenithExistsResponse:
+			lsn = ((ZenithExistsResponse *) msg)->lsn;
+			break;
+		case T_ZenithNblocksResponse:
+			lsn = ((ZenithNblocksResponse *) msg)->lsn;
+			break;
+		case T_ZenithGetPageResponse:
+			lsn = ((ZenithGetPageResponse *) msg)->lsn;
+			break;
+		case T_ZenithGetSlruPageResponse:
+			lsn = ((ZenithGetSlruPageResponse *) msg)->lsn;
+			break;
+		case T_ZenithErrorResponse:
+			break;
+		default:
+			neon_log(ERROR, "unexpected zenith message tag 0x%02x", messageTag(msg));
+			break;
+	}
+
+	Assert(lsn != InvalidXLogRecPtr);
+
+	if (region_lsns == NULL)
+		init_region_lsns();
+
+	if (region_lsns[region] == InvalidXLogRecPtr)
+		region_lsns[region] = lsn;
+	else
+		Assert(region_lsns[region] == lsn);
+}
+
+/*
+ * Get the LSN of a region
+ */
+XLogRecPtr
+get_region_lsn(int region)
+{
+	if (!IsMultiRegion())
+		return InvalidXLogRecPtr;
+	
+	// LSN of the current region is already tracked by postgres
+	AssertArg(region != current_region);
+	AssertArg(region < num_regions);
+
+	if (region_lsns == NULL)
+		init_region_lsns();
+
+	return region_lsns[region];
+}
+
+void
+clear_region_lsns(void)
+{
+	/* The data is destroyed along with the transaction
+		context so only need to set this to NULL */
+	region_lsns = NULL;
 }

@@ -829,7 +829,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * wal_redo postgres is working in single user mode, we do not need to synchronize access to shared buffer, 
 	 * so let's use local buffers instead
 	 */
-	bool		isLocalBuf = SmgrIsTemp(smgr) || am_wal_redo_postgres;
+	bool		isLocalBuf = SmgrIsTemp(smgr) || RegionIsRemote(smgr->smgr_region) || am_wal_redo_postgres;
 
 	*hit = false;
 
