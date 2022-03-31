@@ -154,8 +154,27 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		LocalRefCount[b]++;
 		ResourceOwnerRememberBuffer(CurrentResourceOwner,
 									BufferDescriptorGetBuffer(bufHdr));
-		if (buf_state & BM_VALID)
+
+		if (buf_state & BM_VALID) {
 			*foundPtr = true;
+
+			/* If this buffer is for a remote relation, invalidate the content of the
+				buffer if the LSN does not match with the regional LSN.  
+			*/
+			if (IsMultiRegion() && RegionIsRemote(smgr->smgr_region))
+			{
+				XLogRecPtr lsn = smgr_get_regional_lsn(smgr, smgr->smgr_region);
+				Page page = BufferGetPage(BufferDescriptorGetBuffer(bufHdr));
+
+				if (lsn != PageGetLSN(page))
+				{
+					buf_state &= ~BM_VALID;
+					pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
+
+					*foundPtr = false;
+				} 
+			}	
+		}
 		else
 		{
 			/* Previous read attempt must have failed; try again */

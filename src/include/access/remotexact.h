@@ -16,6 +16,7 @@
 #define GLOBAL_REGION 0
 
 #define IsMultiRegion() (current_region != GLOBAL_REGION)
+#define RegionIsRemote(r) (r != current_region && r != GLOBAL_REGION && r != UNKNOWN_REGION)
 
 /* GUC variable */
 extern int current_region;

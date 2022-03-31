@@ -67,7 +67,6 @@ init_read_write_set(void)
 	HASHCTL		hash_ctl;
 
 	Assert(!CurrentRxReorderBuffer);
-	Assert(MemoryContextIsValid(TopTransactionContext));
 
 	old_context = MemoryContextSwitchTo(TopTransactionContext);
 
