@@ -1257,10 +1257,14 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 					break;
 			}
 		}
-		ereport(DEBUG1,
+		ereport(LOG,
 				(errmsg("end of replication stream at %X/%X: %m",
 						LSN_FORMAT_ARGS(rec_end_lsn))));
 		walrcv_disconnect(wrconn);
+
+		/* failed to receive all WAL till endpos */
+		if (rec_end_lsn < endpos)
+			return false;
 	}
 	else
 	{
