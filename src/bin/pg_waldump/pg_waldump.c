@@ -13,8 +13,10 @@
 #include "postgres.h"
 
 #include <dirent.h>
+#include <limits.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 
 #include "access/transam.h"
 #include "access/xlog_internal.h"
@@ -23,7 +25,10 @@
 #include "common/fe_memutils.h"
 #include "common/logging.h"
 #include "getopt_long.h"
+#include "port/pg_bitutils.h"
 #include "rmgrdesc.h"
+
+#define OFFSET_INVALID ((size_t)-1)
 
 static const char *progname;
 
@@ -35,6 +40,7 @@ typedef struct XLogDumpPrivate
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
 	bool		endptr_reached;
+	char* 		input_filename;
 } XLogDumpPrivate;
 
 typedef struct XLogDumpConfig
@@ -52,6 +58,7 @@ typedef struct XLogDumpConfig
 	int			filter_by_rmgr;
 	TransactionId filter_by_xid;
 	bool		filter_by_xid_enabled;
+	bool		ignore_format_errors;
 } XLogDumpConfig;
 
 typedef struct Stats
@@ -70,7 +77,35 @@ typedef struct XLogDumpStats
 	Stats		record_stats[RM_NEXT_ID][MAX_XLINFO_TYPES];
 } XLogDumpStats;
 
+
 #define fatal_error(...) do { pg_log_fatal(__VA_ARGS__); exit(EXIT_FAILURE); } while(0)
+
+/* calculate ceil(log base 2) of num */
+static int
+my_log2(long num)
+{
+	/*
+	 * guard against too-large input, which would be invalid for
+	 * pg_ceil_log2_*()
+	 */
+	if (num > LONG_MAX / 2)
+		num = LONG_MAX / 2;
+
+#if SIZEOF_LONG < 8
+	return pg_ceil_log2_32(num);
+#else
+	return pg_ceil_log2_64(num);
+#endif
+}
+
+/* calculate first power of 2 >= num, bounded to what will fit in an int */
+static int
+next_pow2_int(long num)
+{
+	if (num > INT_MAX / 2)
+		num = INT_MAX / 2;
+	return 1 << my_log2(num);
+}
 
 static void
 print_rmgr_list(void)
@@ -284,6 +319,18 @@ WALDumpOpenSegment(XLogReaderState *state, XLogSegNo nextSegNo,
 	TimeLineID	tli = *tli_p;
 	char		fname[MAXPGPATH];
 	int			tries;
+	XLogDumpPrivate *private = state->private_data;
+
+	if(private->input_filename)
+	{
+		Assert(nextSegNo == 0);
+
+		state->seg.ws_file = open_file_in_directory(state->segcxt.ws_dir, private->input_filename);
+		if (state->seg.ws_file >= 0)
+			return;
+
+		fatal_error("could not open file \"%s\": %m", private->input_filename);
+	}
 
 	XLogFileName(fname, tli, nextSegNo, state->segcxt.ws_segsize);
 
@@ -354,6 +401,7 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 	{
 		WALOpenSegment *seg = &errinfo.wre_seg;
 		char		fname[MAXPGPATH];
+		char		*actual_fname = private->input_filename ? private->input_filename : fname;
 
 		XLogFileName(fname, seg->ws_tli, seg->ws_segno,
 					 state->segcxt.ws_segsize);
@@ -362,11 +410,11 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		{
 			errno = errinfo.wre_errno;
 			fatal_error("could not read from file %s, offset %u: %m",
-						fname, errinfo.wre_off);
+						actual_fname, errinfo.wre_off);
 		}
 		else
 			fatal_error("could not read from file %s, offset %u: read %d of %zu",
-						fname, errinfo.wre_off, errinfo.wre_read,
+						actual_fname, errinfo.wre_off, errinfo.wre_read,
 						(Size) errinfo.wre_req);
 	}
 
@@ -465,16 +513,25 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	int			block_id;
 	uint8		info = XLogRecGetInfo(record);
 	XLogRecPtr	xl_prev = XLogRecGetPrev(record);
+	XLogDumpPrivate *private = record->private_data;
 	StringInfoData s;
 
 	XLogDumpRecordLen(record, &rec_len, &fpi_len);
 
-	printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, prev %X/%08X, ",
+	if(private->input_filename)
+		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, offset: 0x%lX, prev %X/%08X, ",
 		   desc->rm_name,
 		   rec_len, XLogRecGetTotalLen(record),
 		   XLogRecGetXid(record),
-		   LSN_FORMAT_ARGS(record->ReadRecPtr),
+		   record->ReadRecPtr,
 		   LSN_FORMAT_ARGS(xl_prev));
+	else
+		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, prev %X/%08X, ",
+			desc->rm_name,
+			rec_len, XLogRecGetTotalLen(record),
+			XLogRecGetXid(record),
+			LSN_FORMAT_ARGS(record->ReadRecPtr),
+			LSN_FORMAT_ARGS(xl_prev));
 
 	id = desc->rm_identify(info);
 	if (id == NULL)
@@ -726,7 +783,10 @@ usage(void)
 	printf(_("  -b, --bkp-details      output detailed information about backup blocks\n"));
 	printf(_("  -e, --end=RECPTR       stop reading at WAL location RECPTR\n"));
 	printf(_("  -f, --follow           keep retrying after reaching end of WAL\n"));
+	printf(_("  -F, --file=FNAME       dump log records from a single file\n"));
+	printf(_("  -i, --ignore           ignore format errors, skip invalid structures\n"));
 	printf(_("  -n, --limit=N          number of records to display\n"));
+	printf(_("  -o, --offset=OFFSET    offset of the first record to in a file to dump\n"));
 	printf(_("  -p, --path=PATH        directory in which to find log segment files or a\n"
 			 "                         directory with a ./pg_wal that contains such files\n"
 			 "                         (default: current directory, ./pg_wal, $PGDATA/pg_wal)\n"));
@@ -757,14 +817,20 @@ main(int argc, char **argv)
 	XLogRecord *record;
 	XLogRecPtr	first_record;
 	char	   *waldir = NULL;
+	char	   *fname = NULL;
 	char	   *errormsg;
+	bool 		single_file = false;
+	size_t		start_offset = OFFSET_INVALID;
 
 	static struct option long_options[] = {
 		{"bkp-details", no_argument, NULL, 'b'},
 		{"end", required_argument, NULL, 'e'},
 		{"follow", no_argument, NULL, 'f'},
+		{"file", required_argument, NULL, 'F'},
 		{"help", no_argument, NULL, '?'},
+		{"ignore", no_argument, NULL, 'i'},
 		{"limit", required_argument, NULL, 'n'},
+		{"offset", required_argument, NULL, 'o'},
 		{"path", required_argument, NULL, 'p'},
 		{"quiet", no_argument, NULL, 'q'},
 		{"rmgr", required_argument, NULL, 'r'},
@@ -805,6 +871,7 @@ main(int argc, char **argv)
 	private.startptr = InvalidXLogRecPtr;
 	private.endptr = InvalidXLogRecPtr;
 	private.endptr_reached = false;
+	private.input_filename = NULL;
 
 	config.quiet = false;
 	config.bkp_details = false;
@@ -816,6 +883,7 @@ main(int argc, char **argv)
 	config.filter_by_xid_enabled = false;
 	config.stats = false;
 	config.stats_per_record = false;
+	config.ignore_format_errors = false;
 
 	if (argc <= 1)
 	{
@@ -823,7 +891,7 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
-	while ((option = getopt_long(argc, argv, "be:fn:p:qr:s:t:x:z",
+	while ((option = getopt_long(argc, argv, "be:fF:in:o:p:qr:s:t:x:z",
 								 long_options, &optindex)) != -1)
 	{
 		switch (option)
@@ -843,10 +911,24 @@ main(int argc, char **argv)
 			case 'f':
 				config.follow = true;
 				break;
+			case 'F':
+				fname = pg_strdup(optarg);
+				single_file = true;
+				break;
+			case 'i':
+				config.ignore_format_errors = true;
+				break;
 			case 'n':
 				if (sscanf(optarg, "%d", &config.stop_after_records) != 1)
 				{
 					pg_log_error("could not parse limit \"%s\"", optarg);
+					goto bad_argument;
+				}
+				break;
+			case 'o':
+				if (sscanf(optarg, "%zu", &start_offset) != 1)
+				{
+					pg_log_error("could not parse offset \"%s\"", optarg);
 					goto bad_argument;
 				}
 				break;
@@ -936,6 +1018,73 @@ main(int argc, char **argv)
 		goto bad_argument;
 	}
 
+	if (start_offset != OFFSET_INVALID)
+	{
+		if(!XLogRecPtrIsInvalid(private.startptr) || !XLogRecPtrIsInvalid(private.endptr))
+		{
+			pg_log_error("either file offset or start/end pointers should be specified");
+			goto bad_argument;
+		}
+
+		if(!single_file)
+		{
+			pg_log_error("offset option could only be used with filename option");
+			goto bad_argument;
+		}
+
+		/* Log records are maxaligned, start at the closest next position */
+		private.startptr = MAXALIGN(start_offset);
+	}
+
+	if(single_file)
+	{
+		char	   *directory = NULL;
+		int			fd;
+		struct stat stat;
+
+		if(config.follow)
+		{
+			pg_log_error("Follow could not be used in file dump mode");
+			goto bad_argument;
+		}
+
+		if (waldir != NULL)
+		{
+			pg_log_error("either single file or wal directory should be specified");
+			goto bad_argument;
+		}
+
+		split_path(fname, &directory, &private.input_filename);
+		waldir = directory;
+
+		if(waldir == NULL)
+		{
+			char *cwd = malloc(MAXPGPATH);
+
+			if (!getcwd(cwd, MAXPGPATH))
+				fatal_error("could identify current directory: %m");
+
+			waldir = cwd;
+		}
+
+		if (!verify_directory(waldir))
+			fatal_error("could not open directory \"%s\": %m", waldir);
+
+		fd = open_file_in_directory(waldir, private.input_filename);
+		if (fd < 0)
+			fatal_error("could not open file \"%s\"", private.input_filename);
+
+		if(fstat(fd, &stat) != 0)
+			fatal_error("could not stat file \"%s\"", private.input_filename);
+
+		private.endptr = stat.st_size;
+
+		/* Round up segment size to next power of 2 or 1MB */
+		WalSegSz = Max(next_pow2_int(private.endptr), 1024 * 1024);
+
+		close(fd);
+	}
+
 	if (waldir != NULL)
 	{
 		/* validate path points to directory */
@@ -953,6 +1102,12 @@ main(int argc, char **argv)
 		char	   *fname = NULL;
 		int			fd;
 		XLogSegNo	segno;
+
+		if(single_file)
+		{
+			pg_log_error("either single file or start/end boundaries should be specified");
+			goto bad_argument;
+		}
 
 		split_path(argv[optind], &directory, &fname);
 
@@ -1026,10 +1181,11 @@ main(int argc, char **argv)
 		}
 	}
 	else
-		waldir = identify_target_directory(waldir, NULL);
+		if (!single_file)
+			waldir = identify_target_directory(waldir, NULL);
 
 	/* we don't know what to print */
-	if (XLogRecPtrIsInvalid(private.startptr))
+	if (XLogRecPtrIsInvalid(private.startptr) && !single_file)
 	{
 		pg_log_error("no start WAL location given");
 		goto bad_argument;
@@ -1047,12 +1203,28 @@ main(int argc, char **argv)
 	if (!xlogreader_state)
 		fatal_error("out of memory");
 
-	/* first find a valid recptr to start from */
-	first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
+	if(single_file)
+	{
+		if(config.ignore_format_errors)
+		{
+			xlogreader_state->skip_page_validation = true;
+			xlogreader_state->skip_invalid_records = true;
+		}
 
-	if (first_record == InvalidXLogRecPtr)
-		fatal_error("could not find a valid record after %X/%X",
+		xlogreader_state->skip_lsn_checks = true;
+
+		first_record = private.startptr;
+		XLogBeginRead(xlogreader_state, first_record);
+	}
+	else
+	{
+		/* first find a valid recptr to start from */
+		first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
+
+		if (first_record == InvalidXLogRecPtr)
+			fatal_error("could not find a valid record after %X/%X",
 					LSN_FORMAT_ARGS(private.startptr));
+	}
 
 	/*
 	 * Display a message that we're skipping data if `from` wasn't a pointer
