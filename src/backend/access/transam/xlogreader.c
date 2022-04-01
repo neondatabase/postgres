@@ -280,7 +280,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
 	int			readOff;
 
 #define SKIP_INVALID_RECORD(rec_ptr)  do { \
-										rec_ptr += MAXALIGN(1); \
+										rec_ptr = MAXALIGN(rec_ptr + 1); \
 										if (rec_ptr % XLOG_BLCKSZ <= MAXALIGN(1)) \
 											goto restart; \
 										else \
