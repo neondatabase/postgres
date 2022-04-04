@@ -14,6 +14,7 @@
 #define SK_PROTOCOL_VERSION   1
 
 #define MAX_SAFEKEEPERS        32
+#define MAX_SEND_SIZE         (XLOG_BLCKSZ * 16) /* max size of a single WAL message */
 #define XLOG_HDR_SIZE         (1+8*3)  /* 'w' + startPos + walEnd + timestamp */
 #define XLOG_HDR_START_POS    1        /* offset of start position in wal sender message header */
 #define XLOG_HDR_END_POS      (1+8)    /* offset of end position in wal sender message header */
@@ -252,23 +253,6 @@ typedef struct AppendRequestHeader
 } AppendRequestHeader;
 
 /*
- * All copy data message ('w') are linked in L1 send list and asynchronously sent to receivers.
- * When message is sent to all receivers, it is removed from send list.
- */
-struct WalMessage
-{
-	WalMessage* next;      /* L1 list of messages */
-	uint32 size;           /* message size */
-	AppendRequestHeader req; /* request to safekeeper (message header) */
-
-	/* PHANTOM FIELD:
-	 *
-	 * All WalMessages are allocated with exactly (size - sizeof(AppendRequestHeader)) additional bytes
-	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
-	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
-};
-
-/*
  * Hot standby feedback received from replica
  */
 typedef struct HotStandbyFeedback
@@ -342,20 +326,29 @@ typedef struct Safekeeper
 	 * reach SS_ACTIVE; not before.
 	 */
 	WalProposerConn*   conn;
+	/*
+	 * Temporary buffer for the message being sent to the safekeeper.
+	 */
 	StringInfoData outbuf;
+	/*
+	 * WAL reader, allocated for each safekeeper.
+	 */
+	XLogReaderState* xlogreader;
 
-	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
-	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
-
-	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
-	SafekeeperState     state;         /* safekeeper state machine state */
-	AcceptorGreeting   greetResponse;         /* acceptor greeting  */
-	VoteResponse	   voteResponse;  /* the vote */
-	AppendResponse appendResponse;		  /* feedback to master */
 	/*
 	 * Streaming will start here; must be record boundary.
 	 */
 	XLogRecPtr startStreamingAt;
+
+	bool                flushWrite;     /* set to true if we need to call AsyncFlush, to flush pending messages */
+	XLogRecPtr          streamingAt;    /* current streaming position */
+	AppendRequestHeader appendRequest;  /* request for sending to safekeeper */
+
+	int                 eventPos;       /* position in wait event set. Equal to -1 if no event */
+	SafekeeperState     state;          /* safekeeper state machine state */
+	AcceptorGreeting    greetResponse;  /* acceptor greeting */
+	VoteResponse        voteResponse;   /* the vote */
+	AppendResponse      appendResponse; /* feedback for master */
 } Safekeeper;
 
 
@@ -365,19 +358,22 @@ void       AssertEventsOkForState(uint32 events, Safekeeper* sk);
 uint32     SafekeeperStateDesiredEvents(SafekeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
-void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
+void       WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos);
 bool       HexDecodeString(uint8 *result, char *input, int nbytes);
 uint32     pq_getmsgint32_le(StringInfo msg);
 uint64     pq_getmsgint64_le(StringInfo msg);
-void	   pq_sendint32_le(StringInfo buf, uint32 i);
-void	   pq_sendint64_le(StringInfo buf, uint64 i);
+void       pq_sendint32_le(StringInfo buf, uint32 i);
+void       pq_sendint64_le(StringInfo buf, uint64 i);
 void       WalProposerPoll(void);
 void       WalProposerRegister(void);
+void       XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr);
+void       XLogWalPropClose(XLogRecPtr recptr);
 void       ProcessStandbyReply(XLogRecPtr	writePtr,
 							   XLogRecPtr	flushPtr,
 							   XLogRecPtr	applyPtr,
 							   TimestampTz replyTime,
 							   bool		replyRequested);
+void       PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
 void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackXmin,
 									uint32		feedbackEpoch,
