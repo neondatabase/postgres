@@ -10,12 +10,12 @@
 
 /*
  * These variables are used similarly to openLogFile/SegNo,
- * but for walproposer to write the XLOG during recovery. recvFileTLI is the TimeLineID
- * corresponding the filename of recvFile.
+ * but for walproposer to write the XLOG during recovery. walpropFileTLI is the TimeLineID
+ * corresponding the filename of walpropFile.
  */
-static int	recvFile = -1;
-static TimeLineID recvFileTLI = 0;
-static XLogSegNo recvSegNo = 0;
+static int	walpropFile = -1;
+static TimeLineID walpropFileTLI = 0;
+static XLogSegNo walpropSegNo = 0;
 
 int
 CompareLsn(const void *a, const void *b)
@@ -318,17 +318,17 @@ XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		int			segbytes;
 
 		/* Close the current segment if it's completed */
-		if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+		if (walpropFile >= 0 && !XLByteInSeg(recptr, walpropSegNo, wal_segment_size))
 			XLogWalPropClose(recptr);
 
-		if (recvFile < 0)
+		if (walpropFile < 0)
 		{
 			bool		use_existent = true;
 
 			/* Create/use new log file */
-			XLByteToSeg(recptr, recvSegNo, wal_segment_size);
-			recvFile = XLogFileInit(recvSegNo, &use_existent, false);
-			recvFileTLI = ThisTimeLineID;
+			XLByteToSeg(recptr, walpropSegNo, wal_segment_size);
+			walpropFile = XLogFileInit(walpropSegNo, &use_existent, false);
+			walpropFileTLI = ThisTimeLineID;
 		}
 
 		/* Calculate the start offset of the received logs */
@@ -342,7 +342,7 @@ XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 		/* OK to write the logs */
 		errno = 0;
 
-		byteswritten = pg_pwrite(recvFile, buf, segbytes, (off_t) startoff);
+		byteswritten = pg_pwrite(walpropFile, buf, segbytes, (off_t) startoff);
 		if (byteswritten <= 0)
 		{
 			char		xlogfname[MAXFNAMELEN];
@@ -353,7 +353,7 @@ XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 				errno = ENOSPC;
 
 			save_errno = errno;
-			XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+			XLogFileName(xlogfname, walpropFileTLI, walpropSegNo, wal_segment_size);
 			errno = save_errno;
 			ereport(PANIC,
 					(errcode_for_file_access(),
@@ -373,7 +373,7 @@ XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 	 * Close the current segment if it's fully written up in the last cycle of
 	 * the loop.
 	 */
-	if (recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size))
+	if (walpropFile >= 0 && !XLByteInSeg(recptr, walpropSegNo, wal_segment_size))
 	{
 		XLogWalPropClose(recptr);
 	}
@@ -385,12 +385,12 @@ XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 void
 XLogWalPropClose(XLogRecPtr recptr)
 {
-	Assert(recvFile >= 0 && !XLByteInSeg(recptr, recvSegNo, wal_segment_size));
+	Assert(walpropFile >= 0 && !XLByteInSeg(recptr, walpropSegNo, wal_segment_size));
 
-	if (close(recvFile) != 0)
+	if (close(walpropFile) != 0)
 	{
 		char		xlogfname[MAXFNAMELEN];
-		XLogFileName(xlogfname, recvFileTLI, recvSegNo, wal_segment_size);
+		XLogFileName(xlogfname, walpropFileTLI, walpropSegNo, wal_segment_size);
 
 		ereport(PANIC,
 				(errcode_for_file_access(),
@@ -398,5 +398,5 @@ XLogWalPropClose(XLogRecPtr recptr)
 						xlogfname)));
 	}
 
-	recvFile = -1;
+	walpropFile = -1;
 }
