@@ -1892,7 +1892,7 @@ ProcessStandbyMessage(void)
 /*
  * Remember that a walreceiver just confirmed receipt of lsn `lsn`.
  */
-static void
+void
 PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
@@ -2057,6 +2057,13 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
+
+	/* 
+	 * walproposer use trunclateLsn instead of flushPtr for confirmed
+	 * received location, so we shouldn't update restart_lsn here.
+	 */
+	if (am_wal_proposer)
+		return;
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.
@@ -2858,73 +2865,73 @@ XLogSendPhysical(void)
 	nbytes = endptr - startptr;
 	Assert(nbytes <= MAX_SEND_SIZE);
 
-	/*
-	 * OK to read and send the slice.
-	 */
-	if (output_message.data)
-		resetStringInfo(&output_message);
-	else
-		initStringInfo(&output_message);
-
-	pq_sendbyte(&output_message, 'w');
-	pq_sendint64(&output_message, startptr);	/* dataStart */
-	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
-	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
-
-	/*
-	 * Read the log directly into the output buffer to avoid extra memcpy
-	 * calls.
-	 */
-	enlargeStringInfo(&output_message, nbytes);
-
-retry:
-	if (!WALRead(xlogreader,
-				 &output_message.data[output_message.len],
-				 startptr,
-				 nbytes,
-				 xlogreader->seg.ws_tli,	/* Pass the current TLI because
-											 * only WalSndSegmentOpen controls
-											 * whether new TLI is needed. */
-				 &errinfo))
-		WALReadRaiseError(&errinfo);
-
-	/* See logical_read_xlog_page(). */
-	XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
-	CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
-
-	/*
-	 * During recovery, the currently-open WAL file might be replaced with the
-	 * file of the same name retrieved from archive. So we always need to
-	 * check what we read was valid after reading into the buffer. If it's
-	 * invalid, we try to open and read the file again.
-	 */
-	if (am_cascading_walsender)
-	{
-		WalSnd	   *walsnd = MyWalSnd;
-		bool		reload;
-
-		SpinLockAcquire(&walsnd->mutex);
-		reload = walsnd->needreload;
-		walsnd->needreload = false;
-		SpinLockRelease(&walsnd->mutex);
-
-		if (reload && xlogreader->seg.ws_file >= 0)
-		{
-			wal_segment_close(xlogreader);
-
-			goto retry;
-		}
-	}
-
-	output_message.len += nbytes;
-	output_message.data[output_message.len] = '\0';
-
 	if (am_wal_proposer)
 	{
-		WalProposerBroadcast(startptr, output_message.data, output_message.len);
+		WalProposerBroadcast(startptr, endptr);
 	}
 	else
 	{
+		/*
+		* OK to read and send the slice.
+		*/
+		if (output_message.data)
+			resetStringInfo(&output_message);
+		else
+			initStringInfo(&output_message);
+
+		pq_sendbyte(&output_message, 'w');
+		pq_sendint64(&output_message, startptr);	/* dataStart */
+		pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
+		pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
+
+		/*
+		* Read the log directly into the output buffer to avoid extra memcpy
+		* calls.
+		*/
+		enlargeStringInfo(&output_message, nbytes);
+
+	retry:
+		if (!WALRead(xlogreader,
+					&output_message.data[output_message.len],
+					startptr,
+					nbytes,
+					xlogreader->seg.ws_tli,	/* Pass the current TLI because
+												* only WalSndSegmentOpen controls
+												* whether new TLI is needed. */
+					&errinfo))
+			WALReadRaiseError(&errinfo);
+
+		/* See logical_read_xlog_page(). */
+		XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
+		CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
+
+		/*
+		* During recovery, the currently-open WAL file might be replaced with the
+		* file of the same name retrieved from archive. So we always need to
+		* check what we read was valid after reading into the buffer. If it's
+		* invalid, we try to open and read the file again.
+		*/
+		if (am_cascading_walsender)
+		{
+			WalSnd	   *walsnd = MyWalSnd;
+			bool		reload;
+
+			SpinLockAcquire(&walsnd->mutex);
+			reload = walsnd->needreload;
+			walsnd->needreload = false;
+			SpinLockRelease(&walsnd->mutex);
+
+			if (reload && xlogreader->seg.ws_file >= 0)
+			{
+				wal_segment_close(xlogreader);
+
+				goto retry;
+			}
+		}
+
+		output_message.len += nbytes;
+		output_message.data[output_message.len] = '\0';
+
 		/*
 		 * Fill the send timestamp last, so that it is taken as late as possible.
 		 */
