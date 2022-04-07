@@ -100,7 +100,7 @@ static ssize_t buffered_read(void *buf, size_t count);
 static BufferTag target_redo_tag;
 
 bool am_wal_redo_postgres;
-static XLogReaderState reader_state;
+static XLogReaderState* reader_state;
 
 #define TRACE DEBUG5
 
@@ -297,7 +297,7 @@ WalRedoMain(int argc, char *argv[],
 		if (RmgrTable[rmid].rm_startup != NULL)
 			RmgrTable[rmid].rm_startup();
 	}
-	reader_state.errormsg_buf = MemoryContextAlloc(TopMemoryContext, 1000 + 1); /* MAX_ERRORMSG_LEN */
+	reader_state = XLogReaderAllocate(wal_segment_size, NULL, XL_ROUTINE(), NULL);
 
 #ifdef HAVE_LIBSECCOMP
 	/* We prefer opt-out to opt-in for greater security */
@@ -589,16 +589,15 @@ ApplyRecord(StringInfo input_message)
 		elog(ERROR, "mismatch between record (%d) and message size (%d)",
 			 record->xl_tot_len, (int) sizeof(XLogRecord) + nleft);
 
-	/* FIXME: use XLogReaderAllocate() */
-	XLogBeginRead(&reader_state, lsn);
-	reader_state.decoded_record = record;
-	if (!DecodeXLogRecord(&reader_state, record, &errormsg))
+	XLogBeginRead(reader_state, lsn);
+	reader_state->decoded_record = record;
+	if (!DecodeXLogRecord(reader_state, record, &errormsg))
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
 
 	/* Ignore any other blocks than the ones the caller is interested in */
 	redo_read_buffer_filter = redo_block_filter;
 
-	RmgrTable[record->xl_rmid].rm_redo(&reader_state);
+	RmgrTable[record->xl_rmid].rm_redo(reader_state);
 	redo_read_buffer_filter = NULL;
 
 	elog(TRACE, "applied WAL record with LSN %X/%X",
