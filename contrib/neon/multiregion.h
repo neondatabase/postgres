@@ -16,10 +16,10 @@
 
 extern char *neon_region_timelines;
 
-void DefineMultiRegionCustomVariables(void);
-bool neon_multiregion_enabled(void);
-void set_region_lsn(int region, ZenithResponse *msg);
-XLogRecPtr get_region_lsn(int region);
-void clear_region_lsns(void);
+extern void DefineMultiRegionCustomVariables(void);
+extern bool neon_multiregion_enabled(void);
+extern void set_region_lsn(int region, ZenithResponse *msg);
+extern XLogRecPtr get_region_lsn(int region);
+extern void clear_region_lsns(void);
 
 #endif

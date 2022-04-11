@@ -1855,23 +1855,23 @@ slru_kind_from_string(const char* str, ZenithSlruKind* kind)
 /**
  * neon_slru_kind_check() - Check if the SLRU kind is supported by the pageserver
  */
-const char *
+bool
 neon_slru_kind_check(SlruCtl ctl)
 {
 	const char *dir = ctl->Dir;
 
 	if (strcmp(dir, "pg_xact") == 0 && neon_slru_clog)
 	{
-		return dir;
+		return true;
 	}
 
 	if ((strcmp(dir, "pg_multixact/members") == 0 || strcmp(dir, "pg_multixact/offsets") == 0) &&
 		neon_slru_multixact)
 	{
-		return dir;
+		return true;
 	}
 
-	return NULL;
+	return false;
 }
 
 /**
@@ -1880,7 +1880,7 @@ neon_slru_kind_check(SlruCtl ctl)
  * NOTE: Never call ereport(ERROR) in here to comply with the behavior expected in slru.c
  */
 bool
-neon_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *buffer)
+neon_slru_read_page(SlruCtl ctl, int segno, off_t offset, char *buffer)
 {
 	ZenithResponse 				*resp;
 	ZenithGetSlruPageResponse 	*get_slru_page_resp;
@@ -1891,9 +1891,9 @@ neon_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *bu
 	// FIXME: select the right region for specific slru kinds
 	int				region = current_region;
 
-	if (!slru_kind_from_string(slru_kind_str, &kind))
+	if (!slru_kind_from_string(ctl->Dir, &kind))
 	{
-		ereport(WARNING, errmsg("unexpected slru kind \"%s\"", slru_kind_str));
+		ereport(WARNING, errmsg("unexpected slru kind \"%s\"", ctl->Dir));
 		return false;
 	}
 
@@ -1976,7 +1976,7 @@ neon_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *bu
 }
 
 bool
-neon_slru_page_exists(const char* slru_kind_str, int segno, off_t offset)
+neon_slru_page_exists(SlruCtl ctl, int segno, off_t offset)
 {
 	ZenithResponse	*resp;
 	ZenithSlruKind	kind;
@@ -1986,9 +1986,9 @@ neon_slru_page_exists(const char* slru_kind_str, int segno, off_t offset)
 	int				region = current_region;
 	bool			exists = false;
 
-	if (!slru_kind_from_string(slru_kind_str, &kind))
+	if (!slru_kind_from_string(ctl->Dir, &kind))
 	{
-		ereport(ERROR, errmsg("unexpected slru kind \"%s\"", slru_kind_str));
+		ereport(ERROR, errmsg("unexpected slru kind \"%s\"", ctl->Dir));
 		return false;
 	}
 

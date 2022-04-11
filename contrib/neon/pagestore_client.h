@@ -255,8 +255,8 @@ extern void forget_cached_relsize(RelFileNode rnode, ForkNumber forknum);
 /* zenith SLRU functionality */
 extern const char *slru_kind_to_string(ZenithSlruKind kind);
 extern bool slru_kind_from_string(const char* str, ZenithSlruKind* kind);
-extern const char *neon_slru_kind_check(SlruCtl ctl);
-extern bool neon_slru_read_page(const char* slru_kind_str, int segno, off_t offset, char *buffer);
-extern bool neon_slru_page_exists(const char* slru_kind_str, int segno, off_t offset);
+extern bool neon_slru_kind_check(SlruCtl ctl);
+extern bool neon_slru_read_page(SlruCtl ctl, int segno, off_t offset, char *buffer);
+extern bool neon_slru_page_exists(SlruCtl ctl, int segno, off_t offset);
 
 #endif
