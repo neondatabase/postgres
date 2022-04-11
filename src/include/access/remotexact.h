@@ -30,9 +30,13 @@ typedef struct
 	void		(*send_rwset_and_wait) (void);
 } RemoteXactHook;
 
-extern void SetRemoteXactHook(const RemoteXactHook *hook);
-extern const RemoteXactHook *GetRemoteXactHook(void);
+void SetRemoteXactHook(const RemoteXactHook *hook);
 
-extern void AtEOXact_RemoteXact(void);
+void CollectReadTuple(Relation relation, ItemPointer tid, TransactionId tuple_xid);
+void CollectSeqScanRelation(Relation relation);
+void CollectIndexScanPage(Relation relation, BlockNumber blkno);
+void SendRwsetAndWait(void);
+
+void AtEOXact_RemoteXact(void);
 
 #endif							/* REMOTEXACT_H */

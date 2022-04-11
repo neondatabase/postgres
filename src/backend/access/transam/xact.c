@@ -2078,7 +2078,6 @@ CommitTransaction(void)
 	TransactionState s = CurrentTransactionState;
 	TransactionId latestXid;
 	bool		is_parallel_worker;
-	const RemoteXactHook *remote_xact = GetRemoteXactHook();
 
 	is_parallel_worker = (s->blockState == TBLOCK_PARALLEL_INPROGRESS);
 
@@ -2096,7 +2095,7 @@ CommitTransaction(void)
 			 TransStateAsString(s->state));
 	Assert(s->parent == NULL);
 
-	remote_xact->send_rwset_and_wait();
+	SendRwsetAndWait();
 
 	/* Clean up remote xact data */
 	AtEOXact_RemoteXact();
