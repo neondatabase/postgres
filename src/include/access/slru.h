@@ -138,9 +138,9 @@ typedef struct SlruCtlData
 
 typedef SlruCtlData *SlruCtl;
 
-typedef const char *(*slru_kind_check_hook_type) (SlruCtl ctl);
-typedef bool (*slru_page_exists_hook_type) (const char* slru_kind_str, int segno, off_t offset);
-typedef bool (*slru_read_page_hook_type) (const char* slru_kind_str, int segno, off_t offset, char *buffer);
+typedef bool (*slru_kind_check_hook_type) (SlruCtl ctl);
+typedef bool (*slru_page_exists_hook_type) (SlruCtl ctl, int segno, off_t offset);
+typedef bool (*slru_read_page_hook_type) (SlruCtl ctl, int segno, off_t offset, char *buffer);
 extern PGDLLIMPORT slru_kind_check_hook_type slru_kind_check_hook;
 extern PGDLLIMPORT slru_page_exists_hook_type slru_page_exists_hook;
 extern PGDLLIMPORT slru_read_page_hook_type slru_read_page_hook;
