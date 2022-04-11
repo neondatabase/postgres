@@ -18,7 +18,7 @@ OBJS = \
 	generic_xlog.o \
 	multixact.o \
 	parallel.o \
-	remotexact_default.o \
+	remotexact.o \
 	rmgr.o \
 	slru.o \
 	subtrans.o \
