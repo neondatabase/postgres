@@ -9,6 +9,7 @@
 #ifndef REMOTEXACT_H
 #define REMOTEXACT_H
 
+#include "access/xlogdefs.h"
 #include "utils/relcache.h"
 #include "storage/itemptr.h"
 
@@ -20,6 +21,11 @@
 
 /* GUC variable */
 extern int current_region;
+
+typedef XLogRecPtr (*get_region_lsn_hook_type) (int region);
+extern PGDLLIMPORT get_region_lsn_hook_type get_region_lsn_hook;
+
+#define GetRegionLsn(r) (get_region_lsn_hook == NULL ? InvalidXLogRecPtr : (*get_region_lsn_hook)(r))
 
 typedef struct
 {

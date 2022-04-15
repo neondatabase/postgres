@@ -45,7 +45,6 @@ static const f_smgr smgr_md = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
-		.smgr_getregionallsn = NULL,
 };
 
 /*
@@ -709,18 +708,6 @@ smgr_end_unlogged_build(SMgrRelation reln)
 {
 	if ((*reln->smgr).smgr_end_unlogged_build)
 		(*reln->smgr).smgr_end_unlogged_build(reln);
-}
-
-/*
- * Get the LSN snapshot of a region used by current transaction
- */
-XLogRecPtr
-smgr_get_regional_lsn(SMgrRelation reln, int region)
-{
-	if ((*reln->smgr).smgr_getregionallsn)
-		return (*reln->smgr).smgr_getregionallsn(region);
-
-	return InvalidXLogRecPtr;
 }
 
 /*

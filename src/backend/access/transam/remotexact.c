@@ -14,12 +14,13 @@
 /* GUC variable */
 int current_region;
 
+get_region_lsn_hook_type get_region_lsn_hook = NULL;
+
 static const RemoteXactHook *remote_xact_hook = NULL;
 
 void
 SetRemoteXactHook(const RemoteXactHook *hook)
 {
-	Assert(hook != NULL);
 	remote_xact_hook = hook;
 }
 

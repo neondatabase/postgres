@@ -163,7 +163,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 			*/
 			if (IsMultiRegion() && RegionIsRemote(smgr->smgr_region))
 			{
-				XLogRecPtr lsn = smgr_get_regional_lsn(smgr, smgr->smgr_region);
+				XLogRecPtr lsn = GetRegionLsn(smgr->smgr_region);
 				Page page = BufferGetPage(BufferDescriptorGetBuffer(bufHdr));
 
 				if (lsn != PageGetLSN(page))

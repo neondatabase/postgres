@@ -1786,8 +1786,6 @@ static const struct f_smgr zenith_smgr =
 	.smgr_start_unlogged_build = zenith_start_unlogged_build,
 	.smgr_finish_unlogged_build_phase_1 = zenith_finish_unlogged_build_phase_1,
 	.smgr_end_unlogged_build = zenith_end_unlogged_build,
-
-	.smgr_getregionallsn = get_region_lsn,
 };
 
 
