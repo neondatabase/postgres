@@ -61,6 +61,7 @@
 
 char	   *wal_acceptors_list;
 int			wal_acceptor_reconnect_timeout;
+int			wal_acceptor_connect_timeout;
 bool		am_wal_proposer;
 
 char	   *zenith_timeline_walproposer = NULL;
@@ -313,6 +314,8 @@ WalProposerPoll(void)
 		}
 		if (rc == 0) /* timeout expired: poll state */
 		{
+			TimestampTz now;
+
 			/*
 			 * If no WAL was generated during timeout (and we have already
 			 * collected the quorum), then send pool message
@@ -320,6 +323,25 @@ WalProposerPoll(void)
 			if (availableLsn != InvalidXLogRecPtr)
 			{
 				BroadcastAppendRequest();
+			}
+
+			/*
+			 * Abandon connection attempts which take too long.
+			 */
+			now = GetCurrentTimestamp();
+			for (int i = 0; i < n_safekeepers; i++)
+			{
+				Safekeeper  *sk = &safekeeper[i];
+
+				if ((sk->state == SS_CONNECTING_WRITE ||
+				     sk->state == SS_CONNECTING_READ) &&
+					TimestampDifferenceExceeds(sk->startedConnAt, now,
+										   	   wal_acceptor_connect_timeout))
+				{
+					elog(WARNING, "failed to connect to node '%s:%s': exceeded connection timeout %dms",
+						 sk->host, sk->port, wal_acceptor_connect_timeout);
+					ShutdownConnection(sk);
+				}
 			}
 		}
 	}
@@ -622,9 +644,10 @@ ResetConnection(Safekeeper *sk)
 	 * (see libpqrcv_connect, defined in
 	 * src/backend/replication/libpqwalreceiver/libpqwalreceiver.c)
 	 */
-	elog(LOG, "Connecting with node %s:%s", sk->host, sk->port);
+	elog(LOG, "connecting with node %s:%s", sk->host, sk->port);
 
 	sk->state = SS_CONNECTING_WRITE;
+	sk->startedConnAt = GetCurrentTimestamp();
 
 	sock = walprop_socket(sk->conn);
 	sk->eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, sock, NULL, sk);
@@ -803,7 +826,7 @@ HandleConnectionEvent(Safekeeper *sk)
 			break;
 
 		case WP_CONN_POLLING_FAILED:
-			elog(WARNING, "Failed to connect to node '%s:%s': %s",
+			elog(WARNING, "failed to connect to node '%s:%s': %s",
 					sk->host, sk->port, walprop_error_message(sk->conn));
 
 			/*
