@@ -27,6 +27,7 @@
 
 extern char* wal_acceptors_list;
 extern int   wal_acceptor_reconnect_timeout;
+extern int   wal_acceptor_connect_timeout;
 extern bool  am_wal_proposer;
 
 struct WalProposerConn; /* Defined in libpqwalproposer */
@@ -346,6 +347,7 @@ typedef struct Safekeeper
 
 	int                 eventPos;       /* position in wait event set. Equal to -1 if no event */
 	SafekeeperState     state;          /* safekeeper state machine state */
+	TimestampTz         startedConnAt;  /* when connection attempt started */
 	AcceptorGreeting    greetResponse;  /* acceptor greeting */
 	VoteResponse        voteResponse;   /* the vote */
 	AppendResponse      appendResponse; /* feedback for master */
