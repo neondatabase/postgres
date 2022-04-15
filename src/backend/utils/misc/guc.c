@@ -2322,6 +2322,17 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"wal_acceptor_connect_timeout", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Timeout after which give up connection attempt to safekeeper."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_acceptor_connect_timeout,
+		5000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"max_connections", PGC_POSTMASTER, CONN_AUTH_SETTINGS,
 			gettext_noop("Sets the maximum number of concurrent connections."),
 			NULL
