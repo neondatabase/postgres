@@ -4673,8 +4673,8 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"wal_acceptors", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("List of Zenith WAL acceptors (host:port)"),
+		{"safekeepers", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("List of Neon WAL acceptors (host:port)"),
 			NULL,
 			GUC_LIST_INPUT | GUC_LIST_QUOTE
 		},
