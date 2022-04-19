@@ -13,25 +13,31 @@
  */
 #include "postgres.h"
 #include "storage/block.h"
+#include "storage/buf_internals.h"
 #include "storage/relfilenode.h"
 #include "pagestore_client.h"
-#include "utils/hsearch.h"
 #include "access/xlog.h"
 
-typedef struct
-{
-	RelFileNode node;
-	ForkNumber	forknum;
-	BlockNumber blkno;
-}			WrNodeKey;
+#define MAX_PAGES 128
 
-typedef struct
-{
-	WrNodeKey	tag;
-	char		data[BLCKSZ];
-}			WrNode;
+static BufferTag page_tag[MAX_PAGES];
+static char page_body[MAX_PAGES][BLCKSZ];
+static int used_pages;
 
-HTAB	   *inmem_files;
+static int
+locate_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno)
+{
+	for (int i = 0;  i < used_pages; i++)
+	{
+		if (RelFileNodeEquals(reln->smgr_rnode.node, page_tag[i].rnode)
+			&& forknum == page_tag[i].forkNum
+			&& blkno == page_tag[i].blockNum)
+		{
+			return i;
+		}
+	}
+	return -1;
+}
 
 /*
  *	inmem_init() -- Initialize private state
@@ -39,21 +45,7 @@ HTAB	   *inmem_files;
 void
 inmem_init(void)
 {
-	HASHCTL		hashCtl;
-
-	if (inmem_files && hash_get_num_entries(inmem_files) == 0)
-		return;
-
-	hashCtl.keysize = sizeof(WrNodeKey);
-	hashCtl.entrysize = sizeof(WrNode);
-
-	if (inmem_files)
-		hash_destroy(inmem_files);
-
-	inmem_files = hash_create("wal-redo files map",
-							  1024,
-							  &hashCtl,
-							  HASH_ELEM | HASH_BLOBS);
+	used_pages = 0;
 }
 
 /*
@@ -62,15 +54,15 @@ inmem_init(void)
 bool
 inmem_exists(SMgrRelation reln, ForkNumber forknum)
 {
-	WrNodeKey	key;
-
-	key.node = reln->smgr_rnode.node;
-	key.forknum = forknum;
-	key.blkno = 0;
-	return hash_search(inmem_files,
-					   &key,
-					   HASH_FIND,
-					   NULL) != NULL;
+	for (int i = 0;  i < used_pages; i++)
+	{
+		if (RelFileNodeEquals(reln->smgr_rnode.node, page_tag[i].rnode)
+			&& forknum == page_tag[i].forkNum)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 /*
@@ -119,17 +111,15 @@ void
 inmem_extend(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 			 char *buffer, bool skipFsync)
 {
-	WrNodeKey	key;
-	WrNode	   *node;
-
-	key.node = reln->smgr_rnode.node;
-	key.forknum = forknum;
-	key.blkno = blkno;
-	node = hash_search(inmem_files,
-					   &key,
-					   HASH_ENTER,
-					   NULL);
-	memcpy(node->data, buffer, BLCKSZ);
+	int pg = locate_page(reln, forknum, blkno);
+	if (pg < 0) {
+		pg = used_pages++;
+		if (pg >= MAX_PAGES) {
+			elog(PANIC, "Inmem storage overflow");
+		}
+		INIT_BUFFERTAG(page_tag[pg], reln->smgr_rnode.node, forknum, blkno);
+	}
+	memcpy(page_body[pg], buffer, BLCKSZ);
 }
 
 /*
@@ -176,20 +166,12 @@ void
 inmem_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blkno,
 		   char *buffer)
 {
-	WrNodeKey	key;
-	WrNode	   *node;
-
-	key.node = reln->smgr_rnode.node;
-	key.forknum = forknum;
-	key.blkno = blkno;
-	node = hash_search(inmem_files,
-					   &key,
-					   HASH_FIND,
-					   NULL);
-	if (node != NULL)
-		memcpy(buffer, node->data, BLCKSZ);
-	else
+	int pg = locate_page(reln, forknum, blkno);
+	if (pg < 0) {
 		memset(buffer, 0, BLCKSZ);
+	} else {
+		memcpy(buffer, page_body[pg], BLCKSZ);
+	}
 }
 
 /*
@@ -203,17 +185,15 @@ void
 inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 			char *buffer, bool skipFsync)
 {
-	WrNodeKey	key;
-	WrNode	   *node;
-
-	key.node = reln->smgr_rnode.node;
-	key.forknum = forknum;
-	key.blkno = blocknum;
-	node = hash_search(inmem_files,
-					   &key,
-					   HASH_ENTER,
-					   NULL);
-	memcpy(node->data, buffer, BLCKSZ);
+	int pg = locate_page(reln, forknum, blocknum);
+	if (pg < 0) {
+		pg = used_pages++;
+		if (pg >= MAX_PAGES) {
+			elog(PANIC, "Inmem storage overflow");
+		}
+		INIT_BUFFERTAG(page_tag[pg], reln->smgr_rnode.node, forknum, blocknum);
+	}
+	memcpy(page_body[pg], buffer, BLCKSZ);
 }
 
 /*
@@ -222,23 +202,19 @@ inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 BlockNumber
 inmem_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
-	WrNodeKey	key;
-	WrNode	   *node;
-
-	key.node = reln->smgr_rnode.node;
-	key.forknum = forknum;
-	key.blkno = 0;
-
-	while (true)
+	int nblocks = 0;
+	for (int i = 0;  i < used_pages; i++)
 	{
-		node = hash_search(inmem_files,
-						   &key,
-						   HASH_FIND,
-						   NULL);
-		if (node == NULL)
-			return key.blkno;
-		key.blkno += 1;
+		if (RelFileNodeEquals(reln->smgr_rnode.node, page_tag[i].rnode)
+			&& forknum == page_tag[i].forkNum)
+		{
+			if (page_tag[i].blockNum >= nblocks)
+			{
+				nblocks = page_tag[i].blockNum + 1;
+			}
+		}
 	}
+	return nblocks;
 }
 
 /*

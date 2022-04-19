@@ -176,6 +176,12 @@ WalRedoMain(int argc, char *argv[],
 	 */
 	InitializeGUCOptions();
 
+	/* WAL REDO postgres do no need larger number of buffers.
+	 * And speed of DropRelFileNodeAllLocalBuffers()is proportional to number of buffers.
+	 * So let's keep it small enough (defaut value is 1024)
+	 */
+	num_temp_buffers = 4;
+
 	/*
 	 * Parse command-line options.
 	 * TODO
