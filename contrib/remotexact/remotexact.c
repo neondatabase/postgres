@@ -21,31 +21,33 @@ void		_PG_init(void);
 /* GUCs */
 char	   *remotexact_connstring;
 
-typedef struct RWSetCollectionBufferRelationKey
+typedef struct ReadSetRelationKey
 {
 	Oid			relid;
-} RWSetCollectionBufferRelationKey;
+} ReadSetRelationKey;
 
-typedef struct RWSetCollectionBufferRelation
+typedef struct ReadSetRelation
 {
-	RWSetCollectionBufferRelationKey key;
+	ReadSetRelationKey key;
 
 	bool		is_index;
 	int			csn;
 	int			nitems;
-	StringInfoData pages;
-	StringInfoData tuples;
-} RWSetCollectionBufferRelation;
+
+	StringInfoData read_pages;
+	StringInfoData read_tuples;
+} ReadSetRelation;
 
 typedef struct RWSetCollectionBuffer
 {
 	MemoryContext context;
 
 	RWSetHeader header;
-	HTAB	   *readRelations;
+	HTAB	   *read_relations;
 } RWSetCollectionBuffer;
 
-RWSetCollectionBuffer *CurrentRWSetCollectionBuffer = NULL;
+static RWSetCollectionBuffer *rwset_collection_buffer = NULL;
+
 PGconn	   *XactServerConn;
 bool		Connected = false;
 
@@ -57,7 +59,7 @@ static void rx_collect_index_scan_page(Relation relation, BlockNumber blkno);
 static void rx_clear_rwset_collection_buffer(void);
 static void rx_send_rwset_and_wait(void);
 
-static RWSetCollectionBufferRelation *get_read_relation(Oid relid);
+static ReadSetRelation *get_read_relation(Oid relid);
 static bool connect_to_txn_server(void);
 
 static void
@@ -66,23 +68,23 @@ init_rwset_collection_buffer(void)
 	MemoryContext old_context;
 	HASHCTL		hash_ctl;
 
-	Assert(!CurrentRWSetCollectionBuffer);
+	Assert(!rwset_collection_buffer);
 
 	old_context = MemoryContextSwitchTo(TopTransactionContext);
 
-	CurrentRWSetCollectionBuffer = (RWSetCollectionBuffer *) palloc(sizeof(RWSetCollectionBuffer));
-	CurrentRWSetCollectionBuffer->context = TopTransactionContext;
+	rwset_collection_buffer = (RWSetCollectionBuffer *) palloc(sizeof(RWSetCollectionBuffer));
+	rwset_collection_buffer->context = TopTransactionContext;
 
-	CurrentRWSetCollectionBuffer->header.dbid = 0;
-	CurrentRWSetCollectionBuffer->header.xid = InvalidTransactionId;
+	rwset_collection_buffer->header.dbid = 0;
+	rwset_collection_buffer->header.xid = InvalidTransactionId;
 
-	hash_ctl.hcxt = CurrentRWSetCollectionBuffer->context;
-	hash_ctl.keysize = sizeof(RWSetCollectionBufferRelationKey);
-	hash_ctl.entrysize = sizeof(RWSetCollectionBufferRelation);
-	CurrentRWSetCollectionBuffer->readRelations = hash_create("read relations",
-														max_predicate_locks_per_xact,
-														&hash_ctl,
-														HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	hash_ctl.hcxt = rwset_collection_buffer->context;
+	hash_ctl.keysize = sizeof(ReadSetRelationKey);
+	hash_ctl.entrysize = sizeof(ReadSetRelation);
+	rwset_collection_buffer->read_relations = hash_create("read relations",
+															   max_predicate_locks_per_xact,
+															   &hash_ctl,
+															   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
 	MemoryContextSwitchTo(old_context);
 }
@@ -90,7 +92,7 @@ init_rwset_collection_buffer(void)
 static void
 rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xid)
 {
-	RWSetCollectionBufferRelation *read_relation;
+	ReadSetRelation *read_relation;
 	StringInfo	buf = NULL;
 
 	/*
@@ -105,17 +107,17 @@ rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xi
 	if (relation->rd_index != NULL || TransactionIdIsCurrentTransactionId(tuple_xid))
 		return;
 
-	if (CurrentRWSetCollectionBuffer == NULL)
+	if (rwset_collection_buffer == NULL)
 		init_rwset_collection_buffer();
 
 	/* TODO(ctring): can dbid change across statements? */
-	CurrentRWSetCollectionBuffer->header.dbid = relation->rd_node.dbNode;
+	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = false;
 	read_relation->nitems++;
 
-	buf = &read_relation->tuples;
+	buf = &read_relation->read_tuples;
 	pq_sendint32(buf, ItemPointerGetBlockNumber(tid));
 	pq_sendint16(buf, ItemPointerGetOffsetNumber(tid));
 }
@@ -123,12 +125,12 @@ rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xi
 static void
 rx_collect_seq_scan_relation(Relation relation)
 {
-	RWSetCollectionBufferRelation *read_relation;
+	ReadSetRelation *read_relation;
 
-	if (CurrentRWSetCollectionBuffer == NULL)
+	if (rwset_collection_buffer == NULL)
 		init_rwset_collection_buffer();
 
-	CurrentRWSetCollectionBuffer->header.dbid = relation->rd_node.dbNode;
+	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = false;
@@ -140,19 +142,19 @@ rx_collect_seq_scan_relation(Relation relation)
 static void
 rx_collect_index_scan_page(Relation relation, BlockNumber blkno)
 {
-	RWSetCollectionBufferRelation *read_relation;
+	ReadSetRelation *read_relation;
 	StringInfo	buf = NULL;
 
-	if (CurrentRWSetCollectionBuffer == NULL)
+	if (rwset_collection_buffer == NULL)
 		init_rwset_collection_buffer();
 
-	CurrentRWSetCollectionBuffer->header.dbid = relation->rd_node.dbNode;
+	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = true;
 	read_relation->nitems++;
 
-	buf = &read_relation->pages;
+	buf = &read_relation->read_pages;
 	pq_sendint32(buf, blkno);
 	pq_sendint32(buf, 1);		/* TODO(ctring): change this after CSN is
 								 * introduced */
@@ -161,7 +163,7 @@ rx_collect_index_scan_page(Relation relation, BlockNumber blkno)
 static void
 rx_clear_rwset_collection_buffer(void)
 {
-	CurrentRWSetCollectionBuffer = NULL;
+	rwset_collection_buffer = NULL;
 }
 
 static void
@@ -169,12 +171,12 @@ rx_send_rwset_and_wait(void)
 {
 	RWSet	   *rwset;
 	RWSetHeader *header;
-	RWSetCollectionBufferRelation *read_relation;
+	ReadSetRelation *read_relation;
 	HASH_SEQ_STATUS status;
 	int			read_len = 0;
 	StringInfoData buf;
 
-	if (CurrentRWSetCollectionBuffer == NULL)
+	if (rwset_collection_buffer == NULL)
 		return;
 
 	if (!connect_to_txn_server())
@@ -183,7 +185,7 @@ rx_send_rwset_and_wait(void)
 	initStringInfo(&buf);
 
 	/* Assemble the header */
-	header = &CurrentRWSetCollectionBuffer->header;
+	header = &rwset_collection_buffer->header;
 	pq_sendint32(&buf, header->dbid);
 	pq_sendint32(&buf, header->xid);
 
@@ -193,11 +195,12 @@ rx_send_rwset_and_wait(void)
 	pq_sendint32(&buf, 0);
 
 	/* Assemble the read set */
-	hash_seq_init(&status, CurrentRWSetCollectionBuffer->readRelations);
-	while ((read_relation = (RWSetCollectionBufferRelation *) hash_seq_search(&status)) != NULL)
+	hash_seq_init(&status, rwset_collection_buffer->read_relations);
+	while ((read_relation = (ReadSetRelation *) hash_seq_search(&status)) != NULL)
 	{
 		StringInfo	items = NULL;
 
+		/* Accumulate the length of the buffer used by each relation */
 		read_len -= buf.len;
 
 		if (read_relation->is_index)
@@ -205,7 +208,7 @@ rx_send_rwset_and_wait(void)
 			pq_sendbyte(&buf, 'I');
 			pq_sendint32(&buf, read_relation->key.relid);
 			pq_sendint32(&buf, read_relation->nitems);
-			items = &read_relation->pages;
+			items = &read_relation->read_pages;
 		}
 		else
 		{
@@ -213,7 +216,7 @@ rx_send_rwset_and_wait(void)
 			pq_sendint32(&buf, read_relation->key.relid);
 			pq_sendint32(&buf, read_relation->nitems);
 			pq_sendint32(&buf, read_relation->csn);
-			items = &read_relation->tuples;
+			items = &read_relation->read_tuples;
 		}
 
 		pq_sendbytes(&buf, items->data, items->len);
@@ -230,7 +233,7 @@ rx_send_rwset_and_wait(void)
 		ereport(WARNING, errmsg("[remotexact] failed to send read/write set"));
 	}
 
-	/* TODO(ctring): remove this after the remote worker is implemented */
+	/* TODO(ctring): This code is for debugging rwset remove all after the remote worker is implemented */
 	rwset = RWSetAllocate();
 	buf.cursor = 0;
 	RWSetDecode(rwset, &buf);
@@ -238,30 +241,30 @@ rx_send_rwset_and_wait(void)
 	RWSetFree(rwset);
 }
 
-static RWSetCollectionBufferRelation *
+static ReadSetRelation *
 get_read_relation(Oid relid)
 {
-	RWSetCollectionBufferRelationKey key;
-	RWSetCollectionBufferRelation *relation;
+	ReadSetRelationKey key;
+	ReadSetRelation *relation;
 	bool		found;
 	MemoryContext old_context;
 
-	Assert(CurrentRWSetCollectionBuffer);
+	Assert(rwset_collection_buffer);
 
 	key.relid = relid;
 
-	relation = (RWSetCollectionBufferRelation *) hash_search(CurrentRWSetCollectionBuffer->readRelations,
-													   &key, HASH_ENTER, &found);
+	relation = (ReadSetRelation *) hash_search(rwset_collection_buffer->read_relations,
+											   &key, HASH_ENTER, &found);
 	/* Initialize a new relation entry if not found */
 	if (!found)
 	{
-		old_context = MemoryContextSwitchTo(CurrentRWSetCollectionBuffer->context);
+		old_context = MemoryContextSwitchTo(rwset_collection_buffer->context);
 
 		relation->nitems = 0;
 		relation->csn = 0;
 		relation->is_index = false;
-		initStringInfo(&relation->pages);
-		initStringInfo(&relation->tuples);
+		initStringInfo(&relation->read_pages);
+		initStringInfo(&relation->read_tuples);
 
 		MemoryContextSwitchTo(old_context);
 	}
