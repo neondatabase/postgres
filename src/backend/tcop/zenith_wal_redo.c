@@ -99,8 +99,9 @@ static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
 
-bool am_wal_redo_postgres;
-static XLogReaderState* reader_state;
+bool		am_wal_redo_postgres;
+
+static XLogReaderState *reader_state;
 
 #define TRACE DEBUG5
 
@@ -176,9 +177,10 @@ WalRedoMain(int argc, char *argv[],
 	 */
 	InitializeGUCOptions();
 
-	/* WAL REDO postgres do no need larger number of buffers.
-	 * And speed of DropRelFileNodeAllLocalBuffers()is proportional to number of buffers.
-	 * So let's keep it small enough (defaut value is 1024)
+	/*
+	 * WAL redo does not need a large number of buffers. And speed of
+	 * DropRelFileNodeAllLocalBuffers() is proportional to the number of
+	 * buffers. So let's keep it small (default value is 1024)
 	 */
 	num_temp_buffers = 4;
 
@@ -329,10 +331,7 @@ WalRedoMain(int argc, char *argv[],
 
 	for (;;)
 	{
-		/*
-		 * Release storage left over from prior query cycle, and create a new
-		 * query input buffer in the cleared MessageContext.
-		 */
+		/* Release memory left over from prior query cycle. */
 		resetStringInfo(&input_message);
 
 		set_ps_display("idle");
@@ -604,6 +603,7 @@ ApplyRecord(StringInfo input_message)
 	redo_read_buffer_filter = redo_block_filter;
 
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
+
 	redo_read_buffer_filter = NULL;
 
 	elog(TRACE, "applied WAL record with LSN %X/%X",
@@ -684,7 +684,7 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropRelFileNodeAllLocalBuffers(rnode);
-	smgrinit(); //reset inmem smgr state
+	smgrinit();					/* reset inmem smgr state */
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }
