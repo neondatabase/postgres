@@ -810,7 +810,6 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 							 mode, strategy, &hit);
 }
 
-
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
  *
@@ -825,7 +824,11 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	Block		bufBlock;
 	bool		found;
 	bool		isExtend;
-	bool		isLocalBuf = SmgrIsTemp(smgr);
+	/*
+	 * wal_redo postgres is working in single user mode, we do not need to synchronize access to shared buffer, 
+	 * so let's use local buffers instead
+	 */
+	bool		isLocalBuf = SmgrIsTemp(smgr) || am_wal_redo_postgres;
 
 	*hit = false;
 
