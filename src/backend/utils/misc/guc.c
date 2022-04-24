@@ -235,6 +235,7 @@ static bool check_recovery_target_name(char **newval, void **extra, GucSource so
 static void assign_recovery_target_name(const char *newval, void *extra);
 static bool check_recovery_target_lsn(char **newval, void **extra, GucSource source);
 static void assign_recovery_target_lsn(const char *newval, void *extra);
+static void assign_snapshot_lsn(const char *newval, void *extra);
 static bool check_primary_slot_name(char **newval, void **extra, GucSource source);
 static bool check_default_with_oids(bool *newval, void **extra, GucSource source);
 
@@ -661,6 +662,7 @@ static char *recovery_target_string;
 static char *recovery_target_xid_string;
 static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
+static char *snapshot_lsn_string;
 
 
 /* should be static, but commands/variable.c needs to get at this */
@@ -3983,6 +3985,15 @@ static struct config_string ConfigureNamesString[] =
 		&recovery_target_lsn_string,
 		"",
 		check_recovery_target_lsn, assign_recovery_target_lsn, NULL
+	},
+	{
+		{"snapshot_lsn", PGC_BACKEND, WAL_SETTINGS,
+			gettext_noop("Sets the read-only snapshot LSN."),
+			NULL
+		},
+		&snapshot_lsn_string,
+		"",
+		check_recovery_target_lsn, assign_snapshot_lsn, NULL
 	},
 
 	{
@@ -12576,6 +12587,17 @@ assign_recovery_target_lsn(const char *newval, void *extra)
 	}
 	else
 		recoveryTarget = RECOVERY_TARGET_UNSET;
+}
+
+static void
+assign_snapshot_lsn(const char *newval, void *extra)
+{
+	if (newval && strcmp(newval, "") != 0)
+	{
+		MySnapshotLsn = *((XLogRecPtr *) extra);
+	}
+	else
+		MySnapshotLsn = InvalidXLogRecPtr;
 }
 
 static bool

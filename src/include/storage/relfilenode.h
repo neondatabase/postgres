@@ -76,7 +76,7 @@ typedef struct RelFileNodeBackend
 } RelFileNodeBackend;
 
 #define RelFileNodeBackendIsTemp(rnode) \
-	((rnode).backend != InvalidBackendId)
+	((rnode).backend != InvalidBackendId || !XLogRecPtrIsInvalid(MySnapshotLsn))
 
 /*
  * Note: RelFileNodeEquals and RelFileNodeBackendEquals compare relNode first

@@ -567,6 +567,11 @@ zenith_get_request_lsn(bool *latest)
 		elog(DEBUG1, "zenith_get_request_lsn GetXLogReplayRecPtr %X/%X request lsn 0 ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 	}
+	else if (!XLogRecPtrIsInvalid(MySnapshotLsn))
+	{
+		lsn = MySnapshotLsn;
+		*latest = false;
+	}
 	else if (am_walsender)
 	{
 		*latest = true;

@@ -113,6 +113,8 @@ int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
 uint64      predefined_sysidentifier;
 
+XLogRecPtr  MySnapshotLsn;
+
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
 #endif
