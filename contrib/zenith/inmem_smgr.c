@@ -21,12 +21,12 @@
  */
 #include "postgres.h"
 
+#include "access/xlog.h"
 #include "pagestore_client.h"
 #include "storage/block.h"
 #include "storage/buf_internals.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
-#include "access/xlog.h"
 
 #define MAX_PAGES 128
 
