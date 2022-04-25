@@ -26,6 +26,7 @@
 #include "storage/buf_internals.h"
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
+#include "access/xlog.h"
 
 #define MAX_PAGES 128
 
