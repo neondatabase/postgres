@@ -21,6 +21,7 @@
  */
 #include "postgres.h"
 
+#include "access/xlog.h"
 #include "pagestore_client.h"
 #include "storage/block.h"
 #include "storage/buf_internals.h"
