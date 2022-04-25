@@ -169,10 +169,9 @@ pageserver_call(ZenithRequest *request)
 	StringInfoData resp_buff;
 	ZenithResponse *resp;
 
-	// This doesn't seem to cause any problem now. But if this assert
-	// is triggered, it seems we can set the region to current_region
-	// as a last resort.
-	Assert(request->region != UNKNOWN_REGION);
+	/* Fallback to the current region if the request region is unknown */
+	if (request->region == UNKNOWN_REGION)
+		request->region = current_region;
 
 	PG_TRY();
 	{
