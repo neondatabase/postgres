@@ -194,7 +194,11 @@ smgropen(RelFileNode rnode, BackendId backend, char relpersistence)
 		if (reln->smgr_relpersistence == 0)
 			reln->smgr_relpersistence = relpersistence;
 		else
-			Assert(relpersistence == 0 || reln->smgr_relpersistence == relpersistence);
+		{
+			if (!(relpersistence == 0 || reln->smgr_relpersistence == relpersistence))
+				elog(ERROR, "relpersistence mismatch: smgropen %c vs SmgrRelation %c",
+					 relpersistence, reln->smgr_relpersistence);
+		}
 	}
 
 	return reln;
