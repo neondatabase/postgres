@@ -77,6 +77,8 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/csn_snapshot.h"
+#include "access/csn_log.h"
 #include "access/htup_details.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
@@ -1549,7 +1551,31 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 									   hdr->nabortrels, abortrels,
 									   gid);
 
+	/*
+	 * CSNSnapshot callbacks that should be called right before we are
+	 * going to become visible. Details in comments to this functions.
+	 */
+	if (!isCommit)
+		CSNSnapshotAbort(proc, xid, hdr->nsubxacts, children);
+
+
 	ProcArrayRemove(proc, latestXid);
+
+	/*
+	 * Stamp our transaction with XidCSN in CSNLog.
+	 * Should be called after ProcArrayEndTransaction, but before releasing
+	 * transaction locks, since TransactionIdGetXidCSN relies on
+	 * XactLockTableWait to await xid_csn.
+	 */
+	if (isCommit)
+	{
+		CSNSnapshotCommit(proc, xid, hdr->nsubxacts, children);
+	}
+	else
+	{
+		Assert(XidCSNIsInProgress(
+				   pg_atomic_read_u64(&proc->assignedXidCsn)));
+	}
 
 	/*
 	 * In case we fail while running the callbacks, mark the gxact invalid so
@@ -2337,6 +2363,13 @@ RecordTransactionCommitPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr, true);
+
+	/*
+	 * Mark our transaction as InDoubt in CsnLog and get ready for
+	 * commit. Assign the LSN of the last WAL record as the CSN.
+	 */
+	CSNSnapshotPrecommit(MyProc, xid, nchildren, children);
+	SetAssignedCSN(MyProc, (SnapshotCSN)recptr, false);
 }
 
 /*

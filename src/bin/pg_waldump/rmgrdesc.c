@@ -31,6 +31,7 @@
 #include "rmgrdesc.h"
 #include "storage/standbydefs.h"
 #include "utils/relmapper.h"
+#include "access/csn_log.h"
 
 #define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask) \
 	{ name, desc, identify},

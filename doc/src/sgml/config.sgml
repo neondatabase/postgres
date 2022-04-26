@@ -9655,8 +9655,56 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
      </varlistentry>
 
      </variablelist>
-   </sect1>
 
+    <sect2 id="runtime-config-CSN-base-snapshot">
+     <title>CSN Based Snapshot</title>
+
+      <para>
+       By default, The snapshots in <productname>PostgreSQL</productname> uses the
+       XID (TransactionID) to identify the status of the transaction, the in-progress
+       transactions, and the future transactions for all its visibility calculations.
+      </para>
+
+      <para>
+       <productname>PostgreSQL</productname> also provides the CSN (commit-sequence-number)
+        based mechanism to identify the past-transactions and the ones that are yet to
+        be started/committed.
+      </para>
+
+     <variablelist>
+      <varlistentry id="guc-enable-csn-snapshot" xreflabel="enable_csn_snapshot">
+       <term><varname>enable_csn_snapshot</varname> (<type>boolean</type>)
+        <indexterm>
+         <primary><varname>enable_csn_snapshot</varname> configuration parameter</primary>
+        </indexterm>
+       </term>
+       <listitem>
+
+        <para>
+        Enable/disable the CSN based transaction visibility tracking for the snapshot.
+        </para>
+
+        <para>
+        <productname>PostgreSQL</productname> uses the clock timestamp as a CSN,
+        so enabling the CSN based snapshots can be useful for implementing the global
+        snapshots and global transaction visibility.
+        </para>
+
+        <para>
+         when enabled <productname>PostgreSQL</productname> creates
+         <filename>pg_csn</filename> directory under <envar>PGDATA</envar> to keep
+         the track of CSN and XID mappings.
+        </para>
+
+        <para>
+         The default value is off.
+        </para>
+       </listitem>
+      </varlistentry>
+
+     </variablelist>
+    </sect2>
+   </sect1>
    <sect1 id="runtime-config-compatible">
     <title>Version and Platform Compatibility</title>
 

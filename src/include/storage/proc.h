@@ -15,8 +15,10 @@
 #define _PROC_H_
 
 #include "access/clog.h"
+#include "access/csn_snapshot.h"
 #include "access/xlogdefs.h"
 #include "lib/ilist.h"
+#include "utils/snapshot.h"
 #include "storage/latch.h"
 #include "storage/lock.h"
 #include "storage/pg_sema.h"
@@ -265,6 +267,16 @@ struct PGPROC
 	PGPROC	   *lockGroupLeader;	/* lock group leader, if I'm a member */
 	dlist_head	lockGroupMembers;	/* list of members, if I'm a leader */
 	dlist_node	lockGroupLink;	/* my member link, if I'm a member */
+
+	/*
+	 * assignedXidCsn holds XidCSN for this transaction.  It is generated
+	 * under a ProcArray lock and later is writter to a CSNLog.  This
+	 * variable defined as atomic only for case of group commit, in all other
+	 * scenarios only backend responsible for this proc entry is working with
+	 * this variable.
+	 */
+	CSN_atomic assignedXidCsn;
+
 };
 
 /* NOTE: "typedef struct PGPROC PGPROC" appears in storage/lock.h. */
