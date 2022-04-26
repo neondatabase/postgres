@@ -665,6 +665,14 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 	}
 
 	/*
+	 * Can a WAL redo function ever access a relation other than the one that
+	 * it modifies? I don't see why it would.
+	 */
+	if (!RelFileNodeEquals(target_tag.rnode, target_redo_tag.rnode))
+		elog(WARNING, "REDO accessing unexpected page: %u/%u/%u.%u blk %u",
+			 target_tag.rnode.spcNode, target_tag.rnode.dbNode, target_tag.rnode.relNode, target_tag.forkNum, target_tag.blockNum);
+
+	/*
 	 * If this block isn't one we are currently restoring, then return 'true'
 	 * so that this gets ignored
 	 */
