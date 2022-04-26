@@ -104,6 +104,7 @@ select name, setting from pg_settings where name like 'enable%';
 --------------------------------+---------
  enable_async_append            | on
  enable_bitmapscan              | on
+ enable_csn_snapshot            | off
  enable_gathermerge             | on
  enable_hashagg                 | on
  enable_hashjoin                | on

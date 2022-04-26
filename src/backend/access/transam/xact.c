@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "access/commit_ts.h"
+#include "access/csn_snapshot.h"
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/remotexact.h"
@@ -1238,6 +1239,7 @@ RecordTransactionCommit(void)
 	SharedInvalidationMessage *invalMessages = NULL;
 	bool		RelcacheInitFileInval = false;
 	bool		wrote_xlog;
+	SnapshotCSN csn;
 
 	/*
 	 * Log pending invalidations for logical decoding of in-progress
@@ -1461,8 +1463,21 @@ RecordTransactionCommit(void)
 	/* remember end of last commit record */
 	XactLastCommitEnd = XactLastRecEnd;
 
+	/* The LSN of the commit record also serves as the CSN for the Xaction.  */
+	csn = (SnapshotCSN)XactLastRecEnd;
+
 	/* Reset XactLastRecEnd until the next transaction writes something */
 	XactLastRecEnd = 0;
+
+	/*
+	 * Mark our transaction as InDoubt in CsnLog and get ready for
+	 * commit. Assign the LSN of the last WAL record as the CSN.
+	 */
+	if (markXidCommitted) {
+		CSNSnapshotPrecommit(MyProc, xid, nchildren, children);
+		SetAssignedCSN(MyProc, csn, false);
+	}
+
 cleanup:
 	/* Clean up local data */
 	if (rels)
@@ -1723,6 +1738,11 @@ RecordTransactionAbort(bool isSubXact)
 	 * we'd be assumed to have aborted anyway.
 	 */
 	TransactionIdAbortTree(xid, nchildren, children);
+
+	/*
+	 * Mark our transaction as Aborted in CsnLog.
+	 */
+	CSNSnapshotAbort(MyProc, xid, nchildren, children);
 
 	END_CRIT_SECTION();
 
@@ -2218,6 +2238,21 @@ CommitTransaction(void)
 	 * RecordTransactionCommit.
 	 */
 	ProcArrayEndTransaction(MyProc, latestXid);
+
+	/*
+	 * Stamp our transaction with XidCSN in CsnLog.
+	 * Should be called after ProcArrayEndTransaction, but before releasing
+	 * transaction locks.
+	 */
+	if (!is_parallel_worker)
+	{
+		TransactionId  xid = GetTopTransactionIdIfAny();
+		TransactionId *subxids;
+		int			   nsubxids;
+
+		nsubxids = xactGetCommittedChildren(&subxids);
+		CSNSnapshotCommit(MyProc, xid, nsubxids, subxids);
+	}
 
 	/*
 	 * This is all post-commit cleanup.  Note that if an error is raised here,

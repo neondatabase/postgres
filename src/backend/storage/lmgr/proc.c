@@ -37,6 +37,7 @@
 
 #include "access/transam.h"
 #include "access/twophase.h"
+#include "access/csn_snapshot.h"
 #include "access/xact.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -439,6 +440,8 @@ InitProcess(void)
 	MyProc->clogGroupMemberPage = -1;
 	MyProc->clogGroupMemberLsn = InvalidXLogRecPtr;
 	Assert(pg_atomic_read_u32(&MyProc->clogGroupNext) == INVALID_PGPROCNO);
+
+	pg_atomic_init_u64(&MyProc->assignedXidCsn, InProgressXidCSN);
 
 	/*
 	 * Acquire ownership of the PGPROC's latch, so that we can use WaitLatch

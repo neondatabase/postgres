@@ -53,4 +53,5 @@ XactTruncationLock					44
 # 45 was XactTruncationLock until removal of BackendRandomLock
 WrapLimitsVacuumLock				46
 NotifyQueueTailLock					47
-LastWrittenLsnLock					48
+CSNLogControlLock				    48
+LastWrittenLsnLock					49

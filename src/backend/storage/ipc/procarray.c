@@ -48,6 +48,8 @@
 #include <signal.h>
 
 #include "access/clog.h"
+#include "access/csn_log.h"
+#include "access/csn_snapshot.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "access/twophase.h"
@@ -1227,6 +1229,7 @@ ProcArrayApplyRecoveryInfo(RunningTransactions running)
 	while (TransactionIdPrecedes(latestObservedXid, running->nextXid))
 	{
 		ExtendSUBTRANS(latestObservedXid);
+		ExtendCSNLog(latestObservedXid);
 		TransactionIdAdvance(latestObservedXid);
 	}
 	TransactionIdRetreat(latestObservedXid);	/* = running->nextXid - 1 */
@@ -2213,6 +2216,7 @@ GetSnapshotData(Snapshot snapshot)
 	int			count = 0;
 	int			subcount = 0;
 	bool		suboverflowed = false;
+	XidCSN	xid_csn = FrozenXidCSN;
 	FullTransactionId latest_completed;
 	TransactionId oldestxid;
 	int			mypgxactoff;
@@ -2445,6 +2449,13 @@ GetSnapshotData(Snapshot snapshot)
 	if (!TransactionIdIsValid(MyProc->xmin))
 		MyProc->xmin = TransactionXmin = xmin;
 
+	/*
+	 * Take XidCSN under ProcArrayLock so the snapshot stays
+	 * synchronized.
+	 */
+	if (!snapshot->takenDuringRecovery && get_csnlog_status())
+		xid_csn = GetLastAssignedCSN(false);
+
 	LWLockRelease(ProcArrayLock);
 
 	/* maintain state for GlobalVis* */
@@ -2552,6 +2563,7 @@ GetSnapshotData(Snapshot snapshot)
 	snapshot->copied = false;
 
 	GetSnapshotDataInitOldSnapshot(snapshot);
+	snapshot->snapshot_csn = xid_csn;
 
 	return snapshot;
 }
@@ -4451,6 +4463,7 @@ RecordKnownAssignedTransactionIds(TransactionId xid)
 		while (TransactionIdPrecedes(next_expected_xid, xid))
 		{
 			TransactionIdAdvance(next_expected_xid);
+			ExtendCSNLog(next_expected_xid);
 			ExtendSUBTRANS(next_expected_xid);
 		}
 		Assert(next_expected_xid == xid);
