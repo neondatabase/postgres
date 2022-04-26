@@ -592,14 +592,16 @@ zenith_get_request_lsn(bool *latest)
 
 		/*
 		 * Is it possible that the last-written LSN is ahead of last flush
-		 * LSN? Probably not, we shouldn't evict a page from the buffer cache
+		 * LSN? Generally not, we shouldn't evict a page from the buffer cache
 		 * before all its modifications have been safely flushed. That's the
-		 * "WAL before data" rule. But better safe than sorry.
+		 * "WAL before data" rule. However, such case does exist at index building,
+		 * _bt_blwritepage logs the full page without flushing WAL before
+		 * smgrextend (files are fsynced before build ends).
 		 */
 		flushlsn = GetFlushRecPtr();
 		if (lsn > flushlsn)
 		{
-			elog(LOG, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
+			elog(DEBUG5, "last-written LSN %X/%X is ahead of last flushed LSN %X/%X",
 				 (uint32) (lsn >> 32), (uint32) lsn,
 				 (uint32) (flushlsn >> 32), (uint32) flushlsn);
 			XLogFlush(lsn);
