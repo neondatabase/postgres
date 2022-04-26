@@ -977,7 +977,6 @@ static bool CheckForStandbyTrigger(void);
 static void xlog_outrec(StringInfo buf, XLogReaderState *record);
 #endif
 static void xlog_block_info(StringInfo buf, XLogReaderState *record);
-static void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 static void pg_start_backup_callback(int code, Datum arg);
 static void pg_stop_backup_callback(int code, Datum arg);
 static bool read_backup_label(XLogRecPtr *checkPointLoc,
@@ -10987,7 +10986,7 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
  * Returns a string describing an XLogRecord, consisting of its identity
  * optionally followed by a colon, a space, and a further description.
  */
-static void
+void
 xlog_outdesc(StringInfo buf, XLogReaderState *record)
 {
 	RmgrId		rmid = XLogRecGetRmid(record);
