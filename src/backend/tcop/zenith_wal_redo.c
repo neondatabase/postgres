@@ -593,6 +593,8 @@ ApplyRecord(StringInfo input_message)
 	 */
 	lsn = pq_getmsgint64(input_message);
 
+	smgrinit();					/* reset inmem smgr state */
+
 	/* note: the input must be aligned here */
 	record = (XLogRecord *) pq_getmsgbytes(input_message, sizeof(XLogRecord));
 
@@ -691,7 +693,6 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropRelFileNodeAllLocalBuffers(rnode);
-	smgrinit();					/* reset inmem smgr state */
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }
