@@ -125,6 +125,13 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(mmap),
 		PG_SCMP_ALLOW(munmap),
 #endif
+		/*
+		 * getpid() is called on assertion failure, in ExceptionalCondition.
+		 * It's not really needed, but seems pointless to hide it either. The
+		 * system call unlikely to expose a kernel vulnerability, and the PID
+		 * is stored in MyProcPid anyway.
+		 */
+		PG_SCMP_ALLOW(getpid),
 
 		/* Enable those for a proper shutdown.
 		PG_SCMP_ALLOW(munmap),
