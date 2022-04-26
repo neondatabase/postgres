@@ -93,6 +93,7 @@ static int	ReadRedoCommand(StringInfo inBuf);
 static void BeginRedoForBlock(StringInfo input_message);
 static void PushPage(StringInfo input_message);
 static void ApplyRecord(StringInfo input_message);
+static void apply_error_callback(void *arg);
 static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
 static ssize_t buffered_read(void *buf, size_t count);
@@ -579,11 +580,11 @@ PushPage(StringInfo input_message)
 static void
 ApplyRecord(StringInfo input_message)
 {
-	/* recovery here */
 	char	   *errormsg;
 	XLogRecPtr	lsn;
 	XLogRecord *record;
 	int			nleft;
+	ErrorContextCallback errcallback;
 
 	/*
 	 * message format:
@@ -601,7 +602,18 @@ ApplyRecord(StringInfo input_message)
 		elog(ERROR, "mismatch between record (%d) and message size (%d)",
 			 record->xl_tot_len, (int) sizeof(XLogRecord) + nleft);
 
+	/* Setup error traceback support for ereport() */
+	errcallback.callback = apply_error_callback;
+	errcallback.arg = (void *) reader_state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
 	XLogBeginRead(reader_state, lsn);
+	/*
+	 * In lieu of calling XLogReadRecord, store the record 'decoded_record'
+	 * buffer directly.
+	 */
+	reader_state->ReadRecPtr = lsn;
 	reader_state->decoded_record = record;
 	if (!DecodeXLogRecord(reader_state, record, &errormsg))
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
@@ -613,8 +625,31 @@ ApplyRecord(StringInfo input_message)
 
 	redo_read_buffer_filter = NULL;
 
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+
 	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
+}
+
+/*
+ * Error context callback for errors occurring during ApplyRecord
+ */
+static void
+apply_error_callback(void *arg)
+{
+	XLogReaderState *record = (XLogReaderState *) arg;
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+	xlog_outdesc(&buf, record);
+
+	/* translator: %s is a WAL record description */
+	errcontext("WAL redo at %X/%X for %s",
+			   LSN_FORMAT_ARGS(record->ReadRecPtr),
+			   buf.data);
+
+	pfree(buf.data);
 }
 
 static bool
