@@ -2555,6 +2555,31 @@ PredicateLockAcquire(const PREDICATELOCKTARGETTAG *targettag)
 		if (GET_PREDICATELOCKTARGETTAG_TYPE(*targettag) != PREDLOCKTAG_TUPLE)
 			DeleteChildTargetLocks(targettag);
 	}
+
+	/*
+	 * Collect the read set of the current transaction.
+	 * TODO: Make use of the promoting mechanism above to reduce the size of the read set.
+	 */
+	switch (GET_PREDICATELOCKTARGETTAG_TYPE(*targettag))
+	{
+		case PREDLOCKTAG_RELATION:
+			CollectRelation(GET_PREDICATELOCKTARGETTAG_DB(*targettag),
+							GET_PREDICATELOCKTARGETTAG_RELATION(*targettag));
+			break;
+
+		case PREDLOCKTAG_PAGE:
+			CollectPage(GET_PREDICATELOCKTARGETTAG_DB(*targettag),
+						GET_PREDICATELOCKTARGETTAG_RELATION(*targettag),
+						GET_PREDICATELOCKTARGETTAG_PAGE(*targettag));
+			break;
+
+		case PREDLOCKTAG_TUPLE:
+			CollectTuple(GET_PREDICATELOCKTARGETTAG_DB(*targettag),
+						 GET_PREDICATELOCKTARGETTAG_RELATION(*targettag),
+						 GET_PREDICATELOCKTARGETTAG_PAGE(*targettag),
+						 GET_PREDICATELOCKTARGETTAG_OFFSET(*targettag));
+			break;
+	}
 }
 
 
@@ -2578,8 +2603,6 @@ PredicateLockRelation(Relation relation, Snapshot snapshot)
 										relation->rd_node.dbNode,
 										relation->rd_id);
 	PredicateLockAcquire(&tag);
-
-	CollectSeqScanRelation(relation);
 }
 
 /*
@@ -2604,8 +2627,6 @@ PredicateLockPage(Relation relation, BlockNumber blkno, Snapshot snapshot)
 									relation->rd_id,
 									blkno);
 	PredicateLockAcquire(&tag);
-
-	CollectIndexScanPage(relation, blkno);
 }
 
 /*
@@ -2652,8 +2673,6 @@ PredicateLockTID(Relation relation, ItemPointer tid, Snapshot snapshot,
 									 ItemPointerGetBlockNumber(tid),
 									 ItemPointerGetOffsetNumber(tid));
 	PredicateLockAcquire(&tag);
-
-	CollectReadTuple(relation, tid, tuple_xid);
 }
 
 

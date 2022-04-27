@@ -27,21 +27,21 @@ SetRemoteXactHook(const RemoteXactHook *hook)
 }
 
 void
-CollectReadTuple(Relation relation, ItemPointer tid, TransactionId tuple_xid)
+CollectRelation(Oid dbid, Oid relid)
 {
-	CallHook(collect_read_tuple)(relation, tid, tuple_xid);
+	CallHook(collect_relation)(dbid, relid);
 }
 
 void
-CollectSeqScanRelation(Relation relation)
+CollectPage(Oid dbid, Oid relid, BlockNumber blkno)
 {
-	CallHook(collect_seq_scan_relation)(relation);
+	CallHook(collect_page)(dbid, relid, blkno);
 }
 
 void
-CollectIndexScanPage(Relation relation, BlockNumber blkno)
+CollectTuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset)
 {
-	CallHook(collect_index_scan_page)(relation, blkno);
+	CallHook(collect_tuple)(dbid, relid, blkno, offset);
 }
 
 void

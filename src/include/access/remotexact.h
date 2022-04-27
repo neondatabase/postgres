@@ -30,9 +30,9 @@ extern PGDLLIMPORT get_region_lsn_hook_type get_region_lsn_hook;
 
 typedef struct
 {
-	void		(*collect_read_tuple) (Relation relation, ItemPointer tid, TransactionId tuple_xid);
-	void		(*collect_seq_scan_relation) (Relation relation);
-	void		(*collect_index_scan_page) (Relation relation, BlockNumber blkno);
+	void		(*collect_relation) (Oid dbid, Oid relid);
+	void		(*collect_page) (Oid dbid, Oid relid, BlockNumber blkno);
+	void		(*collect_tuple) (Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset);
 	void		(*collect_insert) (Relation relation, HeapTuple newtuple);
 	void		(*collect_update) (Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 	void		(*collect_delete) (Relation relation, HeapTuple oldtuple);
@@ -42,9 +42,9 @@ typedef struct
 
 extern void SetRemoteXactHook(const RemoteXactHook *hook);
 
-extern void CollectReadTuple(Relation relation, ItemPointer tid, TransactionId tuple_xid);
-extern void CollectSeqScanRelation(Relation relation);
-extern void CollectIndexScanPage(Relation relation, BlockNumber blkno);
+extern void CollectRelation(Oid dbid, Oid relid);
+extern void CollectPage(Oid dbid, Oid relid, BlockNumber blkno);
+extern void CollectTuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset);
 extern void CollectInsert(Relation relation, HeapTuple newtuple);
 extern void CollectUpdate(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 extern void CollectDelete(Relation relation, HeapTuple oldtuple);
