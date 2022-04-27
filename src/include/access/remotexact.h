@@ -9,6 +9,7 @@
 #ifndef REMOTEXACT_H
 #define REMOTEXACT_H
 
+#include "access/htup.h"
 #include "access/xlogdefs.h"
 #include "utils/relcache.h"
 #include "storage/itemptr.h"
@@ -32,6 +33,9 @@ typedef struct
 	void		(*collect_read_tuple) (Relation relation, ItemPointer tid, TransactionId tuple_xid);
 	void		(*collect_seq_scan_relation) (Relation relation);
 	void		(*collect_index_scan_page) (Relation relation, BlockNumber blkno);
+	void		(*collect_insert) (Relation relation, HeapTuple newtuple);
+	void		(*collect_update) (Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
+	void		(*collect_delete) (Relation relation, HeapTuple oldtuple);
 	void		(*clear_rwset) (void);
 	void		(*send_rwset_and_wait) (void);
 } RemoteXactHook;
@@ -41,6 +45,9 @@ extern void SetRemoteXactHook(const RemoteXactHook *hook);
 extern void CollectReadTuple(Relation relation, ItemPointer tid, TransactionId tuple_xid);
 extern void CollectSeqScanRelation(Relation relation);
 extern void CollectIndexScanPage(Relation relation, BlockNumber blkno);
+extern void CollectInsert(Relation relation, HeapTuple newtuple);
+extern void CollectUpdate(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
+extern void CollectDelete(Relation relation, HeapTuple oldtuple);
 extern void SendRwsetAndWait(void);
 
 extern void AtEOXact_RemoteXact(void);

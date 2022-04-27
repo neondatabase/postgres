@@ -40,6 +40,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/relscan.h"
+#include "access/remotexact.h"
 #include "access/subtrans.h"
 #include "access/syncscan.h"
 #include "access/sysattr.h"
@@ -2253,6 +2254,14 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	 */
 	CacheInvalidateHeapTuple(relation, heaptup, NULL);
 
+	/* 
+	 * Put into the write set of remotexact. 
+	 * TODO: speculative inserts are ignored. Need a mechanism to keep
+	 * 		 track of whether they are finished or canceled.
+	 */
+	if (!(options & HEAP_INSERT_SPECULATIVE))
+		CollectInsert(relation, heaptup);
+
 	/* Note: speculative insertions are counted too, even if aborted later */
 	pgstat_count_heap_insert(relation, 1);
 
@@ -2651,6 +2660,12 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		for (i = 0; i < ntuples; i++)
 			CacheInvalidateHeapTuple(relation, heaptuples[i], NULL);
 	}
+
+	/* 
+	 * Put all tuples into the write set of remotexact
+	 */
+	for (i = 0; i < ntuples; i++)
+		CollectInsert(relation, heaptuples[i]);
 
 	/* copy t_self fields back to the caller's slots */
 	for (i = 0; i < ntuples; i++)
@@ -3117,6 +3132,11 @@ l1:
 	 */
 	if (have_tuple_lock)
 		UnlockTupleTuplock(relation, &(tp.t_self), LockTupleExclusive);
+
+	/*
+	 * Put the old tuple into the write set of remotexact.
+	 */
+	CollectDelete(relation, old_key_tuple);
 
 	pgstat_count_heap_delete(relation);
 
@@ -4059,6 +4079,11 @@ l2:
 	 */
 	if (have_tuple_lock)
 		UnlockTupleTuplock(relation, &(oldtup.t_self), *lockmode);
+
+	/*
+	 * Put into the write set of remotexact
+	 */
+	CollectUpdate(relation, old_key_tuple, heaptup);
 
 	pgstat_count_heap_update(relation, use_hot_update);
 

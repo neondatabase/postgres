@@ -4,6 +4,7 @@
 #include "access/transam.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
+#include "replication/logicalproto.h"
 #include "rwset.h"
 #include "utils/memutils.h"
 
@@ -14,6 +15,9 @@ static RWSetPage *decode_page(RWSet *rwset, StringInfo msg);
 static RWSetPage *alloc_page(RWSet *rwset);
 static RWSetTuple *decode_tuple(RWSet *rwset, StringInfo msg);
 static RWSetTuple *alloc_tuple(RWSet *rwset);
+
+static void append_tuple_string(StringInfo str, const LogicalRepTupleData *tuple);
+static void free_tuple(LogicalRepTupleData* tuple);
 
 RWSet *
 RWSetAllocate(void)
@@ -32,6 +36,9 @@ RWSetAllocate(void)
 	rwset->header.xid = InvalidTransactionId;
 
 	dlist_init(&rwset->relations);
+
+	rwset->writes = NULL;
+	rwset->writes_len = 0;
 
 	return rwset;
 }
@@ -54,11 +61,9 @@ RWSetDecode(RWSet *rwset, StringInfo msg)
 	read_set_len = pq_getmsgint(msg, 4);
 
 	if (read_set_len > msg->len)
-	{
 		ereport(ERROR,
 				errmsg("length of read set (%d) too large", read_set_len),
 				errdetail("remaining message length: %d", msg->len));
-	}
 
 	while (consumed < read_set_len)
 	{
@@ -73,11 +78,13 @@ RWSetDecode(RWSet *rwset, StringInfo msg)
 	}
 
 	if (consumed > read_set_len)
-	{
 		ereport(ERROR,
 				errmsg("length of read set (%d) is corrupted", read_set_len),
 				errdetail("length of decoded read set: %d", consumed));
-	}
+	
+	rwset->writes_len = msg->len - msg->cursor;
+	rwset->writes = (char *) MemoryContextAlloc(rwset->context, sizeof(char) * rwset->writes_len);
+	pq_copymsgbytes(msg, rwset->writes, rwset->writes_len);
 }
 
 void
@@ -212,75 +219,177 @@ char *
 RWSetToString(RWSet *rwset)
 {
 	StringInfoData s;
+	bool	first_group = true;
+
 	RWSetHeader *header;
 	dlist_iter	rel_iter;
-	bool		first_rel = true;
+
+	StringInfoData writes_cur;
 
 	initStringInfo(&s);
 
 	/* Header */
 	header = &rwset->header;
-	appendStringInfoString(&s, "{\"header\": ");
-	appendStringInfo(&s, "{\"dbid\": %d, \"xid\": %d}, ", header->dbid, header->xid);
+	appendStringInfoString(&s, "{\n\"header\": ");
+	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d },\n", header->dbid, header->xid);
 
 	/* Relations */
-	appendStringInfoString(&s, "\"relations\": [");
+	appendStringInfoString(&s, "\"relations\": [\n");
 	dlist_foreach(rel_iter, &rwset->relations)
 	{
 		RWSetRelation *rel = dlist_container(RWSetRelation, node, rel_iter.cur);
 		dlist_iter	item_iter;
 		bool		first_item;
 
-		if (!first_rel)
-			appendStringInfoString(&s, ", ");
-		first_rel = false;
+		if (!first_group)
+			appendStringInfoString(&s, ",\n");
+		first_group = false;
 
-		appendStringInfoString(&s, "{");
+		appendStringInfoString(&s, "\t{");
 		appendStringInfo(&s, "\"relid\": %d, ", rel->relid);
 		appendStringInfo(&s, "\"is_index\": %d, ", rel->is_index);
-		appendStringInfo(&s, "\"csn\": %d, ", rel->csn);
+		appendStringInfo(&s, "\"csn\": %d,\n", rel->csn);
 
 		/* Pages */
-		appendStringInfoString(&s, "\"pages\": [");
+		appendStringInfoString(&s, "\t \"pages\": [\n");
 		first_item = true;
 		dlist_foreach(item_iter, &rel->pages)
 		{
 			RWSetPage  *page = dlist_container(RWSetPage, node, item_iter.cur);
 
 			if (!first_item)
-				appendStringInfoString(&s, ", ");
+				appendStringInfoString(&s, ",\n");
 			first_item = false;
 
-			appendStringInfoString(&s, "{");
+			appendStringInfoString(&s, "\t\t{");
 			appendStringInfo(&s, "\"blkno\": %d, ", page->blkno);
 			appendStringInfo(&s, "\"csn\": %d", page->csn);
 			appendStringInfoString(&s, "}");
 		}
-		appendStringInfoString(&s, "], ");
+		appendStringInfoString(&s, "\n\t ],\n");
 
 		/* Tuples */
-		appendStringInfoString(&s, "\"tuples\": [");
+		appendStringInfoString(&s, "\t \"tuples\": [\n");
 		first_item = true;
 		dlist_foreach(item_iter, &rel->tuples)
 		{
 			RWSetTuple *tup = dlist_container(RWSetTuple, node, item_iter.cur);
 
 			if (!first_item)
-				appendStringInfoString(&s, ", ");
+				appendStringInfoString(&s, ",\n");
 			first_item = false;
 
-			appendStringInfoString(&s, "{");
+			appendStringInfoString(&s, "\t\t{");
 			appendStringInfo(&s, "\"blkno\": %d, ", ItemPointerGetBlockNumber(&tup->tid));
 			appendStringInfo(&s, "\"offset\": %d", ItemPointerGetOffsetNumber(&tup->tid));
 			appendStringInfoString(&s, "}");
 		}
-		appendStringInfoString(&s, "]");
+		appendStringInfoString(&s, "\n\t ]");
 
 		appendStringInfoString(&s, "}");
 	}
-	appendStringInfoString(&s, "]");
+	appendStringInfoString(&s, "\n],\n");
+
+	/* Writes */
+	appendStringInfoString(&s, "\"writes\": [\n");
+	
+	writes_cur.data = rwset->writes;
+	writes_cur.len = rwset->writes_len;
+	writes_cur.cursor = 0;
+	first_group = true;
+	while (writes_cur.cursor < writes_cur.len)
+	{
+		LogicalRepMsgType action;
+		LogicalRepRelId relid;
+		bool hasoldtup;
+		LogicalRepTupleData newtup;
+		LogicalRepTupleData oldtup;
+
+		if (!first_group)
+			appendStringInfoString(&s, ",\n");
+		first_group = false;
+		appendStringInfoString(&s, "\t{");
+
+		action = pq_getmsgbyte(&writes_cur);
+		switch (action)
+		{
+			case LOGICAL_REP_MSG_INSERT:
+				relid = logicalrep_read_insert(&writes_cur, &newtup);
+
+				appendStringInfo(&s, "\"action\": INSERT, ");
+				appendStringInfo(&s, "\"relid\": %u,\n", relid);
+				appendStringInfo(&s, "\t \"new_tuple\": ");
+				append_tuple_string(&s, &newtup);
+				free_tuple(&newtup);
+				break;
+
+			case LOGICAL_REP_MSG_UPDATE:
+				relid = logicalrep_read_update(&writes_cur, &hasoldtup, &oldtup, &newtup);
+
+				appendStringInfo(&s, "\"action\": UPDATE, ");
+				appendStringInfo(&s, "\"relid\": %u, ", relid);
+				appendStringInfo(&s, "\"has_old_tup\": %d,\n", hasoldtup);
+				appendStringInfo(&s, "\t \"new_tuple\": ");
+				append_tuple_string(&s, &newtup);
+				free_tuple(&newtup);
+				if (hasoldtup)
+				{
+					appendStringInfo(&s, ",\n\t \"old_tuple\": ");
+					append_tuple_string(&s, &oldtup);
+					free_tuple(&oldtup);
+				}
+				break;
+
+			case LOGICAL_REP_MSG_DELETE:
+				relid = logicalrep_read_delete(&writes_cur, &oldtup);
+
+				appendStringInfo(&s, "\"action\": DELETE, ");
+				appendStringInfo(&s, "\"relid\": %u,\n", relid);
+				appendStringInfo(&s, "\t \"old_tuple\": ");
+				append_tuple_string(&s, &oldtup);
+				free_tuple(&oldtup);
+				break;
+
+			default:
+				ereport(ERROR,
+						(errcode(ERRCODE_PROTOCOL_VIOLATION),
+						 errmsg_internal("invalid write set message type \"%c\"", action)));
+		}
+
+		appendStringInfoString(&s, "}");
+	}
+
+	appendStringInfoString(&s, "\n]");
 
 	appendStringInfoString(&s, "}");
 
 	return s.data;
+}
+
+static void
+append_tuple_string(StringInfo s, const LogicalRepTupleData *tuple)
+{
+	int	i;
+	appendStringInfoString(s, "{");
+	appendStringInfo(s, "\"ncols\": %d, ", tuple->ncols);
+	appendStringInfo(s, "\"status\": ");
+	for (i = 0; i < tuple->ncols; i++)
+		appendStringInfoChar(s, tuple->colstatus[i]);
+	appendStringInfoString(s, ", ");
+	appendStringInfo(s, "\"colsizes\": [");
+	for (i = 0; i < tuple->ncols; i++)
+	{
+		if (i > 0) appendStringInfo(s, ", ");
+		appendStringInfo(s, "%d", tuple->colvalues[i].len);
+	}
+	appendStringInfoString(s, "]");
+
+	appendStringInfoString(s, "}");
+}
+
+static void
+free_tuple(LogicalRepTupleData *tuple)
+{
+	pfree(tuple->colvalues);
+	pfree(tuple->colstatus);
 }
