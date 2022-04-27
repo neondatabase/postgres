@@ -28,7 +28,7 @@
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
 
-#define MAX_PAGES 128
+#define MAX_PAGES 32
 
 static BufferTag page_tag[MAX_PAGES];
 static char page_body[MAX_PAGES][BLCKSZ];
@@ -195,10 +195,6 @@ inmem_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
 	int			nblocks = 0;
 
-	/*
-	 * Find the hightest-numbered page, and report that as the relation size.
-	 * XXX: Why does this get called during WAL replay at all?
-	 */
 	for (int i = 0; i < used_pages; i++)
 	{
 		if (RelFileNodeEquals(reln->smgr_rnode.node, page_tag[i].rnode)
