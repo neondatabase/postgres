@@ -99,6 +99,7 @@ static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
 
+Buffer		wal_redo_buffer;
 bool		am_wal_redo_postgres;
 
 static XLogReaderState *reader_state;
@@ -565,6 +566,7 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
+	wal_redo_buffer = buf;
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
 	MarkBufferDirty(buf); /* pro forma */
