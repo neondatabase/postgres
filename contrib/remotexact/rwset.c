@@ -231,10 +231,10 @@ RWSetToString(RWSet *rwset)
 	/* Header */
 	header = &rwset->header;
 	appendStringInfoString(&s, "{\n\"header\": ");
-	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d },\n", header->dbid, header->xid);
+	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d }", header->dbid, header->xid);
 
 	/* Relations */
-	appendStringInfoString(&s, "\"relations\": [\n");
+	appendStringInfoString(&s, ",\n\"relations\": [");
 	dlist_foreach(rel_iter, &rwset->relations)
 	{
 		RWSetRelation *rel = dlist_container(RWSetRelation, node, rel_iter.cur);
@@ -242,56 +242,62 @@ RWSetToString(RWSet *rwset)
 		bool		first_item;
 
 		if (!first_group)
-			appendStringInfoString(&s, ",\n");
+			appendStringInfoString(&s, ",");
 		first_group = false;
 
-		appendStringInfoString(&s, "\t{");
-		appendStringInfo(&s, "\"relid\": %d, ", rel->relid);
-		appendStringInfo(&s, "\"is_index\": %d, ", rel->is_index);
-		appendStringInfo(&s, "\"csn\": %d,\n", rel->csn);
+		appendStringInfoString(&s, "\n\t{");
+		appendStringInfo(&s, "\"relid\": %d", rel->relid);
+		appendStringInfo(&s, ", \"is_index\": %d", rel->is_index);
+		appendStringInfo(&s, ", \"csn\": %d", rel->csn);
 
 		/* Pages */
-		appendStringInfoString(&s, "\t \"pages\": [\n");
-		first_item = true;
-		dlist_foreach(item_iter, &rel->pages)
+		if (!dlist_is_empty(&rel->pages))
 		{
-			RWSetPage  *page = dlist_container(RWSetPage, node, item_iter.cur);
+			appendStringInfoString(&s, ",\n\t \"pages\": [");
+			first_item = true;
+			dlist_foreach(item_iter, &rel->pages)
+			{
+				RWSetPage  *page = dlist_container(RWSetPage, node, item_iter.cur);
 
-			if (!first_item)
-				appendStringInfoString(&s, ",\n");
-			first_item = false;
+				if (!first_item)
+					appendStringInfoString(&s, ",");
+				first_item = false;
 
-			appendStringInfoString(&s, "\t\t{");
-			appendStringInfo(&s, "\"blkno\": %d, ", page->blkno);
-			appendStringInfo(&s, "\"csn\": %d", page->csn);
-			appendStringInfoString(&s, "}");
+				appendStringInfoString(&s, "\n\t\t{");
+				appendStringInfo(&s, "\"blkno\": %d, ", page->blkno);
+				appendStringInfo(&s, "\"csn\": %d", page->csn);
+				appendStringInfoString(&s, "}");
+			}
+			appendStringInfoString(&s, "\n\t ]");
 		}
-		appendStringInfoString(&s, "\n\t ],\n");
 
 		/* Tuples */
-		appendStringInfoString(&s, "\t \"tuples\": [\n");
-		first_item = true;
-		dlist_foreach(item_iter, &rel->tuples)
+		if (!dlist_is_empty(&rel->tuples))
 		{
-			RWSetTuple *tup = dlist_container(RWSetTuple, node, item_iter.cur);
+			appendStringInfoString(&s, ",\n\t \"tuples\": [");
+			first_item = true;
+			dlist_foreach(item_iter, &rel->tuples)
+			{
+				RWSetTuple *tup = dlist_container(RWSetTuple, node, item_iter.cur);
 
-			if (!first_item)
-				appendStringInfoString(&s, ",\n");
-			first_item = false;
+				if (!first_item)
+					appendStringInfoString(&s, ",");
+				first_item = false;
 
-			appendStringInfoString(&s, "\t\t{");
-			appendStringInfo(&s, "\"blkno\": %d, ", ItemPointerGetBlockNumber(&tup->tid));
-			appendStringInfo(&s, "\"offset\": %d", ItemPointerGetOffsetNumber(&tup->tid));
-			appendStringInfoString(&s, "}");
+				appendStringInfoString(&s, "\n\t\t{");
+				appendStringInfo(&s, "\"blkno\": %d, ", ItemPointerGetBlockNumber(&tup->tid));
+				appendStringInfo(&s, "\"offset\": %d", ItemPointerGetOffsetNumber(&tup->tid));
+				appendStringInfoString(&s, "}");
+			}
+			appendStringInfoString(&s, "\n\t ]");
 		}
-		appendStringInfoString(&s, "\n\t ]");
 
 		appendStringInfoString(&s, "}");
 	}
-	appendStringInfoString(&s, "\n],\n");
+	appendStringInfoString(&s, "\n]");
 
 	/* Writes */
-	appendStringInfoString(&s, "\"writes\": [\n");
+	appendStringInfoString(&s, ",\n\"writes\": [");
 	
 	writes_cur.data = rwset->writes;
 	writes_cur.len = rwset->writes_len;
@@ -306,9 +312,9 @@ RWSetToString(RWSet *rwset)
 		LogicalRepTupleData oldtup;
 
 		if (!first_group)
-			appendStringInfoString(&s, ",\n");
+			appendStringInfoString(&s, ",");
 		first_group = false;
-		appendStringInfoString(&s, "\t{");
+		appendStringInfoString(&s, "\n\t{");
 
 		action = pq_getmsgbyte(&writes_cur);
 		switch (action)
@@ -316,9 +322,9 @@ RWSetToString(RWSet *rwset)
 			case LOGICAL_REP_MSG_INSERT:
 				relid = logicalrep_read_insert(&writes_cur, &newtup);
 
-				appendStringInfo(&s, "\"action\": INSERT, ");
-				appendStringInfo(&s, "\"relid\": %u,\n", relid);
-				appendStringInfo(&s, "\t \"new_tuple\": ");
+				appendStringInfo(&s, "\"action\": INSERT");
+				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ",\n\t \"new_tuple\": ");
 				append_tuple_string(&s, &newtup);
 				free_tuple(&newtup);
 				break;
@@ -326,10 +332,10 @@ RWSetToString(RWSet *rwset)
 			case LOGICAL_REP_MSG_UPDATE:
 				relid = logicalrep_read_update(&writes_cur, &hasoldtup, &oldtup, &newtup);
 
-				appendStringInfo(&s, "\"action\": UPDATE, ");
-				appendStringInfo(&s, "\"relid\": %u, ", relid);
-				appendStringInfo(&s, "\"has_old_tup\": %d,\n", hasoldtup);
-				appendStringInfo(&s, "\t \"new_tuple\": ");
+				appendStringInfo(&s, "\"action\": UPDATE");
+				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ", \"has_old_tup\": %d", hasoldtup);
+				appendStringInfo(&s, ",\n\t \"new_tuple\": ");
 				append_tuple_string(&s, &newtup);
 				free_tuple(&newtup);
 				if (hasoldtup)
@@ -343,9 +349,9 @@ RWSetToString(RWSet *rwset)
 			case LOGICAL_REP_MSG_DELETE:
 				relid = logicalrep_read_delete(&writes_cur, &oldtup);
 
-				appendStringInfo(&s, "\"action\": DELETE, ");
-				appendStringInfo(&s, "\"relid\": %u,\n", relid);
-				appendStringInfo(&s, "\t \"old_tuple\": ");
+				appendStringInfo(&s, "\"action\": DELETE");
+				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ",\n\t \"old_tuple\": ");
 				append_tuple_string(&s, &oldtup);
 				free_tuple(&oldtup);
 				break;

@@ -55,9 +55,9 @@ bool		Connected = false;
 
 static void init_rwset_collection_buffer(Oid dbid);
 
-static void rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xid);
-static void rx_collect_seq_scan_relation(Relation relation);
-static void rx_collect_index_scan_page(Relation relation, BlockNumber blkno);
+static void rx_collect_relation(Oid dbid, Oid relid);
+static void rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno);
+static void rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber tid);
 static void rx_collect_insert(Relation relation, HeapTuple newtuple);
 static void rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
@@ -104,42 +104,13 @@ init_rwset_collection_buffer(Oid dbid)
 }
 
 static void
-rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xid)
-{
-	ReadSetRelation *read_relation;
-	StringInfo	buf = NULL;
-
-	/*
-	 * TODO(ctring): Assert the type of current relation. Do the same with
-	 * other rx_collect_* functions
-	 */
-
-	/*
-	 * Ignore current tuple if this relation is an index or current xact wrote
-	 * it.
-	 */
-	if (relation->rd_index != NULL || TransactionIdIsCurrentTransactionId(tuple_xid))
-		return;
-
-	init_rwset_collection_buffer(relation->rd_node.dbNode);
-
-	read_relation = get_read_relation(relation->rd_id);
-	read_relation->is_index = false;
-	read_relation->nitems++;
-
-	buf = &read_relation->tuples;
-	pq_sendint32(buf, ItemPointerGetBlockNumber(tid));
-	pq_sendint16(buf, ItemPointerGetOffsetNumber(tid));
-}
-
-static void
-rx_collect_seq_scan_relation(Relation relation)
+rx_collect_relation(Oid dbid, Oid relid)
 {
 	ReadSetRelation *read_relation;
 
-	init_rwset_collection_buffer(relation->rd_node.dbNode);
+	init_rwset_collection_buffer(dbid);
 
-	read_relation = get_read_relation(relation->rd_id);
+	read_relation = get_read_relation(relid);
 	read_relation->is_index = false;
 
 	/* TODO(ctring): change this after CSN is introduced */
@@ -147,14 +118,14 @@ rx_collect_seq_scan_relation(Relation relation)
 }
 
 static void
-rx_collect_index_scan_page(Relation relation, BlockNumber blkno)
+rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 {
 	ReadSetRelation *read_relation;
 	StringInfo	buf = NULL;
 
-	init_rwset_collection_buffer(relation->rd_node.dbNode);
+	init_rwset_collection_buffer(dbid);
 
-	read_relation = get_read_relation(relation->rd_id);
+	read_relation = get_read_relation(relid);
 	read_relation->is_index = true;
 	read_relation->nitems++;
 
@@ -162,6 +133,23 @@ rx_collect_index_scan_page(Relation relation, BlockNumber blkno)
 	pq_sendint32(buf, blkno);
 	pq_sendint32(buf, 1);		/* TODO(ctring): change this after CSN is
 								 * introduced */
+}
+
+static void
+rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset)
+{
+	ReadSetRelation *read_relation;
+	StringInfo	buf = NULL;
+
+	init_rwset_collection_buffer(dbid);
+
+	read_relation = get_read_relation(relid);
+	read_relation->is_index = false;
+	read_relation->nitems++;
+
+	buf = &read_relation->tuples;
+	pq_sendint32(buf, blkno);
+	pq_sendint16(buf, offset);
 }
 
 static void
@@ -382,9 +370,9 @@ connect_to_txn_server(void)
 
 static const RemoteXactHook remote_xact_hook =
 {
-	.collect_read_tuple = rx_collect_read_tuple,
-	.collect_seq_scan_relation = rx_collect_seq_scan_relation,
-	.collect_index_scan_page = rx_collect_index_scan_page,
+	.collect_tuple = rx_collect_tuple,
+	.collect_relation = rx_collect_relation,
+	.collect_page = rx_collect_page,
 	.clear_rwset = rx_clear_rwset_collection_buffer,
 	.collect_insert = rx_collect_insert,
 	.collect_update = rx_collect_update,
