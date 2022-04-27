@@ -66,8 +66,9 @@ typedef struct RWSet
 {
 	MemoryContext context;
 	RWSetHeader header;
-
 	dlist_head	relations;
+	char	*writes;
+	int		writes_len;
 } RWSet;
 
 extern RWSet *RWSetAllocate(void);

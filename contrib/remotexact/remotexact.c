@@ -6,6 +6,7 @@
 #include "fmgr.h"
 #include "libpq-fe.h"
 #include "libpq/pqformat.h"
+#include "replication/logicalproto.h"
 #include "rwset.h"
 #include "storage/predicate.h"
 #include "utils/guc.h"
@@ -34,8 +35,8 @@ typedef struct ReadSetRelation
 	int			csn;
 	int			nitems;
 
-	StringInfoData read_pages;
-	StringInfoData read_tuples;
+	StringInfoData pages;
+	StringInfoData tuples;
 } ReadSetRelation;
 
 typedef struct RWSetCollectionBuffer
@@ -44,6 +45,7 @@ typedef struct RWSetCollectionBuffer
 
 	RWSetHeader header;
 	HTAB	   *read_relations;
+	StringInfoData writes;
 } RWSetCollectionBuffer;
 
 static RWSetCollectionBuffer *rwset_collection_buffer = NULL;
@@ -51,11 +53,14 @@ static RWSetCollectionBuffer *rwset_collection_buffer = NULL;
 PGconn	   *XactServerConn;
 bool		Connected = false;
 
-static void init_rwset_collection_buffer(void);
+static void init_rwset_collection_buffer(Oid dbid);
 
 static void rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xid);
 static void rx_collect_seq_scan_relation(Relation relation);
 static void rx_collect_index_scan_page(Relation relation, BlockNumber blkno);
+static void rx_collect_insert(Relation relation, HeapTuple newtuple);
+static void rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
+static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
 static void rx_clear_rwset_collection_buffer(void);
 static void rx_send_rwset_and_wait(void);
 
@@ -63,28 +68,37 @@ static ReadSetRelation *get_read_relation(Oid relid);
 static bool connect_to_txn_server(void);
 
 static void
-init_rwset_collection_buffer(void)
+init_rwset_collection_buffer(Oid dbid)
 {
 	MemoryContext old_context;
 	HASHCTL		hash_ctl;
 
-	Assert(!rwset_collection_buffer);
+	if (rwset_collection_buffer)
+	{
+		Oid old_dbid = rwset_collection_buffer->header.dbid; 
+		if (old_dbid != dbid)
+			ereport(ERROR,
+					errmsg("Remotexact can access only one database"),
+					errdetail("old dbid: %u, new dbid: %u", old_dbid, dbid));
+		return;
+	}
 
 	old_context = MemoryContextSwitchTo(TopTransactionContext);
 
 	rwset_collection_buffer = (RWSetCollectionBuffer *) palloc(sizeof(RWSetCollectionBuffer));
 	rwset_collection_buffer->context = TopTransactionContext;
 
-	rwset_collection_buffer->header.dbid = 0;
+	rwset_collection_buffer->header.dbid = dbid;
 	rwset_collection_buffer->header.xid = InvalidTransactionId;
 
 	hash_ctl.hcxt = rwset_collection_buffer->context;
 	hash_ctl.keysize = sizeof(ReadSetRelationKey);
 	hash_ctl.entrysize = sizeof(ReadSetRelation);
 	rwset_collection_buffer->read_relations = hash_create("read relations",
-															   max_predicate_locks_per_xact,
-															   &hash_ctl,
-															   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+														  max_predicate_locks_per_xact,
+														  &hash_ctl,
+														  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	initStringInfo(&rwset_collection_buffer->writes);
 
 	MemoryContextSwitchTo(old_context);
 }
@@ -107,17 +121,13 @@ rx_collect_read_tuple(Relation relation, ItemPointer tid, TransactionId tuple_xi
 	if (relation->rd_index != NULL || TransactionIdIsCurrentTransactionId(tuple_xid))
 		return;
 
-	if (rwset_collection_buffer == NULL)
-		init_rwset_collection_buffer();
-
-	/* TODO(ctring): can dbid change across statements? */
-	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = false;
 	read_relation->nitems++;
 
-	buf = &read_relation->read_tuples;
+	buf = &read_relation->tuples;
 	pq_sendint32(buf, ItemPointerGetBlockNumber(tid));
 	pq_sendint16(buf, ItemPointerGetOffsetNumber(tid));
 }
@@ -127,10 +137,7 @@ rx_collect_seq_scan_relation(Relation relation)
 {
 	ReadSetRelation *read_relation;
 
-	if (rwset_collection_buffer == NULL)
-		init_rwset_collection_buffer();
-
-	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = false;
@@ -145,20 +152,72 @@ rx_collect_index_scan_page(Relation relation, BlockNumber blkno)
 	ReadSetRelation *read_relation;
 	StringInfo	buf = NULL;
 
-	if (rwset_collection_buffer == NULL)
-		init_rwset_collection_buffer();
-
-	rwset_collection_buffer->header.dbid = relation->rd_node.dbNode;
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
 	read_relation = get_read_relation(relation->rd_id);
 	read_relation->is_index = true;
 	read_relation->nitems++;
 
-	buf = &read_relation->read_pages;
+	buf = &read_relation->pages;
 	pq_sendint32(buf, blkno);
 	pq_sendint32(buf, 1);		/* TODO(ctring): change this after CSN is
 								 * introduced */
 }
+
+static void
+rx_collect_insert(Relation relation, HeapTuple newtuple)
+{
+	StringInfo buf = NULL;
+
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
+
+	buf = &rwset_collection_buffer->writes;
+	logicalrep_write_insert(buf, InvalidTransactionId, relation, newtuple, true /* binary */);
+}
+
+static void
+rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
+{
+	StringInfo buf = NULL;
+	char	relreplident = relation->rd_rel->relreplident;
+
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
+
+	// TOOD: We need to set the replica identity to something other than NOTHING
+	// to collect the write set. Need to figure out a way to get rid of this step
+	// or a check to prevent us from forgetting to do this step.
+	if (relreplident != REPLICA_IDENTITY_DEFAULT &&
+		relreplident != REPLICA_IDENTITY_FULL &&
+		relreplident != REPLICA_IDENTITY_INDEX)
+		return;
+
+	buf = &rwset_collection_buffer->writes;
+	logicalrep_write_update(buf, InvalidTransactionId, relation, oldtuple, newtuple, true /* binary */);
+}
+
+static void
+rx_collect_delete(Relation relation, HeapTuple oldtuple)
+{
+	StringInfo buf = NULL;
+	char	relreplident = relation->rd_rel->relreplident;
+
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
+
+	// TOOD: We need to set the replica identity to something other than NOTHING
+	// to collect the write set. Need to figure out a way to get rid of this step
+	// or a check to prevent us from forgetting to do this step.
+	if (relreplident != REPLICA_IDENTITY_DEFAULT &&
+		relreplident != REPLICA_IDENTITY_FULL &&
+		relreplident != REPLICA_IDENTITY_INDEX)
+		return;
+
+	if (oldtuple == NULL)
+		return;
+
+	buf = &rwset_collection_buffer->writes;
+	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldtuple, true /* binary */);
+}
+
 
 static void
 rx_clear_rwset_collection_buffer(void)
@@ -208,7 +267,7 @@ rx_send_rwset_and_wait(void)
 			pq_sendbyte(&buf, 'I');
 			pq_sendint32(&buf, read_relation->key.relid);
 			pq_sendint32(&buf, read_relation->nitems);
-			items = &read_relation->read_pages;
+			items = &read_relation->pages;
 		}
 		else
 		{
@@ -216,7 +275,7 @@ rx_send_rwset_and_wait(void)
 			pq_sendint32(&buf, read_relation->key.relid);
 			pq_sendint32(&buf, read_relation->nitems);
 			pq_sendint32(&buf, read_relation->csn);
-			items = &read_relation->read_tuples;
+			items = &read_relation->tuples;
 		}
 
 		pq_sendbytes(&buf, items->data, items->len);
@@ -227,11 +286,11 @@ rx_send_rwset_and_wait(void)
 	/* Update the length of the read section */
 	*(int *) (buf.data + buf.cursor) = pg_hton32(read_len);
 
+	pq_sendbytes(&buf, rwset_collection_buffer->writes.data, rwset_collection_buffer->writes.len);
+
 	/* Actually send the buffer to the xact server */
 	if (PQputCopyData(XactServerConn, buf.data, buf.len) <= 0 || PQflush(XactServerConn))
-	{
 		ereport(WARNING, errmsg("[remotexact] failed to send read/write set"));
-	}
 
 	/* TODO(ctring): This code is for debugging rwset remove all after the remote worker is implemented */
 	rwset = RWSetAllocate();
@@ -263,8 +322,8 @@ get_read_relation(Oid relid)
 		relation->nitems = 0;
 		relation->csn = 0;
 		relation->is_index = false;
-		initStringInfo(&relation->read_pages);
-		initStringInfo(&relation->read_tuples);
+		initStringInfo(&relation->pages);
+		initStringInfo(&relation->tuples);
 
 		MemoryContextSwitchTo(old_context);
 	}
@@ -327,6 +386,9 @@ static const RemoteXactHook remote_xact_hook =
 	.collect_seq_scan_relation = rx_collect_seq_scan_relation,
 	.collect_index_scan_page = rx_collect_index_scan_page,
 	.clear_rwset = rx_clear_rwset_collection_buffer,
+	.collect_insert = rx_collect_insert,
+	.collect_update = rx_collect_update,
+	.collect_delete = rx_collect_delete,
 	.send_rwset_and_wait = rx_send_rwset_and_wait
 };
 
