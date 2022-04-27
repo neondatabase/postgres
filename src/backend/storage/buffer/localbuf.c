@@ -25,6 +25,8 @@
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
 
+/* ZENITH: prevent eviction of the buffer of target page */
+extern Buffer wal_redo_buffer;
 
 /*#define LBDEBUG*/
 
@@ -183,6 +185,12 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 
 		if (LocalRefCount[b] == 0)
 		{
+			if (-b - 1 == wal_redo_buffer)
+			{
+				/* ZENITH: Prevent eviction of the buffer with target wal redo page */
+				continue;
+			}
+
 			buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 			if (BUF_STATE_GET_USAGECOUNT(buf_state) > 0)
