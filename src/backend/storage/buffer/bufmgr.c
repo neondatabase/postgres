@@ -56,9 +56,6 @@
 #include "utils/timestamp.h"
 #include "replication/walsender.h"
 
-/* ZENITH: prevent eviction of the buffer of target page */
-extern Buffer wal_redo_buffer;
-
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
 #define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
@@ -1203,13 +1200,6 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		buf = StrategyGetBuffer(strategy, &buf_state);
 
 		Assert(BUF_STATE_GET_REFCOUNT(buf_state) == 0);
-
-		if (buf->buf_id == wal_redo_buffer)
-		{
-			/* ZENITH: Prevent eviction of the buffer with target wal redo page */
-			UnlockBufHdr(buf, buf_state);
-			continue;
-		}
 
 		/* Must copy buffer flags while we still hold the spinlock */
 		oldFlags = buf_state & BUF_FLAG_MASK;
