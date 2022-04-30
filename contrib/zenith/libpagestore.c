@@ -428,6 +428,24 @@ _PG_init(void)
 							GUC_UNIT_MB,
 							NULL, NULL,	NULL);
 
+	DefineCustomBoolVariable("zenith.slru_clog",
+							 "read clog from the page server",
+							 NULL,
+							 &zenith_slru_clog,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
+	DefineCustomBoolVariable("zenith.slru_multixact",
+							 "read multixact from the page server",
+							 NULL,
+							 &zenith_slru_multixact,
+							 false,
+							 PGC_POSTMASTER,
+							 0, /* no flags required */
+							 NULL, NULL, NULL);
+
 	relsize_hash_init();
 	EmitWarningsOnPlaceholders("zenith");
 
@@ -458,4 +476,8 @@ _PG_init(void)
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
 	}
+
+	slru_kind_check_hook = zenith_slru_kind_check;
+	slru_read_page_hook = zenith_slru_read_page;
+	slru_page_exists_hook = zenith_slru_page_exists;
 }
