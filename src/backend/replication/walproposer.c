@@ -99,6 +99,7 @@ static TermHistory propTermHistory; /* term history of the proposer */
 static XLogRecPtr propEpochStartLsn;	/* epoch start lsn of the proposer */
 static term_t donorEpoch;		/* Most advanced acceptor epoch */
 static int	donor;				/* Most advanced acceptor */
+static XLogRecPtr timelineStartLsn; /* timeline globally starts at this LSN */
 static int	n_votes = 0;
 static int	n_connected = 0;
 static TimestampTz last_reconnect_attempt;
@@ -767,7 +768,7 @@ AdvancePollState(Safekeeper *sk, uint32 events)
 			 */
 			if (!AsyncFlush(sk))
 				return;
-			
+
 			/* flush is done, event set and state will be updated later */
 			StartStreaming(sk);
 			break;
@@ -977,7 +978,7 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	}
 	else if (sk->greetResponse.term > propTerm)
 	{
-		/* Another compute with higher term is running. */	
+		/* Another compute with higher term is running. */
 		elog(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 				sk->host, sk->port,
 				sk->greetResponse.term, propTerm);
@@ -1037,10 +1038,11 @@ RecvVoteResponse(Safekeeper *sk)
 		return;
 
 	elog(LOG,
-			"got VoteResponse from acceptor %s:%s, voteGiven=" UINT64_FORMAT ", epoch=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X",
+			"got VoteResponse from acceptor %s:%s, voteGiven=" UINT64_FORMAT ", epoch=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X, timelineStartLsn=%X/%X",
 			sk->host, sk->port, sk->voteResponse.voteGiven, GetHighestTerm(&sk->voteResponse.termHistory),
 			LSN_FORMAT_ARGS(sk->voteResponse.flushLsn),
-			LSN_FORMAT_ARGS(sk->voteResponse.truncateLsn));
+			LSN_FORMAT_ARGS(sk->voteResponse.truncateLsn),
+			LSN_FORMAT_ARGS(sk->voteResponse.timelineStartLsn));
 
 	/*
 	 * In case of acceptor rejecting our vote, bail out, but only
@@ -1081,7 +1083,7 @@ RecvVoteResponse(Safekeeper *sk)
 /*
  * Called once a majority of acceptors have voted for us and current proposer
  * has been elected.
- * 
+ *
  * Sends ProposerElected message to all acceptors in SS_IDLE state and starts
  * replication from walsender.
  */
@@ -1118,7 +1120,7 @@ HandleElectedProposer(void)
 			SendProposerElected(&safekeeper[i]);
 	}
 
-	/* 
+	/*
 	 * The proposer has been elected, and there will be no quorum waiting
 	 * after this point. There will be no safekeeper with state SS_IDLE
 	 * also, because that state is used only for quorum waiting.
@@ -1173,6 +1175,7 @@ DetermineEpochStartLsn(void)
 	propEpochStartLsn = InvalidXLogRecPtr;
 	donorEpoch = 0;
 	truncateLsn = InvalidXLogRecPtr;
+	timelineStartLsn = InvalidXLogRecPtr;
 
 	for (int i = 0; i < n_safekeepers; i++)
 	{
@@ -1187,6 +1190,20 @@ DetermineEpochStartLsn(void)
 				donor = i;
 			}
 			truncateLsn = Max(safekeeper[i].voteResponse.truncateLsn, truncateLsn);
+
+			if (safekeeper[i].voteResponse.timelineStartLsn != InvalidXLogRecPtr)
+			{
+				/* timelineStartLsn should be the same everywhere or unknown */
+				if (timelineStartLsn != InvalidXLogRecPtr &&
+					timelineStartLsn != safekeeper[i].voteResponse.timelineStartLsn)
+				{
+					elog(WARNING,
+						 "inconsistent timelineStartLsn: current %X/%X, received %X/%X",
+						 LSN_FORMAT_ARGS(timelineStartLsn),
+						 LSN_FORMAT_ARGS(safekeeper[i].voteResponse.timelineStartLsn));
+				}
+				timelineStartLsn = safekeeper[i].voteResponse.timelineStartLsn;
+			}
 		}
 	}
 
@@ -1194,12 +1211,16 @@ DetermineEpochStartLsn(void)
 	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing
 	 * was committed yet. To keep the idea of always starting streaming since
 	 * record boundary (which simplifies decoding on safekeeper), take start
-	 * position of the slot.
+	 * position of the slot. TODO: take it from .signal file.
 	 */
 	if (propEpochStartLsn == InvalidXLogRecPtr && !syncSafekeepers)
 	{
 		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, true);
 		propEpochStartLsn = truncateLsn = MyReplicationSlot->data.restart_lsn;
+		if (timelineStartLsn == InvalidXLogRecPtr)
+		{
+			timelineStartLsn = MyReplicationSlot->data.restart_lsn;
+		}
 		ReplicationSlotRelease();
 		elog(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(propEpochStartLsn));
 	}
@@ -1332,7 +1353,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
  *    safekeeper is synced, being important for sync-safekeepers)
  * 2) Communicating starting streaming point -- safekeeper must truncate its WAL
  *    beyond it -- and history of term switching.
- * 
+ *
  * Sets sk->startStreamingAt.
  */
 static void
@@ -1343,7 +1364,7 @@ SendProposerElected(Safekeeper *sk)
 	term_t lastCommonTerm;
 	int i;
 
-	/* 
+	/*
 	 * Determine start LSN by comparing safekeeper's log term switch history and
 	 * proposer's, searching for the divergence point.
 	 *
@@ -1352,7 +1373,7 @@ SendProposerElected(Safekeeper *sk)
 	 * wrote some WAL on single sk and died; we stream since the beginning then.
 	 */
 	th = &sk->voteResponse.termHistory;
-	/* 
+	/*
 	 * If any WAL is present on the sk, it must be authorized by some term.
 	 * OTOH, without any WAL there are no term swiches in the log.
 	 */
@@ -1382,11 +1403,11 @@ SendProposerElected(Safekeeper *sk)
 			 * that all safekeepers reported that they have persisted WAL up
 			 * to the truncateLsn before, but now current safekeeper tells
 			 * otherwise.
-			 * 
+			 *
 			 * Also we have a special condition here, which is empty safekeeper
 			 * with no history. In combination with a gap, that can happen when
 			 * we introduce a new safekeeper to the cluster. This is a rare case,
-			 * which is triggered manually for now, and should be treated with 
+			 * which is triggered manually for now, and should be treated with
 			 * care.
 			 */
 
@@ -1429,12 +1450,13 @@ SendProposerElected(Safekeeper *sk)
 	msg.term = propTerm;
 	msg.startStreamingAt = sk->startStreamingAt;
 	msg.termHistory = &propTermHistory;
+	msg.timelineStartLsn = timelineStartLsn;
 
 	lastCommonTerm = i >= 0 ? propTermHistory.entries[i].term : 0;
 	elog(LOG,
-		 "sending elected msg term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s",
-		 msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt), lastCommonTerm, msg.termHistory->n_entries, sk->host, sk->port);
-	
+		 "sending elected msg to node " UINT64_FORMAT " term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s, timelineStartLsn=%X/%X",
+		 sk->greetResponse.nodeId, msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt), lastCommonTerm, msg.termHistory->n_entries, sk->host, sk->port, LSN_FORMAT_ARGS(msg.timelineStartLsn));
+
 	resetStringInfo(&sk->outbuf);
 	pq_sendint64_le(&sk->outbuf, msg.tag);
 	pq_sendint64_le(&sk->outbuf, msg.term);
@@ -1445,6 +1467,7 @@ SendProposerElected(Safekeeper *sk)
 		pq_sendint64_le(&sk->outbuf, msg.termHistory->entries[i].term);
 		pq_sendint64_le(&sk->outbuf, msg.termHistory->entries[i].lsn);
 	}
+	pq_sendint64_le(&sk->outbuf, msg.timelineStartLsn);
 
 	if (!AsyncWrite(sk, sk->outbuf.data, sk->outbuf.len, SS_SEND_ELECTED_FLUSH))
 		return;
@@ -1475,7 +1498,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 static void
 StartStreaming(Safekeeper *sk)
 {
-	/* 
+	/*
 	 * This is the only entrypoint to state SS_ACTIVE. It's executed
 	 * exactly once for a connection.
 	 */
@@ -1546,7 +1569,7 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 	/*
 	 * We should wait for WL_SOCKET_WRITEABLE event if we have unflushed data
 	 * in the buffer.
-	 * 
+	 *
 	 * LSN comparison checks if we have pending unsent messages. This check isn't
 	 * necessary now, because we always send append messages immediately after
 	 * arrival. But it's good to have it here in case we change this behavior
@@ -1561,9 +1584,9 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 /*
  * Send WAL messages starting from sk->streamingAt until the end or non-writable
  * socket, whichever comes first. Caller should take care of updating event set.
- * Even if no unsent WAL is available, at least one empty message will be sent 
+ * Even if no unsent WAL is available, at least one empty message will be sent
  * as a heartbeat, if socket is ready.
- * 
+ *
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
  */
@@ -1579,7 +1602,7 @@ SendAppendRequests(Safekeeper *sk)
 	if (sk->flushWrite)
 	{
 		if (!AsyncFlush(sk))
-			/* 
+			/*
 			 * AsyncFlush failed, that could happen if the socket is closed or
 			 * we have nothing to write and should wait for writeable socket.
 			 */
@@ -1631,7 +1654,7 @@ SendAppendRequests(Safekeeper *sk)
 		sk->outbuf.len += req->endLsn - req->beginLsn;
 
 		writeResult = walprop_async_write(sk->conn, sk->outbuf.data, sk->outbuf.len);
-		
+
 		/* Mark current message as sent, whatever the result is */
 		sk->streamingAt = endLsn;
 
@@ -1669,7 +1692,7 @@ SendAppendRequests(Safekeeper *sk)
  *
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
- * 
+ *
  * NB: This function can call SendMessageToNode and produce new messages.
  */
 static bool
@@ -1988,7 +2011,7 @@ HandleSafekeeperResponse(void)
 
 	/*
 	 * Try to advance truncateLsn to minFlushLsn, which is the last record
-	 * flushed to all safekeepers. We must always start streaming from the 
+	 * flushed to all safekeepers. We must always start streaming from the
 	 * beginning of the record, which simplifies decoding on the far end.
 	 *
 	 * Advanced truncateLsn should be not further than nearest commitLsn.
@@ -2051,7 +2074,7 @@ HandleSafekeeperResponse(void)
 	}
 }
 
-/* 
+/*
  * Try to read CopyData message from i'th safekeeper, resetting connection on
  * failure.
  */
@@ -2082,7 +2105,7 @@ AsyncRead(Safekeeper *sk, char **buf, int *buf_size)
  * Read next message with known type into provided struct, by reading a CopyData
  * block from the safekeeper's postgres connection, returning whether the read
  * was successful.
- * 
+ *
  * If the read needs more polling, we return 'false' and keep the state
  * unmodified, waiting until it becomes read-ready to try again. If it fully
  * failed, a warning is emitted and the connection is reset.
@@ -2118,6 +2141,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 		{
 			AcceptorGreeting *msg = (AcceptorGreeting *) anymsg;
 			msg->term = pq_getmsgint64_le(&s);
+			msg->nodeId = pq_getmsgint64_le(&s);
 			pq_getmsgend(&s);
 			return true;
 		}
@@ -2137,6 +2161,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 				msg->termHistory.entries[i].term = pq_getmsgint64_le(&s);
 				msg->termHistory.entries[i].lsn = pq_getmsgint64_le(&s);
 			}
+			msg->timelineStartLsn = pq_getmsgint64_le(&s);
 			pq_getmsgend(&s);
 			return true;
 		}
