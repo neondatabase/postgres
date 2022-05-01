@@ -11,7 +11,7 @@
 #include "replication/walreceiver.h"
 
 #define SK_MAGIC              0xCafeCeefu
-#define SK_PROTOCOL_VERSION   1
+#define SK_PROTOCOL_VERSION   2
 
 #define MAX_SAFEKEEPERS        32
 #define MAX_SEND_SIZE         (XLOG_BLCKSZ * 16) /* max size of a single WAL message */
@@ -147,6 +147,9 @@ typedef enum
 /* Consensus logical timestamp. */
 typedef uint64 term_t;
 
+/* neon storage node id */
+typedef uint64 NNodeId;
+
 /*
  * Proposer <-> Acceptor messaging.
  */
@@ -177,6 +180,7 @@ typedef struct AcceptorGreeting
 {
 	AcceptorProposerMessage apm;
 	term_t		term;
+	NNodeId		nodeId;
 } AcceptorGreeting;
 
 /*
@@ -214,6 +218,7 @@ typedef struct VoteResponse {
 	XLogRecPtr flushLsn;
 	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some safekeeper */
 	TermHistory termHistory;
+	XLogRecPtr timelineStartLsn; /* timeline globally starts at this LSN */
 } VoteResponse;
 
 /*
@@ -228,6 +233,8 @@ typedef struct ProposerElected
 	XLogRecPtr startStreamingAt;
 	/* history of term switches up to this proposer */
 	TermHistory *termHistory;
+	/* timeline globally starts at this LSN */
+	XLogRecPtr timelineStartLsn;
 } ProposerElected;
 
 /*
