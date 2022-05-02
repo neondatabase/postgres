@@ -29,8 +29,6 @@
  *         safekeepers, learn start LSN of future epoch and run basebackup'
  *         won't work.
  *
- *      TODO: check that LSN on safekeepers after start is the same as it was
- *            after `postgres --sync-safekeepers`.
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
@@ -106,6 +104,8 @@ static TimestampTz last_reconnect_attempt;
 
 /* Set to true only in standalone run of `postgres --sync-safekeepers` (see comment on top) */
 static bool syncSafekeepers;
+
+static WalproposerShmemState *walprop_shared;
 
 /* Prototypes for private functions */
 static void WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId);
@@ -1208,20 +1208,16 @@ DetermineEpochStartLsn(void)
 	}
 
 	/*
-	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing
-	 * was committed yet. To keep the idea of always starting streaming since
-	 * record boundary (which simplifies decoding on safekeeper), take start
-	 * position of the slot. TODO: take it from .signal file.
+	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing was
+	 * committed yet. Start streaming then from the basebackup LSN.
 	 */
 	if (propEpochStartLsn == InvalidXLogRecPtr && !syncSafekeepers)
 	{
-		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, true);
-		propEpochStartLsn = truncateLsn = MyReplicationSlot->data.restart_lsn;
+		propEpochStartLsn = truncateLsn = GetRedoStartLsn();
 		if (timelineStartLsn == InvalidXLogRecPtr)
 		{
-			timelineStartLsn = MyReplicationSlot->data.restart_lsn;
+			timelineStartLsn = GetRedoStartLsn();
 		}
-		ReplicationSlotRelease();
 		elog(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(propEpochStartLsn));
 	}
 
@@ -1256,6 +1252,32 @@ DetermineEpochStartLsn(void)
 		 safekeeper[donor].host, safekeeper[donor].port,
 		 LSN_FORMAT_ARGS(truncateLsn)
 		);
+
+	/*
+	 * Ensure the basebackup we are running (at RedoStartLsn) matches LSN since
+	 * which we are going to write according to the consensus. If not, we must
+	 * bail out, as clog and other non rel data is inconsistent.
+	 */
+	if (!syncSafekeepers)
+	{
+		if (propEpochStartLsn != GetRedoStartLsn())
+		{
+			/*
+			 * However, allow to proceed if previously elected leader was me; plain
+			 * restart of walproposer not intervened by concurrent compute (who could
+			 * generate WAL) is ok.
+			 */
+			if (!((dth->n_entries >= 1) && (dth->entries[dth->n_entries - 1].term ==
+											walprop_shared->mineLastElectedTerm)))
+			{
+				elog(FATAL,
+					 "collected propEpochStartLsn %X/%X, but basebackup LSN %X/%X",
+					 LSN_FORMAT_ARGS(propEpochStartLsn),
+					 LSN_FORMAT_ARGS(GetRedoStartLsn()));
+			}
+		}
+		walprop_shared->mineLastElectedTerm = propTerm;
+	}
 }
 
 /*
@@ -1880,27 +1902,30 @@ GetAcknowledgedByQuorumWALPosition(void)
 	return responses[n_safekeepers - quorum];
 }
 
-
-static ZenithFeedbackState *zf_state;
-
 /*
  * ZenithFeedbackShmemSize --- report amount of shared memory space needed
  */
 Size
-ZenithFeedbackShmemSize(void)
+WalproposerShmemSize(void)
 {
-	return sizeof(ZenithFeedbackState);
+	return sizeof(WalproposerShmemState);
 }
 
 bool
-ZenithFeedbackShmemInit(void)
+WalproposerShmemInit(void)
 {
 	bool		found;
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	zf_state = ShmemInitStruct("Zenith Feedback",
-								sizeof(ZenithFeedbackState),
+	walprop_shared = ShmemInitStruct("Walproposer shared state",
+								sizeof(WalproposerShmemState),
 								&found);
+
+	if (!found)
+	{
+		memset(walprop_shared, 0, WalproposerShmemSize());
+		SpinLockInit(&walprop_shared->mutex);
+	}
 	LWLockRelease(AddinShmemInitLock);
 
 	return found;
@@ -1909,20 +1934,20 @@ ZenithFeedbackShmemInit(void)
 void
 zenith_feedback_set(ZenithFeedback *zf)
 {
-	SpinLockAcquire(&zf_state->mutex);
-	memcpy(&zf_state->feedback, zf, sizeof(ZenithFeedback));
-	SpinLockRelease(&zf_state->mutex);
+	SpinLockAcquire(&walprop_shared->mutex);
+	memcpy(&walprop_shared->feedback, zf, sizeof(ZenithFeedback));
+	SpinLockRelease(&walprop_shared->mutex);
 }
 
 
 void
 zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
 {
-	SpinLockAcquire(&zf_state->mutex);
-	*writeLsn = zf_state->feedback.ps_writelsn;
-	*flushLsn = zf_state->feedback.ps_flushlsn;
-	*applyLsn = zf_state->feedback.ps_applylsn;
-	SpinLockRelease(&zf_state->mutex);
+	SpinLockAcquire(&walprop_shared->mutex);
+	*writeLsn = walprop_shared->feedback.ps_writelsn;
+	*flushLsn = walprop_shared->feedback.ps_flushlsn;
+	*applyLsn = walprop_shared->feedback.ps_applylsn;
+	SpinLockRelease(&walprop_shared->mutex);
 }
 
 
