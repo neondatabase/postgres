@@ -152,7 +152,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, SyncScanShmemSize());
 		size = add_size(size, AsyncShmemSize());
 
-		size = add_size(size, ZenithFeedbackShmemSize());
+		size = add_size(size, WalproposerShmemSize());
 
 #ifdef EXEC_BACKEND
 		size = add_size(size, ShmemBackendArraySize());
@@ -274,7 +274,7 @@ CreateSharedMemoryAndSemaphores(void)
 	SyncScanShmemInit();
 	AsyncShmemInit();
 
-	ZenithFeedbackShmemInit();
+	WalproposerShmemInit();
 
 #ifdef EXEC_BACKEND
 
