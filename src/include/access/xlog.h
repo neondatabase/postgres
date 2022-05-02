@@ -354,6 +354,8 @@ extern void RemovePromoteSignalFiles(void);
 extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
 extern XLogRecPtr GetLastWrittenPageLSN(void);
 
+extern XLogRecPtr GetRedoStartLsn(void);
+
 extern void SetZenithCurrentClusterSize(uint64 size);
 extern uint64 GetZenithCurrentClusterSize(void);
 
