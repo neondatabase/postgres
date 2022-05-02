@@ -18,6 +18,7 @@
 #include "access/xlogdefs.h"
 #include "storage/relfilenode.h"
 #include "storage/block.h"
+#include "storage/buf_internals.h"
 #include "storage/smgr.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
@@ -81,6 +82,7 @@ typedef struct
 	RelFileNode rnode;
 	ForkNumber	forknum;
 	BlockNumber blkno;
+	BufferTag   evicted;
 } ZenithGetPageRequest;
 
 /* supertype of all the Zenith*Response structs below */
@@ -152,6 +154,8 @@ extern bool zenith_exists(SMgrRelation reln, ForkNumber forknum);
 extern void zenith_unlink(RelFileNodeBackend rnode, ForkNumber forknum, bool isRedo);
 extern void zenith_extend(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, char *buffer, bool skipFsync);
+extern void zenith_evict(SMgrRelation reln, ForkNumber forknum,
+						 BlockNumber blocknum, XLogRecPtr lsn);
 extern bool zenith_prefetch(SMgrRelation reln, ForkNumber forknum,
 							BlockNumber blocknum);
 extern void zenith_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,

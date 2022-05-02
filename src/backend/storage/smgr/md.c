@@ -401,6 +401,12 @@ mdunlinkfork(RelFileNodeBackend rnode, ForkNumber forkNum, bool isRedo)
 	pfree(path);
 }
 
+
+void
+mdevict(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, XLogRecPtr lsn)
+{
+}
+
 /*
  *	mdextend() -- Add a block to the specified relation.
  *

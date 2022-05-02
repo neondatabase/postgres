@@ -37,6 +37,7 @@ static const f_smgr smgr_md = {
 		.smgr_exists = mdexists,
 		.smgr_unlink = mdunlink,
 		.smgr_extend = mdextend,
+		.smgr_evict = mdevict,
 		.smgr_prefetch = mdprefetch,
 		.smgr_read = mdread,
 		.smgr_write = mdwrite,
@@ -455,6 +456,13 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	pfree(rnodes);
 }
 
+
+void
+smgrevict(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+		  XLogRecPtr lsn)
+{
+	(*reln->smgr).smgr_evict(reln, forknum, blocknum, lsn);
+}
 
 /*
  *	smgrextend() -- Add a new block to a file.

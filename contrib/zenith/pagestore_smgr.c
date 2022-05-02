@@ -106,6 +106,9 @@ typedef enum
 static SMgrRelation unlogged_build_rel = NULL;
 static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
 
+static BufferTag evicted_page;
+
+
 StringInfoData
 zm_pack_request(ZenithRequest *msg)
 {
@@ -154,6 +157,12 @@ zm_pack_request(ZenithRequest *msg)
 				pq_sendint32(&s, msg_req->rnode.relNode);
 				pq_sendbyte(&s, msg_req->forknum);
 				pq_sendint32(&s, msg_req->blkno);
+
+				pq_sendint32(&s, msg_req->evicted.rnode.spcNode);
+				pq_sendint32(&s, msg_req->evicted.rnode.dbNode);
+				pq_sendint32(&s, msg_req->evicted.rnode.relNode);
+				pq_sendbyte(&s, msg_req->evicted.forkNum);
+				pq_sendint32(&s, msg_req->evicted.blockNum);
 
 				break;
 			}
@@ -506,7 +515,6 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 						reln->smgr_rnode.node.relNode,
 						forknum, LSN_FORMAT_ARGS(lsn))));
 	}
-
 	/*
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
@@ -970,9 +978,10 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			.req.lsn = request_lsn,
 			.rnode = rnode,
 			.forknum = forkNum,
-			.blkno = blkno
+			.blkno = blkno,
+			.evicted = evicted_page
 		};
-
+		evicted_page.rnode.relNode = 0; // invalidate evicted page tag to not request the same evicted page twice
 		resp = page_server->request((ZenithRequest *) &request);
 	}
 
@@ -1135,6 +1144,22 @@ hexdump_page(char *page)
 	return result.data;
 }
 #endif
+
+
+void
+zenith_evict(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
+			 XLogRecPtr lsn)
+{
+	if (reln->smgr_relpersistence == RELPERSISTENCE_PERMANENT)
+	{
+		/*
+		 * Remember the LSN on this page. When we read the page again, we must
+		 * read the same or newer version of it.
+		 */
+		SetLastWrittenPageLSN(lsn);
+		INIT_BUFFERTAG(evicted_page, reln->smgr_rnode.node, forknum, blocknum);
+	}
+}
 
 /*
  *	zenith_write() -- Write the supplied block at the appropriate location.
@@ -1560,6 +1585,7 @@ static const struct f_smgr zenith_smgr =
 	.smgr_exists = zenith_exists,
 	.smgr_unlink = zenith_unlink,
 	.smgr_extend = zenith_extend,
+	.smgr_evict = zenith_evict,
 	.smgr_prefetch = zenith_prefetch,
 	.smgr_read = zenith_read,
 	.smgr_write = zenith_write,

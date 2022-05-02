@@ -483,7 +483,7 @@ static BufferDesc *BufferAlloc(SMgrRelation smgr,
 							   BlockNumber blockNum,
 							   BufferAccessStrategy strategy,
 							   bool *foundPtr);
-static void FlushBuffer(BufferDesc *buf, SMgrRelation reln);
+static XLogRecPtr FlushBuffer(BufferDesc *buf, SMgrRelation reln);
 static void FindAndDropRelFileNodeBuffers(RelFileNode rnode,
 										  ForkNumber forkNum,
 										  BlockNumber nForkBlock,
@@ -1184,6 +1184,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	/* Loop here in case we have to try another victim buffer */
 	for (;;)
 	{
+		XLogRecPtr  lsn = InvalidXLogRecPtr;
+
 		/*
 		 * Ensure, while the spinlock's not yet held, that there's a free
 		 * refcount entry.
@@ -1240,8 +1242,6 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 				 */
 				if (strategy != NULL)
 				{
-					XLogRecPtr	lsn;
-
 					/* Read the LSN while holding buffer header lock */
 					buf_state = LockBufHdr(buf);
 					lsn = BufferGetLSN(buf);
@@ -1263,7 +1263,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 														  smgr->smgr_rnode.node.dbNode,
 														  smgr->smgr_rnode.node.relNode);
 
-				FlushBuffer(buf, NULL);
+				lsn = FlushBuffer(buf, NULL);
 				LWLockRelease(BufferDescriptorGetContentLock(buf));
 
 				ScheduleBufferTagForWriteback(&BackendWritebackContext,
@@ -1291,6 +1291,10 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		if (oldFlags & BM_TAG_VALID)
 		{
+			smgrevict(smgr,
+					  buf->tag.forkNum,
+					  buf->tag.blockNum,
+					  lsn);
 			/*
 			 * Need to compute the old tag's hashcode and partition lock ID.
 			 * XXX is it worth storing the hashcode in BufferDesc so we need
@@ -2855,7 +2859,7 @@ BufferGetTag(Buffer buffer, RelFileNode *rnode, ForkNumber *forknum,
  * If the caller has an smgr reference for the buffer's relation, pass it
  * as the second parameter.  If not, pass NULL.
  */
-static void
+static XLogRecPtr
 FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 {
 	XLogRecPtr	recptr;
@@ -2872,7 +2876,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 	 * anything.
 	 */
 	if (!StartBufferIO(buf, false))
-		return;
+		return InvalidXLogRecPtr;
 
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = shared_buffer_write_error_callback;
@@ -2972,6 +2976,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
+	return recptr;
 }
 
 /*
