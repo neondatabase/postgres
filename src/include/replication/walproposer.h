@@ -283,12 +283,12 @@ typedef	struct ZenithFeedback
 } ZenithFeedback;
 
 
-typedef struct ZenithFeedbackState
+typedef struct WalproposerShmemState
 {
 	slock_t		mutex;
 	ZenithFeedback feedback;
-
-} ZenithFeedbackState;
+	term_t		mineLastElectedTerm;
+} WalproposerShmemState;
 
 /*
  * Report safekeeper state to proposer
@@ -393,8 +393,8 @@ void ParseZenithFeedbackMessage(StringInfo reply_message,
 void       StartReplication(StartReplicationCmd *cmd);
 void       WalProposerSync(int argc, char *argv[]);
 
-Size ZenithFeedbackShmemSize(void);
-bool ZenithFeedbackShmemInit(void);
+Size WalproposerShmemSize(void);
+bool WalproposerShmemInit(void);
 void zenith_feedback_set(ZenithFeedback *zf);
 void zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn);
 

@@ -751,6 +751,9 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 	XLogRecPtr  lastWrittenPageLSN;
 
+	/* neon: copy of startup's RedoStartLSN for walproposer's use */
+	XLogRecPtr	RedoStartLSN;
+
 	/*
 	 * size of a timeline in zenith pageserver.
 	 * used to enforce timeline size limit.
@@ -6913,6 +6916,8 @@ StartupXLOG(void)
 
 		checkPointLoc = zenithLastRec;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		/* make basebackup LSN available for walproposer */
+		XLogCtl->RedoStartLSN = RedoStartLSN;
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
@@ -6983,6 +6988,7 @@ StartupXLOG(void)
 		/* Get the last valid checkpoint record. */
 		checkPointLoc = ControlFile->checkPoint;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		XLogCtl->RedoStartLSN = RedoStartLSN;
 		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 1, true);
 		if (record != NULL)
 		{
@@ -8906,6 +8912,16 @@ SetLastWrittenPageLSN(XLogRecPtr lsn)
 	if (lsn > XLogCtl->lastWrittenPageLSN)
 		XLogCtl->lastWrittenPageLSN = lsn;
 	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+/*
+ * RedoStartLsn is set only once by startup process, locking is not required
+ * after its exit.
+ */
+XLogRecPtr
+GetRedoStartLsn(void)
+{
+	return XLogCtl->RedoStartLSN;
 }
 
 
