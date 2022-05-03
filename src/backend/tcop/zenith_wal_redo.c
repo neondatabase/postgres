@@ -763,3 +763,10 @@ buffered_read(void *buf, size_t count)
 
 	return (dst - (char *) buf);
 }
+
+
+// Just testing if I can call this function from rust
+int redo() {
+	// TODO actually implement
+	return 42;
+}

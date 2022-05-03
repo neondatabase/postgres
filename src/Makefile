@@ -25,6 +25,7 @@ SUBDIRS = \
 	backend/replication/libpqwalproposer \
 	backend/replication/pgoutput \
 	fe_utils \
+    redo \
 	bin \
 	pl \
 	makefiles \
