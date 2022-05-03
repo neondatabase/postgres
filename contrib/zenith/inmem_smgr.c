@@ -177,12 +177,27 @@ inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	pg = locate_page(reln, forknum, blocknum);
 	if (pg < 0)
 	{
+		elog(WARNING, "inmem_write() called for %u/%u/%u.%u blk %u: used_pages %u",
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum,
+			 blocknum,
+			 used_pages);
 		if (used_pages == MAX_PAGES)
 			elog(ERROR, "Inmem storage overflow");
 
 		pg = used_pages;
 		used_pages++;
 		INIT_BUFFERTAG(page_tag[pg], reln->smgr_rnode.node, forknum, blocknum);
+	}  else {
+		elog(WARNING, "inmem_write() called for %u/%u/%u.%u blk %u: found at %u",
+			 reln->smgr_rnode.node.spcNode,
+			 reln->smgr_rnode.node.dbNode,
+			 reln->smgr_rnode.node.relNode,
+			 forknum,
+			 blocknum,
+			 used_pages);
 	}
 	memcpy(page_body[pg], buffer, BLCKSZ);
 }
@@ -193,18 +208,17 @@ inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 BlockNumber
 inmem_nblocks(SMgrRelation reln, ForkNumber forknum)
 {
-	int			nblocks = 0;
-
-	for (int i = 0; i < used_pages; i++)
-	{
-		if (RelFileNodeEquals(reln->smgr_rnode.node, page_tag[i].rnode)
-			&& forknum == page_tag[i].forkNum)
-		{
-			if (page_tag[i].blockNum >= nblocks)
-				nblocks = page_tag[i].blockNum + 1;
-		}
-	}
-	return nblocks;
+	/*
+	 * It's not clear why a WAL redo function would call smgrnblocks().
+	 * During recovery, at least before reaching consistency, the size of a
+	 * relation could be arbitrarily small, if it was truncated after the
+	 * record being replayed, or arbitrarily large if it was extended
+	 * afterwards. But one place where it's called is in
+	 * XLogReadBufferExtended(): it extends the relation, if it's smaller than
+	 * the requested page. That's a waste of time in the WAL redo
+	 * process. Pretend that all relations are maximally sized to avoid it.
+	 */
+	return MaxBlockNumber;
 }
 
 /*
