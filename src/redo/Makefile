@@ -4,7 +4,7 @@ subdir = src/redo
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
 
-override CPPFLAGS := -DFRONTEND -I$(libpq_srcdir) $(CPPFLAGS)
+override CPPFLAGS := -I$(libpq_srcdir) $(CPPFLAGS)
 
 OBJS = \
 	redo.o
