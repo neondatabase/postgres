@@ -1270,7 +1270,7 @@ DetermineEpochStartLsn(void)
 			if (!((dth->n_entries >= 1) && (dth->entries[dth->n_entries - 1].term ==
 											walprop_shared->mineLastElectedTerm)))
 			{
-				elog(FATAL,
+				elog(PANIC,
 					 "collected propEpochStartLsn %X/%X, but basebackup LSN %X/%X",
 					 LSN_FORMAT_ARGS(propEpochStartLsn),
 					 LSN_FORMAT_ARGS(GetRedoStartLsn()));
