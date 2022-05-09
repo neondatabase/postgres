@@ -1,7 +1,7 @@
 #
 # Image with pre-built tools
 #
-FROM zenithdb/compute-tools:latest AS compute-deps
+FROM neondatabase/compute-tools:latest AS compute-deps
 # Only to get ready zenith_ctl binary as deppendency
 
 #
