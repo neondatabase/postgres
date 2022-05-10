@@ -20,6 +20,7 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "utils/builtins.h"
+#include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/varlena.h"
 #include "zenith/pagestore_client.h"
@@ -32,6 +33,7 @@ PG_FUNCTION_INFO_V1(test_consume_xids);
 PG_FUNCTION_INFO_V1(clear_buffer_cache);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn);
 PG_FUNCTION_INFO_V1(get_raw_page_at_lsn_ex);
+PG_FUNCTION_INFO_V1(neon_xlogflush);
 
 /*
  * Linkage to functions in zenith module.
@@ -288,4 +290,15 @@ get_raw_page_at_lsn_ex(PG_FUNCTION_ARGS)
 		zenith_read_at_lsn(rnode, forknum, blkno, read_lsn, request_latest, raw_page_data);
 		PG_RETURN_BYTEA_P(raw_page);
 	}
+}
+
+/*
+ * Directly calls XLogFlush(lsn) to flush WAL buffers.
+ */
+Datum
+neon_xlogflush(PG_FUNCTION_ARGS)
+{
+	XLogRecPtr lsn = PG_GETARG_LSN(0);
+	XLogFlush(lsn);
+	PG_RETURN_VOID();
 }
