@@ -28,7 +28,11 @@
 #include "storage/relfilenode.h"
 #include "storage/smgr.h"
 
-#define MAX_PAGES 32
+/* Size of the in-memory smgr */
+#define MAX_PAGES 64
+
+/* If more than WARN_PAGES are used, print a warning in the log */
+#define WARN_PAGES 32
 
 static BufferTag page_tag[MAX_PAGES];
 static char page_body[MAX_PAGES][BLCKSZ];
@@ -177,7 +181,15 @@ inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 	pg = locate_page(reln, forknum, blocknum);
 	if (pg < 0)
 	{
-		elog(WARNING, "inmem_write() called for %u/%u/%u.%u blk %u: used_pages %u",
+		/*
+		 * We assume the buffer cache is large enough to hold all the buffers
+		 * needed for most operations. Overflowing to this "in-mem smgr" in rare
+		 * cases is OK. But if we find that we're using more than WARN_PAGES,
+		 * print a warning so that we get alerted and get to investigate why
+		 * we're accessing so many buffers.
+		 */
+		elog(used_pages >= WARN_PAGES ? WARNING : DEBUG1,
+			 "inmem_write() called for %u/%u/%u.%u blk %u: used_pages %u",
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
@@ -191,7 +203,7 @@ inmem_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		used_pages++;
 		INIT_BUFFERTAG(page_tag[pg], reln->smgr_rnode.node, forknum, blocknum);
 	}  else {
-		elog(WARNING, "inmem_write() called for %u/%u/%u.%u blk %u: found at %u",
+		elog(DEBUG1, "inmem_write() called for %u/%u/%u.%u blk %u: found at %u",
 			 reln->smgr_rnode.node.spcNode,
 			 reln->smgr_rnode.node.dbNode,
 			 reln->smgr_rnode.node.relNode,
