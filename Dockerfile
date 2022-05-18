@@ -2,7 +2,7 @@
 # Image with pre-built tools
 #
 FROM neondatabase/compute-tools:latest AS compute-deps
-# Only to get ready zenith_ctl binary as deppendency
+# Only to get ready compute_ctl binary as deppendency
 
 #
 # Image with Postgres build deps
@@ -56,11 +56,14 @@ RUN mkdir /var/db && useradd -m -d /var/db/postgres postgres && \
 COPY --from=pg-build /pg/compute_build/postgres_bin /usr/local
 
 # Copy binaries from compute-tools
-COPY --from=compute-deps /usr/local/bin/zenith_ctl /usr/local/bin/zenith_ctl
+COPY --from=compute-deps /usr/local/bin/compute_ctl /usr/local/bin/compute_ctl
+
+# XXX: temporary symlink for compatibility with old control-plane
+RUN ln -s /usr/local/bin/compute_ctl /usr/local/bin/zenith_ctl
 
 # Add postgres shared objects to the search path
 RUN echo '/usr/local/lib' >> /etc/ld.so.conf && /sbin/ldconfig
 
 USER postgres
 
-ENTRYPOINT ["/usr/local/bin/zenith_ctl"]
+ENTRYPOINT ["/usr/local/bin/compute_ctl"]
