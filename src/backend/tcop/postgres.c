@@ -3371,33 +3371,102 @@ ProcessInterrupts_pg(void)
 		ProcessLogMemoryContextInterrupt();
 }
 
+#define MB ((XLogRecPtr)1024*1024)
+//#define PROPORTIONAL_BACKPRESSURE 1
+
 void
 ProcessInterrupts(void)
 {
-	uint64 lag;
-
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
+
+	ProcessInterrupts_pg();
 
 	// Don't throttle read only transactions and wal sender
 	if (am_walsender || !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
 	{
-		ProcessInterrupts_pg();
 		return;
 	}
 
-	ProcessInterrupts_pg();
 	if (zenith_backpressure_delay != 0)
 	{
-		lag = backpressure_lag();
+#if EXPONENTIAL_BACKPRESSURE
+		const int MAX_BACKPRESSURE_ITERATIONS = 1024;
+		static int backpressure_iterations = 1;
+
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay);
+			}
+			else
+			{
+				backpressure_iterations = 1;
+				return;
+			}
+		}
+		if (backpressure_iterations < MAX_BACKPRESSURE_ITERATIONS)
+		{
+			backpressure_iterations *= 2;
+		}
+#elif PROPORTIONAL_BACKPRESSURE
+		int backpressure_iterations = 1;
+
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				backpressure_iterations = lag/max_replication_flush_lag/MB;
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay);
+			}
+			else
+			{
+				break;
+			}
+		}
+#elif LINEAR_BACKPRESSURE
+		static int backpressure_iterations = 1;
+
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay);
+			}
+			else
+			{
+				backpressure_iterations = 1;
+				return;
+			}
+		}
+		backpressure_iterations += 1;
+#else
+		uint64 lag = backpressure_lag();
 		if (lag > 0)
 		{
-			// Suspend writer fro a while to let replicas catch up
+			// Suspend writer for a while to let replicas catch up
 			set_ps_display("backpressure throttling");
 
 			elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 			pg_usleep(zenith_backpressure_delay);
 		}
+#endif
 	}
 }
 
@@ -3419,7 +3488,7 @@ ProcessInterrupts(void)
 #define ia64_get_bsp() ((char *) (_Asm_mov_from_ar(_AREG_BSP, _NO_FENCE)))
 #elif defined(__INTEL_COMPILER)
 /* icc */
-#include <asm/ia64regs.h>
+!#include <asm/ia64regs.h>
 #define ia64_get_bsp() ((char *) __getReg(_IA64_REG_AR_BSP))
 #else
 /* gcc */

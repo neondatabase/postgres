@@ -3613,12 +3613,12 @@ static struct config_int ConfigureNamesInt[] =
 
 	{
 		{"zenith_backpressure_delay", PGC_SUSET, UNGROUPED,
-			gettext_noop("Delay for throttling backend by backpressure mechanism."),
+			gettext_noop("Delay (usec) for throttling backend by backpressure mechanism."),
 			NULL,
 			0, /* we can not use GUC_UNIT_MS because need microseconds resolution */
 		},
 		&zenith_backpressure_delay,
-		0, 100, INT_MAX,
+		100, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
