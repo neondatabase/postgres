@@ -105,6 +105,9 @@ int			PostAuthDelay = 0;
 /* Time between checks that the client is still connected. */
 int			client_connection_check_interval = 0;
 
+/* Neon: delay for throttling backend by backpressure mechanism */
+int			zenith_backpressure_delay;
+
 /* ----------------
  *		private typedefs etc
  * ----------------
@@ -3383,20 +3386,18 @@ ProcessInterrupts(void)
 		return;
 	}
 
-	#define BACK_PRESSURE_DELAY 10000L // 0.01 sec
-	while(true)
+	ProcessInterrupts_pg();
+	if (zenith_backpressure_delay != 0)
 	{
-		ProcessInterrupts_pg();
-
-		// Suspend writers until replicas catch up
 		lag = backpressure_lag();
-		if (lag <= 0)
-			break;
+		if (lag > 0)
+		{
+			// Suspend writer fro a while to let replicas catch up
+			set_ps_display("backpressure throttling");
 
-		set_ps_display("backpressure throttling");
-
-		elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-		pg_usleep(BACK_PRESSURE_DELAY);
+			elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+			pg_usleep(zenith_backpressure_delay);
+		}
 	}
 }
 
