@@ -3372,7 +3372,8 @@ ProcessInterrupts_pg(void)
 }
 
 #define MB ((XLogRecPtr)1024*1024)
-//#define PROPORTIONAL_BACKPRESSURE 1
+#define MS 1000
+#define EXPONENTIAL_BACKPRESSURE 1
 
 void
 ProcessInterrupts(void)
@@ -3393,17 +3394,17 @@ ProcessInterrupts(void)
 #if EXPONENTIAL_BACKPRESSURE
 		const int MAX_BACKPRESSURE_ITERATIONS = 1024;
 		static int backpressure_iterations = 1;
-
+		uint64 lag = 0;
 		for (int i = 0; i < backpressure_iterations; i++)
 		{
-			uint64 lag = backpressure_lag();
+			lag = backpressure_lag();
 			if (lag > 0)
 			{
 				// Suspend writer for a while to let replicas catch up
 				set_ps_display("backpressure throttling");
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-				pg_usleep(zenith_backpressure_delay);
+				pg_usleep(zenith_backpressure_delay*MS);
 			}
 			else
 			{
@@ -3411,6 +3412,7 @@ ProcessInterrupts(void)
 				return;
 			}
 		}
+		elog(LOG, "backpressure throttling: lag %llu, iterations %d", lag, backpressure_iterations);
 		if (backpressure_iterations < MAX_BACKPRESSURE_ITERATIONS)
 		{
 			backpressure_iterations *= 2;
@@ -3428,7 +3430,7 @@ ProcessInterrupts(void)
 				set_ps_display("backpressure throttling");
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-				pg_usleep(zenith_backpressure_delay);
+				pg_usleep(zenith_backpressure_delay*MS);
 			}
 			else
 			{
@@ -3447,7 +3449,7 @@ ProcessInterrupts(void)
 				set_ps_display("backpressure throttling");
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-				pg_usleep(zenith_backpressure_delay);
+				pg_usleep(zenith_backpressure_delay*MS);
 			}
 			else
 			{
@@ -3457,14 +3459,18 @@ ProcessInterrupts(void)
 		}
 		backpressure_iterations += 1;
 #else
-		uint64 lag = backpressure_lag();
-		if (lag > 0)
-		{
+		while (true) {
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
 			// Suspend writer for a while to let replicas catch up
-			set_ps_display("backpressure throttling");
+				set_ps_display("backpressure throttling");
 
-			elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-			pg_usleep(zenith_backpressure_delay);
+				elog(DEBUG1, "backpressure throttling: lag %llu, last written LSN %llx, flush LSN %llx, replication LSN %llx", lag, GetLastWrittenPageLSN(), GetFlushRecPtr(), GetFlushRecPtr() - max_replication_write_lag*MB-lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+			} else {
+				break;
+			}
 		}
 #endif
 	}
