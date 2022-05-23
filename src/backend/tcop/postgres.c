@@ -3373,7 +3373,7 @@ ProcessInterrupts_pg(void)
 
 #define MB ((XLogRecPtr)1024*1024)
 #define MS 1000
-#define EXPONENTIAL_BACKPRESSURE 1
+#define PREDICTABLE_BACKPRESSURE 1
 
 void
 ProcessInterrupts(void)
@@ -3391,7 +3391,60 @@ ProcessInterrupts(void)
 
 	if (zenith_backpressure_delay != 0)
 	{
-#if EXPONENTIAL_BACKPRESSURE
+#if PREDICTABLE_BACKPRESSURE
+		#define HISTORY_SIZE 1024
+		#define MAX_ITERATIONS 1000
+		static struct  {
+			XLogRecPtr  clientLSN;
+			XLogRecPtr  serverLSN;
+			TimestampTz timestamp;
+		} history[HISTORY_SIZE];
+
+		static size_t curr_index = 0;
+		static size_t n_backpressure_events = 0;
+
+		int64 n_iterations = 1;
+
+		/* Number of iterations will be adjusted during loop */
+		for (int64 i = 0; i < n_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				history[curr_index].timestamp = GetCurrentTimestamp();
+				history[curr_index].clientLSN = GetFlushRecPtr();
+				history[curr_index].serverLSN = history[curr_index].clientLSN - lag; /* lag doesn't include threshold value */
+				if (n_backpressure_events > 0)
+				{
+					// lag + (interval - delay)*tx_speed = interval * rx_speed
+					size_t first_event = n_backpressure_events >= HISTORY_SIZE ? (curr_index + 1) % HISTORY_SIZE : 0;
+					TimestampTz interval = history[curr_index].timestamp - history[first_event].timestamp;
+					if (interval != 0)
+					{
+						uint64 tx_speed = (history[curr_index].clientLSN - history[first_event].clientLSN) * USECS_PER_SEC / interval;
+						uint64 rx_speed = (history[curr_index].serverLSN - history[first_event].serverLSN) * USECS_PER_SEC / interval;
+						if (tx_speed != 0)
+						{
+							int64 delay = (lag * USECS_PER_SEC - interval * rx_speed) / tx_speed - interval;
+							n_iterations = Min(MAX_ITERATIONS, delay * MS / zenith_backpressure_delay);
+						}
+					}
+				}
+				n_backpressure_events += 1;
+				curr_index = (curr_index + 1) % HISTORY_SIZE;
+
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+			}
+			else
+			{
+				break;
+			}
+		}
+#elif EXPONENTIAL_BACKPRESSURE
 		const int MAX_BACKPRESSURE_ITERATIONS = 1024;
 		static int backpressure_iterations = 1;
 		uint64 lag = 0;
@@ -3405,6 +3458,7 @@ ProcessInterrupts(void)
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
 			}
 			else
 			{
@@ -3431,6 +3485,7 @@ ProcessInterrupts(void)
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
 			}
 			else
 			{
@@ -3450,6 +3505,7 @@ ProcessInterrupts(void)
 
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
 			}
 			else
 			{
@@ -3463,11 +3519,12 @@ ProcessInterrupts(void)
 			uint64 lag = backpressure_lag();
 			if (lag > 0)
 			{
-			// Suspend writer for a while to let replicas catch up
+				// Suspend writer until replyicas catch up
 				set_ps_display("backpressure throttling");
 
 				elog(DEBUG1, "backpressure throttling: lag %llu, last written LSN %llx, flush LSN %llx, replication LSN %llx", lag, GetLastWrittenPageLSN(), GetFlushRecPtr(), GetFlushRecPtr() - max_replication_write_lag*MB-lag);
 				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
 			} else {
 				break;
 			}
