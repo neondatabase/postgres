@@ -3403,45 +3403,52 @@ ProcessInterrupts(void)
 		static size_t curr_index = 0;
 		static size_t n_backpressure_events = 0;
 
-		int64 n_iterations = 1;
-
-		/* Number of iterations will be adjusted during loop */
-		for (int64 i = 0; i < n_iterations; i++)
+		uint64 lag = backpressure_lag();
+		if (lag > 0)
 		{
-			uint64 lag = backpressure_lag();
-			if (lag > 0)
+			int64 n_iterations = 1;
+			history[curr_index].timestamp = GetCurrentTimestamp();
+			history[curr_index].clientLSN = GetFlushRecPtr();
+			history[curr_index].serverLSN = history[curr_index].clientLSN - lag; /* lag doesn't include threshold value */
+			if (n_backpressure_events > 0)
 			{
-				history[curr_index].timestamp = GetCurrentTimestamp();
-				history[curr_index].clientLSN = GetFlushRecPtr();
-				history[curr_index].serverLSN = history[curr_index].clientLSN - lag; /* lag doesn't include threshold value */
-				if (n_backpressure_events > 0)
+				// lag + (interval - delay)*tx_speed = interval * rx_speed
+				size_t first_event = n_backpressure_events >= HISTORY_SIZE ? (curr_index + 1) % HISTORY_SIZE : 0;
+				TimestampTz history_interval = history[curr_index].timestamp - history[first_event].timestamp;
+				if (history_interval != 0)
 				{
-					// lag + (interval - delay)*tx_speed = interval * rx_speed
-					size_t first_event = n_backpressure_events >= HISTORY_SIZE ? (curr_index + 1) % HISTORY_SIZE : 0;
-					TimestampTz interval = history[curr_index].timestamp - history[first_event].timestamp;
-					if (interval != 0)
+					uint64 tx_speed = (history[curr_index].clientLSN - history[first_event].clientLSN) * USECS_PER_SEC / history_interval;
+					uint64 rx_speed = (history[curr_index].serverLSN - history[first_event].serverLSN) * USECS_PER_SEC / history_interval;
+					if (tx_speed != 0)
 					{
-						uint64 tx_speed = (history[curr_index].clientLSN - history[first_event].clientLSN) * USECS_PER_SEC / interval;
-						uint64 rx_speed = (history[curr_index].serverLSN - history[first_event].serverLSN) * USECS_PER_SEC / interval;
-						if (tx_speed != 0)
-						{
-							int64 delay = (lag * USECS_PER_SEC - interval * rx_speed) / tx_speed - interval;
-							n_iterations = Min(MAX_ITERATIONS, delay * MS / zenith_backpressure_delay);
-						}
+						size_t prev_event = (curr_index - 1) % HISTORY_SIZE;
+						TimestampTz backpressure_interval = history[curr_index].timestamp - history[prev_event].timestamp;
+						int64 delay = (int64)(lag * USECS_PER_SEC - backpressure_interval * rx_speed) / (int64)tx_speed + backpressure_interval;
+						n_iterations = Min(MAX_ITERATIONS, delay / zenith_backpressure_delay / MS);
+						elog(LOG, "lag=%ld, history_interval=%ld, backpressure_interval=%ld, tx_speed=%ld, rx_speed=%ld, delay=%ld, n_iterations=%ld",
+							 lag, history_interval, backpressure_interval, tx_speed, rx_speed, delay, n_iterations);
 					}
-				}
-				n_backpressure_events += 1;
-				curr_index = (curr_index + 1) % HISTORY_SIZE;
+					else
+					{
+						elog(LOG, "lag=%ld, history_interval=%ld, tx_speed=%ld, rx_speed=%ld",
+							 lag, history_interval, tx_speed, rx_speed);
+					}
+				} else
+					elog(LOG, "lag=%ld, history_interval=%ld", lag, history_interval);
+			}
+			n_backpressure_events += 1;
+			curr_index = (curr_index + 1) % HISTORY_SIZE;
 
-				set_ps_display("backpressure throttling");
+			set_ps_display("backpressure throttling");
 
+			for (int64 i = 0; i < n_iterations; i++)
+			{
 				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
 				pg_usleep(zenith_backpressure_delay*MS);
 				ProcessInterrupts_pg();
-			}
-			else
-			{
-				break;
+				if (backpressure_lag() <= 0) {
+					break;
+				}
 			}
 		}
 #elif EXPONENTIAL_BACKPRESSURE
