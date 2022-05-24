@@ -155,6 +155,8 @@ InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size)
 		}
 	}
 #endif
+	if (am_wal_redo_postgres)
+		return valloc(size);
 
 	shmid = shmget(memKey, size, IPC_CREAT | IPC_EXCL | IPCProtection);
 
