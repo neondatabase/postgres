@@ -99,9 +99,6 @@ static int do_seccomp_load_rules(PgSeccompRule *rules, int count, uint32 def_act
 
 void seccomp_load_rules(PgSeccompRule *rules, int count)
 {
-#define raise_error(str) \
-	ereport(FATAL, (errcode(ERRCODE_SYSTEM_ERROR), errmsg("seccomp: " str)))
-
 	struct sigaction action = { .sa_flags = SA_SIGINFO };
 	PgSeccompRule rule;
 	long fd;
@@ -113,37 +110,51 @@ void seccomp_load_rules(PgSeccompRule *rules, int count)
 	 */
 	action.sa_sigaction = seccomp_test_sighandler;
 	if (sigaction(SIGSYS, &action, NULL) != 0)
-		raise_error("failed to install a test SIGSYS handler");
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: could not install test SIGSYS handler")));
 
 	/*
 	 * First, check that open of a well-known file works.
 	 * XXX: We use raw syscall() to call the very open().
 	 */
 	fd = syscall(SCMP_SYS(open), "/dev/null", O_RDONLY, 0);
-	if (fd < 0 || seccomp_test_sighandler_done)
-		raise_error("failed to open a test file");
-	close((int)fd);
+	if (seccomp_test_sighandler_done)
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: signal handler test flag was set unexpectedly")));
+	if (fd < 0)
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: could not open /dev/null for seccomp testing: %m")));
+	close((int) fd);
 
 	/* Set a trap on open() to test seccomp bpf */
 	rule = PG_SCMP(open, SCMP_ACT_TRAP);
 	if (do_seccomp_load_rules(&rule, 1, SCMP_ACT_ALLOW) != 0)
-		raise_error("failed to load a test filter");
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: could not load test trap")));
 
 	/* Finally, check that open() now raises SIGSYS */
-	(void)syscall(SCMP_SYS(open), "/dev/null", O_RDONLY, 0);
+	(void) syscall(SCMP_SYS(open), "/dev/null", O_RDONLY, 0);
 	if (!seccomp_test_sighandler_done)
-		raise_error("SIGSYS handler doesn't seem to work");
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: SIGSYS handler doesn't seem to work")));
 
 	/* Now that everything seems to work, install a proper handler */
 	action.sa_sigaction = seccomp_deny_sighandler;
 	if (sigaction(SIGSYS, &action, NULL) != 0)
-		raise_error("failed to install a proper SIGSYS handler");
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: could not install SIGSYS handler")));
 
 	/* If this succeeds, any syscall not in the list will crash the process */
 	if (do_seccomp_load_rules(rules, count, SCMP_ACT_TRAP) != 0)
-		raise_error("failed to enter seccomp mode");
-
-#undef raise_error
+		ereport(FATAL,
+				(errcode(ERRCODE_SYSTEM_ERROR),
+				 errmsg("seccomp: could not enter seccomp mode")));
 }
 
 /*
