@@ -3409,11 +3409,11 @@ ProcessInterrupts(void)
 			int64 n_iterations = 1;
 			history[curr_index].timestamp = GetCurrentTimestamp();
 			history[curr_index].clientLSN = GetFlushRecPtr();
-			history[curr_index].serverLSN = history[curr_index].clientLSN - lag; /* lag doesn't include threshold value */
+			history[curr_index].serverLSN = history[curr_index].clientLSN - lag;
 			if (n_backpressure_events > 0)
 			{
 				// lag + (interval - delay)*tx_speed = interval * rx_speed
-				size_t first_event = n_backpressure_events >= HISTORY_SIZE ? (curr_index + 1) % HISTORY_SIZE : 0;
+				size_t first_event = (curr_index - n_backpressure_events ) % HISTORY_SIZE;
 				TimestampTz history_interval = history[curr_index].timestamp - history[first_event].timestamp;
 				if (history_interval != 0)
 				{
@@ -3421,22 +3421,24 @@ ProcessInterrupts(void)
 					uint64 rx_speed = (history[curr_index].serverLSN - history[first_event].serverLSN) * USECS_PER_SEC / history_interval;
 					if (tx_speed != 0)
 					{
-						size_t prev_event = (curr_index - 1) % HISTORY_SIZE;
-						TimestampTz backpressure_interval = history[curr_index].timestamp - history[prev_event].timestamp;
-						int64 delay = (int64)(lag * USECS_PER_SEC - backpressure_interval * rx_speed) / (int64)tx_speed + backpressure_interval;
+						TimestampTz avg_interval = history_interval / (n_backpressure_events + 1);
+						int64 delay = (int64)(lag * USECS_PER_SEC - avg_interval * rx_speed) / (int64)tx_speed + avg_interval;
 						n_iterations = Min(MAX_ITERATIONS, delay / zenith_backpressure_delay / MS);
-						elog(LOG, "lag=%ld, history_interval=%ld, backpressure_interval=%ld, tx_speed=%ld, rx_speed=%ld, delay=%ld, n_iterations=%ld",
-							 lag, history_interval, backpressure_interval, tx_speed, rx_speed, delay, n_iterations);
+						elog(DEBUG1, "lag=%ld, history_interval=%ld, avg_interval=%ld, tx_speed=%ld, rx_speed=%ld, delay=%ld, n_iterations=%ld",
+							 lag, history_interval, avg_interval, tx_speed, rx_speed, delay, n_iterations);
 					}
 					else
 					{
-						elog(LOG, "lag=%ld, history_interval=%ld, tx_speed=%ld, rx_speed=%ld",
+						elog(DEBUG1, "lag=%ld, history_interval=%ld, tx_speed=%ld, rx_speed=%ld",
 							 lag, history_interval, tx_speed, rx_speed);
 					}
 				} else
-					elog(LOG, "lag=%ld, history_interval=%ld", lag, history_interval);
+					elog(DEBUG1, "lag=%ld, history_interval=%ld", lag, history_interval);
 			}
-			n_backpressure_events += 1;
+			if (n_backpressure_events + 1 < HISTORY_SIZE)
+			{
+				n_backpressure_events += 1;
+			}
 			curr_index = (curr_index + 1) % HISTORY_SIZE;
 
 			set_ps_display("backpressure throttling");
@@ -3473,7 +3475,7 @@ ProcessInterrupts(void)
 				return;
 			}
 		}
-		elog(LOG, "backpressure throttling: lag %llu, iterations %d", lag, backpressure_iterations);
+		elog(DEBUG1, "backpressure throttling: lag %llu, iterations %d", lag, backpressure_iterations);
 		if (backpressure_iterations < MAX_BACKPRESSURE_ITERATIONS)
 		{
 			backpressure_iterations *= 2;
