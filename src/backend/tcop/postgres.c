@@ -3392,6 +3392,29 @@ ProcessInterrupts(void)
 	if (zenith_backpressure_delay != 0)
 	{
 #if PREDICTABLE_BACKPRESSURE
+		//
+		// We are collecting statitics about replication lag in cyclic buffer.
+		// The size of this buffers is expected to be large enough to keep information about few minutes of work.
+		// ProcessInterrupts is called by CHECK_FOR_INTERRUPTS when either backend receive some signal,
+		// either walsender receives replica response and determines that replication lag exceed on of specified limits.
+		//
+		// The key idea of the algorithm is to delay execution of write transaction so that till next interrupt
+		// replica can catch up. It can be defined using the following formula:
+		//
+		//     lag + (interval - delay)*tx_speed = interval * rx_speed
+		//
+		// where tx_speed is estimatd speed of producing WAL by compute node and rx_speed - estimated speed of consuming WAL by pageserver.
+		// So the meaning of this formula is that during next interval replica continue to consume WAL and backend is throttled
+		// for `delay` and works during `interval` - `delay`. Replica should consume lag and WAL produced by master.
+		//
+		// We do not take in the account that there are three different kinds of lag: write (last_record_lsn), flush (disk_consistent_lsn)
+		// and apply (persistent_disk_consistent_lsn). backpressure_lag() doesn't make difference between them.
+		// Moreover it returns lag exceeding specified threshold. It may be more correct to rewrite formula above as
+		//
+		//     lag + max_replication_write_lag * MB + (interval - delay)*tx_speed = interval * rx_speed
+		//
+		// But looks like requirement for replica to completely catch up just slow down writes.
+		//
 		#define HISTORY_SIZE 1024
 		#define MAX_ITERATIONS 1000
 		static struct  {
