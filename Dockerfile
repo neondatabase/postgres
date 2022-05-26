@@ -30,7 +30,7 @@ RUN mkdir /pg/compute_build && cd /pg/compute_build && \
     # Install main binaries and contribs
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s install && \
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/ install && \
-    make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/zenith install && \
+    make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/neon install && \
     # Install headers
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C src/include install
 
