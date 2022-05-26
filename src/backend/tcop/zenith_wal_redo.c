@@ -10,8 +10,6 @@
  * processes. Instead, we wait for command from 'stdin', and respond to
  * 'stdout'.
  *
- * There's a TAP test for this in contrib/zenith_store/t/002_wal_redo_helper.pl
- *
  * The protocol through stdin/stdout is loosely based on the libpq protocol.
  * The process accepts messages through stdin, and each message has the format:
  *

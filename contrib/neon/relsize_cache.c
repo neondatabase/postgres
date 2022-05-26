@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	  contrib/zenith/relsize_cache.c
+ *	  contrib/neon/relsize_cache.c
  *
  *-------------------------------------------------------------------------
  */
@@ -57,10 +57,10 @@ zenith_smgr_shmem_startup(void)
 		prev_shmem_startup_hook();
 
 	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
-	relsize_lock = (LWLockId) GetNamedLWLockTranche("zenith_relsize");
+	relsize_lock = (LWLockId) GetNamedLWLockTranche("neon_relsize");
 	info.keysize = sizeof(RelTag);
 	info.entrysize = sizeof(RelSizeEntry);
-	relsize_hash = ShmemInitHash("zenith_relsize",
+	relsize_hash = ShmemInitHash("neon_relsize",
 								 relsize_hash_size, relsize_hash_size,
 								 &info,
 								 HASH_ELEM | HASH_BLOBS);
@@ -145,8 +145,8 @@ forget_cached_relsize(RelFileNode rnode, ForkNumber forknum)
 void
 relsize_hash_init(void)
 {
-	DefineCustomIntVariable("zenith.relsize_hash_size",
-							"Sets the maximum number of cached relation sizes for zenith",
+	DefineCustomIntVariable("neon.relsize_hash_size",
+							"Sets the maximum number of cached relation sizes for neon",
 							NULL,
 							&relsize_hash_size,
 							DEFAULT_RELSIZE_HASH_SIZE,
@@ -159,7 +159,7 @@ relsize_hash_init(void)
 	if (relsize_hash_size > 0)
 	{
 		RequestAddinShmemSpace(hash_estimate_size(relsize_hash_size, sizeof(RelSizeEntry)));
-		RequestNamedLWLockTranche("zenith_relsize", 1);
+		RequestNamedLWLockTranche("neon_relsize", 1);
 
 		prev_shmem_startup_hook = shmem_startup_hook;
 		shmem_startup_hook = zenith_smgr_shmem_startup;
