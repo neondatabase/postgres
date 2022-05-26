@@ -16,7 +16,8 @@
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
- *	  contrib/zenith/inmem_smgr.c
+ *	  contrib/neon/inmem_smgr.c
+ *
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
