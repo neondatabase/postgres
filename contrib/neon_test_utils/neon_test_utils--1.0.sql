@@ -1,5 +1,5 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION zenith_test_utils" to load this file. \quit
+\echo Use "CREATE EXTENSION neon_test_utils" to load this file. \quit
 
 CREATE FUNCTION test_consume_xids(nxids int)
 RETURNS VOID

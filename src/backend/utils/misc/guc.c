@@ -2127,7 +2127,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"zenith_test_evict", PGC_POSTMASTER, UNGROUPED,
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
 			gettext_noop("Evict unpinned pages (for better test coverage)"),
 		},
 		&zenith_test_evict,
