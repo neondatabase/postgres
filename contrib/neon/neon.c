@@ -1,10 +1,10 @@
 /*-------------------------------------------------------------------------
  *
- * zenith.c
- *	  Utility functions to expose zenith specific information to user
+ * neon.c
+ *	  Utility functions to expose neon specific information to user
  *
  * IDENTIFICATION
- *	 contrib/zenith/zenith.c
+ *	 contrib/neon/neon.c
  *
  *-------------------------------------------------------------------------
  */
