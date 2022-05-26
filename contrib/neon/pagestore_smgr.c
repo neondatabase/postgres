@@ -39,7 +39,7 @@
  *
  *
  * IDENTIFICATION
- *	  contrib/zenith/pagestore_smgr.c
+ *	  contrib/neon/pagestore_smgr.c
  *
  *-------------------------------------------------------------------------
  */
@@ -887,7 +887,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 				(errcode(ERRCODE_DISK_FULL),
 					errmsg("could not extend file because cluster size limit (%d MB) has been exceeded",
 						   max_cluster_size),
-					errhint("This limit is defined by zenith.max_cluster_size GUC")));
+					errhint("This limit is defined by neon.max_cluster_size GUC")));
 	}
 
 	zenith_wallog_page(reln, forkNum, blkno, buffer);
@@ -1005,7 +1005,7 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 }
 
 /*
- * While function is defined in the zenith extension it's used within zenith_test_utils directly.
+ * While function is defined in the zenith extension it's used within neon_test_utils directly.
  * To avoid breaking tests in the runtime please keep function signature in sync.
  */
 void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
