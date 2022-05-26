@@ -1,10 +1,10 @@
 /*-------------------------------------------------------------------------
  *
- * zenithtest.c
- *	  Helpers for zenith testing and debugging
+ * neontest.c
+ *	  Helpers for neon testing and debugging
  *
  * IDENTIFICATION
- *	 contrib/zenith_test_utils/zenithtest.c
+ *	 contrib/neon_test_utils/neontest.c
  *
  *-------------------------------------------------------------------------
  */
@@ -23,7 +23,7 @@
 #include "utils/pg_lsn.h"
 #include "utils/rel.h"
 #include "utils/varlena.h"
-#include "zenith/pagestore_client.h"
+#include "neon/pagestore_client.h"
 
 PG_MODULE_MAGIC;
 
@@ -53,7 +53,7 @@ _PG_init(void)
 	/* Asserts verify that typedefs above match original declarations */
 	AssertVariableIsOfType(&zenith_read_at_lsn, zenith_read_at_lsn_type);
 	zenith_read_at_lsn_ptr = (zenith_read_at_lsn_type)
-		load_external_function("$libdir/zenith", "zenith_read_at_lsn",
+		load_external_function("$libdir/neon", "zenith_read_at_lsn",
 							   true, NULL);
 }
 
