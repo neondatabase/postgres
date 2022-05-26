@@ -388,7 +388,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-	load_file("zenith", false);
+	load_file("neon", false);
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -437,15 +437,15 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	pg_strong_random(&greetRequest.proposerId, sizeof(greetRequest.proposerId));
 	greetRequest.systemId = systemId;
 	if (!zenith_timeline_walproposer)
-		elog(FATAL, "zenith.zenith_timeline is not provided");
+		elog(FATAL, "neon.timeline_id is not provided");
 	if (*zenith_timeline_walproposer != '\0' &&
 		!HexDecodeString(greetRequest.ztimelineid, zenith_timeline_walproposer, 16))
-		elog(FATAL, "Could not parse zenith.zenith_timeline, %s", zenith_timeline_walproposer);
+		elog(FATAL, "Could not parse neon.timeline_id, %s", zenith_timeline_walproposer);
 	if (!zenith_tenant_walproposer)
-		elog(FATAL, "zenith.zenith_tenant is not provided");
+		elog(FATAL, "neon.tenant_id is not provided");
 	if (*zenith_tenant_walproposer != '\0' &&
 		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
-		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
+		elog(FATAL, "Could not parse neon.tenant_id, %s", zenith_tenant_walproposer);
 
 	greetRequest.timeline = ThisTimeLineID;
 	greetRequest.walSegSize = wal_segment_size;

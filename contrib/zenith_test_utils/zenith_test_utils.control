@@ -1,5 +1,0 @@
-# zenith_test_utils extension
-comment = 'helpers for zenith testing and debugging'
-default_version = '1.0'
-module_pathname = '$libdir/zenith_test_utils'
-relocatable = true

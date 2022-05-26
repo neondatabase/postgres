@@ -8,7 +8,7 @@
  *
  *
  * IDENTIFICATION
- *	 contrib/zenith/libpqpagestore.c
+ *	 contrib/neon/libpqpagestore.c
  *
  *-------------------------------------------------------------------------
  */
@@ -374,7 +374,7 @@ substitute_pageserver_password(const char *page_server_connstring_raw)
 void
 _PG_init(void)
 {
-	DefineCustomStringVariable("zenith.page_server_connstring",
+	DefineCustomStringVariable("neon.pageserver_connstring",
 							   "connection string to the page server",
 							   NULL,
 							   &page_server_connstring_raw,
@@ -383,7 +383,7 @@ _PG_init(void)
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
 
-	DefineCustomStringVariable("zenith.callmemaybe_connstring",
+	DefineCustomStringVariable("neon.callmemaybe_connstring",
 							   "Connection string that Page Server or WAL safekeeper should use to connect to us",
 							   NULL,
 							   &callmemaybe_connstring,
@@ -392,7 +392,7 @@ _PG_init(void)
 							   0,	/* no flags required */
 							   NULL, NULL, NULL);
 
-	DefineCustomStringVariable("zenith.zenith_timeline",
+	DefineCustomStringVariable("neon.timeline_id",
 							   "Zenith timelineid the server is running on",
 							   NULL,
 							   &zenith_timeline,
@@ -401,8 +401,8 @@ _PG_init(void)
 							   0,	/* no flags required */
 							   check_zenith_id, NULL, NULL);
 
-	DefineCustomStringVariable("zenith.zenith_tenant",
-							   "Zenith tenantid the server is running on",
+	DefineCustomStringVariable("neon.tenant_id",
+							   "Neon tenantid the server is running on",
 							   NULL,
 							   &zenith_tenant,
 							   "",
@@ -410,7 +410,7 @@ _PG_init(void)
 							   0,	/* no flags required */
 							   check_zenith_id, NULL, NULL);
 
-	DefineCustomBoolVariable("zenith.wal_redo",
+	DefineCustomBoolVariable("neon.wal_redo",
 							 "start in wal-redo mode",
 							 NULL,
 							 &wal_redo,
@@ -419,7 +419,7 @@ _PG_init(void)
 							 0,
 							 NULL, NULL, NULL);
 
-	DefineCustomIntVariable("zenith.max_cluster_size",
+	DefineCustomIntVariable("neon.max_cluster_size",
 							"cluster size limit",
 							NULL,
 							&max_cluster_size,
@@ -429,7 +429,7 @@ _PG_init(void)
 							NULL, NULL,	NULL);
 
 	relsize_hash_init();
-	EmitWarningsOnPlaceholders("zenith");
+	EmitWarningsOnPlaceholders("neon");
 
 	if (page_server != NULL)
 		zenith_log(ERROR, "libpqpagestore already loaded");
