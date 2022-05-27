@@ -163,7 +163,7 @@ typedef struct ProposerGreeting
 	pg_uuid_t  proposerId;
 	uint64	   systemId;		  /* Postgres system identifier */
 	uint8	   ztimelineid[16];	  /* Zenith timeline id */
-	uint8	   ztenantid[16];
+	uint8	   tenantid[16];
 	TimeLineID timeline;
 	uint32	   walSegSize;
 } ProposerGreeting;

@@ -444,7 +444,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	if (!zenith_tenant_walproposer)
 		elog(FATAL, "zenith.zenith_tenant is not provided");
 	if (*zenith_tenant_walproposer != '\0' &&
-		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
+		!HexDecodeString(greetRequest.tenantid, zenith_tenant_walproposer, 16))
 		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
 
 	greetRequest.timeline = ThisTimeLineID;
@@ -588,7 +588,7 @@ ResetConnection(Safekeeper *sk)
 	{
 		int written = 0;
 		written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
-				"host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+				"host=%s port=%s dbname=replication options='-c ztimelineid=%s tenantid=%s'",
 				sk->host, sk->port, zenith_timeline_walproposer, zenith_tenant_walproposer);
 		// currently connection string is not that long, but once we pass something like jwt we might overflow the buffer,
 		// so it is better to be defensive and check that everything aligns well
@@ -1291,7 +1291,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	WalReceiverConn *wrconn;
 	WalRcvStreamOptions options;
 
-	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s tenantid=%s'",
 			safekeeper[donor].host, safekeeper[donor].port, zenith_timeline_walproposer, zenith_tenant_walproposer);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
