@@ -32,7 +32,7 @@ PG_MODULE_MAGIC;
 
 void		_PG_init(void);
 
-#define PqPageStoreTrace DEBUG5
+#define PageStoreTrace DEBUG5
 
 #define NEON_TAG "[NEON_SMGR] "
 #define neon_log(tag, fmt, ...) ereport(tag, \
@@ -67,7 +67,7 @@ pageserver_connect()
 		pageserver_conn = NULL;
 		ereport(ERROR,
 				(errcode(ERRCODE_SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION),
-				 errmsg("[NEON_SMGR] could not establish connection to pageserver"),
+				 errmsg(NEON_TAG "could not establish connection to pageserver"),
 				 errdetail_internal("%s", msg)));
 	}
 
@@ -77,7 +77,7 @@ pageserver_connect()
 	{
 		PQfinish(pageserver_conn);
 		pageserver_conn = NULL;
-		neon_log(ERROR, "[NEON_SMGR] could not send pagestream command to pageserver");
+		neon_log(ERROR, "could not send pagestream command to pageserver");
 	}
 
 	while (PQisBusy(pageserver_conn))
@@ -104,7 +104,7 @@ pageserver_connect()
 				PQfinish(pageserver_conn);
 				pageserver_conn = NULL;
 
-				neon_log(ERROR, "[NEON_SMGR] could not complete handshake with pageserver: %s",
+				neon_log(ERROR, "could not complete handshake with pageserver: %s",
 						 msg);
 			}
 		}
@@ -193,11 +193,11 @@ pageserver_call(ZenithRequest *request)
 		}
 		pfree(req_buff.data);
 
-		if (message_level_is_interesting(PqPageStoreTrace))
+		if (message_level_is_interesting(PageStoreTrace))
 		{
 			char	   *msg = zm_to_string((ZenithMessage *) request);
 
-			neon_log(PqPageStoreTrace, "sent request: %s", msg);
+			neon_log(PageStoreTrace, "sent request: %s", msg);
 			pfree(msg);
 		}
 
@@ -213,11 +213,11 @@ pageserver_call(ZenithRequest *request)
 		resp = zm_unpack_response(&resp_buff);
 		PQfreemem(resp_buff.data);
 
-		if (message_level_is_interesting(PqPageStoreTrace))
+		if (message_level_is_interesting(PageStoreTrace))
 		{
 			char	   *msg = zm_to_string((ZenithMessage *) resp);
 
-			neon_log(PqPageStoreTrace, "got response: %s", msg);
+			neon_log(PageStoreTrace, "got response: %s", msg);
 			pfree(msg);
 		}
 	}
@@ -409,7 +409,7 @@ _PG_init(void)
 	if (page_server != NULL)
 		neon_log(ERROR, "libpagestore already loaded");
 
-	neon_log(PqPageStoreTrace, "libpagestore already loaded");
+	neon_log(PageStoreTrace, "libpagestore already loaded");
 	page_server = &api;
 
 	/* substitute password in pageserver_connstring */
@@ -427,13 +427,13 @@ _PG_init(void)
 
 	if (wal_redo)
 	{
-		neon_log(PqPageStoreTrace, "set inmem_smgr hook");
+		neon_log(PageStoreTrace, "set inmem_smgr hook");
 		smgr_hook = smgr_inmem;
 		smgr_init_hook = smgr_init_inmem;
 	}
 	else if (page_server_connstring && page_server_connstring[0])
 	{
-		neon_log(PqPageStoreTrace, "set neon_smgr hook");
+		neon_log(PageStoreTrace, "set neon_smgr hook");
 		smgr_hook = smgr_zenith;
 		smgr_init_hook = smgr_init_zenith;
 		dbsize_hook = zenith_dbsize;
