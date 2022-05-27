@@ -674,7 +674,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 
 				lsn = XLogInsert(RM_DBASE_ID,
 								 XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-				SetLastWrittenPageLSN(lsn);
+				SetLastWrittenPageLSN(lsn, NULL);
 			}
 		}
 		table_endscan(scan);
@@ -2225,7 +2225,7 @@ dbase_redo(XLogReaderState *record)
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
 
-			SetLastWrittenPageLSN(lsn);
+			SetLastWrittenPageLSN(lsn, NULL);
 		}
 	}
 	else if (info == XLOG_DBASE_DROP)
