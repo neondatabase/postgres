@@ -559,7 +559,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
 	 */
-	SetLastWrittenPageLSN(lsn, &reln->smgr_rnode.node);
+	SetLastWrittenPageLSN(lsn, reln->smgr_rnode.node.relNode);
 }
 
 
@@ -631,7 +631,7 @@ zenith_get_request_lsn(bool *latest, RelFileNode *rnode)
 		 * so our request cannot concern those.
 		 */
 		*latest = true;
-		lsn = GetLastWrittenPageLSN(rnode);
+		lsn = GetLastWrittenPageLSN(rnode->relNode);
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
@@ -1432,7 +1432,7 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 */
 	XLogFlush(lsn);
 
-	SetLastWrittenPageLSN(lsn, &reln->smgr_rnode.node);
+	SetLastWrittenPageLSN(lsn, reln->smgr_rnode.node.relNode);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))

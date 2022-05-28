@@ -756,12 +756,10 @@ typedef struct XLogCtlData
 	 * Cache of last written page LSN.
 	 * We store this value for up to LAST_WRITTEN_CACHE_SIZE relations + maximum for all other relations.
 	 */
-	XLogRecPtr  lastWrittenPageLSN;
-	struct {
-		RelFileNode rnode;
-		XLogRecPtr  lsn;
-	} lastWrittenPageCache[LAST_WRITTEN_CACHE_SIZE];
-	size_t lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
+	XLogRecPtr	lastWrittenPageLsn;
+	XLogRecPtr	lastWrittenPageCacheLsn[LAST_WRITTEN_CACHE_SIZE];
+	Oid			lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
+	size_t		lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
 
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
@@ -8101,8 +8099,12 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->lastWrittenPageLSN = EndOfLog;
-	memset(XLogCtl->lastWrittenPageCache, 0, sizeof XLogCtl->lastWrittenPageCache);
+	XLogCtl->lastWrittenPageLsn = EndOfLog;
+	for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
+	{
+		XLogCtl->lastWrittenPageCacheLsn[i] = InvalidXLogRecPtr;
+		XLogCtl->lastWrittenPageCacheOid[i] = InvalidOid;
+	}
 	XLogCtl->lastWrittenPageCacheClock = 0;
 	LocalSetXLogInsertAllowed();
 
@@ -8828,18 +8830,18 @@ GetInsertRecPtr(void)
  * GetLastWrittenPageLSN -- Returns maximal LSN of written page
  */
 XLogRecPtr
-GetLastWrittenPageLSN(RelFileNode *rnode)
+GetLastWrittenPageLSN(Oid rnode)
 {
 	XLogRecPtr lsn;
 	SpinLockAcquire(&XLogCtl->info_lck);
-	lsn = XLogCtl->lastWrittenPageLSN;
-	if (rnode != NULL)
+	lsn = XLogCtl->lastWrittenPageLsn;
+	if (rnode != InvalidOid)
 	{
 		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
 		{
-			if (RelFileNodeEquals(*rnode, XLogCtl->lastWrittenPageCache[i].rnode))
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
 			{
-				lsn = XLogCtl->lastWrittenPageCache[i].lsn;
+				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
 				break;
 			}
 		}
@@ -8849,8 +8851,8 @@ GetLastWrittenPageLSN(RelFileNode *rnode)
 		/* Find maximum of all cached LSNs */
 		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
 		{
-			if (XLogCtl->lastWrittenPageCache[i].lsn > lsn)
-				lsn = XLogCtl->lastWrittenPageCache[i].lsn;
+			if (XLogCtl->lastWrittenPageCacheLsn[i] > lsn)
+				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
 		}
 	}
 	SpinLockRelease(&XLogCtl->info_lck);
@@ -8862,24 +8864,24 @@ GetLastWrittenPageLSN(RelFileNode *rnode)
  * SetLastWrittenPageLSN -- Set maximal LSN of written page
  */
 void
-SetLastWrittenPageLSN(XLogRecPtr lsn, RelFileNode *rnode)
+SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
-	if (rnode == NULL)
+	if (rnode == InvalidOid)
 	{
-		if (lsn > XLogCtl->lastWrittenPageLSN)
-			XLogCtl->lastWrittenPageLSN = lsn;
+		if (lsn > XLogCtl->lastWrittenPageLsn)
+			XLogCtl->lastWrittenPageLsn = lsn;
 	}
 	else
 	{
 		int i = LAST_WRITTEN_CACHE_SIZE;
 		while (--i >= 0)
 		{
-			if (RelFileNodeEquals(*rnode, XLogCtl->lastWrittenPageCache[i].rnode))
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
 			{
-				if (lsn > XLogCtl->lastWrittenPageCache[i].lsn)
+				if (lsn > XLogCtl->lastWrittenPageCacheLsn[i])
 				{
-					XLogCtl->lastWrittenPageCache[i].lsn = lsn;
+					XLogCtl->lastWrittenPageCacheLsn[i] = lsn;
 				}
 				break;
 			}
@@ -8887,12 +8889,12 @@ SetLastWrittenPageLSN(XLogRecPtr lsn, RelFileNode *rnode)
 		if (i < 0)
 		{
 			int victim = ++XLogCtl->lastWrittenPageCacheClock % LAST_WRITTEN_CACHE_SIZE;
-			if (XLogCtl->lastWrittenPageCache[victim].lsn > XLogCtl->lastWrittenPageLSN)
+			if (XLogCtl->lastWrittenPageCacheLsn[victim] > XLogCtl->lastWrittenPageLsn)
 			{
-				XLogCtl->lastWrittenPageLSN = XLogCtl->lastWrittenPageCache[victim].lsn;
+				XLogCtl->lastWrittenPageLsn = XLogCtl->lastWrittenPageCacheLsn[victim];
 			}
-			XLogCtl->lastWrittenPageCache[victim].rnode = *rnode;
-			XLogCtl->lastWrittenPageCache[victim].lsn = lsn;
+			XLogCtl->lastWrittenPageCacheOid[victim] = rnode;
+			XLogCtl->lastWrittenPageCacheLsn[victim] = lsn;
 		}
  	}
 	SpinLockRelease(&XLogCtl->info_lck);
