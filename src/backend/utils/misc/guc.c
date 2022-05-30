@@ -2114,7 +2114,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"zenith_test_evict", PGC_POSTMASTER, UNGROUPED,
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
 			gettext_noop("Evict unpinned pages (for better test coverage)"),
 		},
 		&zenith_test_evict,
@@ -4660,8 +4660,8 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"wal_acceptors", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("List of Zenith WAL acceptors (host:port)"),
+		{"safekeepers", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("List of Neon WAL acceptors (host:port)"),
 			NULL,
 			GUC_LIST_INPUT | GUC_LIST_QUOTE
 		},
