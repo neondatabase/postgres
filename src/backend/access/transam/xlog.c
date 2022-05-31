@@ -8828,7 +8828,9 @@ GetInsertRecPtr(void)
 }
 
 /*
- * GetLastWrittenPageLSN -- Returns maximal LSN of written page
+ * GetLastWrittenPageLSN -- Returns maximal LSN of written page.
+ * It returns either cached last written LSN of particular relation,
+ * either global maximum of last written LSNs among all relations.
  */
 XLogRecPtr
 GetLastWrittenPageLSN(Oid rnode)
@@ -8862,7 +8864,10 @@ GetLastWrittenPageLSN(Oid rnode)
 }
 
 /*
- * SetLastWrittenPageLSN -- Set maximal LSN of written page
+ * SetLastWrittenPageLSN -- Set maximal LSN of written page.
+ * We maintain small shared cache for last written LSN of least recently updated
+ * pages. This cache allows to keep global lastWrittenPageLsn unchanged and
+ * so avoid long wait for LSN for read requests to other relations.
  */
 void
 SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
