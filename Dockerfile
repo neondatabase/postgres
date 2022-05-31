@@ -1,7 +1,11 @@
+# Allow specifiyng the different compute-tools tag, so we were able to always use
+# the locally built image.
+ARG COMPUTE_TOOLS_TAG=latest
+
 #
 # Image with pre-built tools
 #
-FROM neondatabase/compute-tools:latest AS compute-deps
+FROM neondatabase/compute-tools:$COMPUTE_TOOLS_TAG AS compute-deps
 # Only to get ready compute_ctl binary as deppendency
 
 #
