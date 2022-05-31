@@ -610,11 +610,6 @@ typedef struct XLogCtlInsert
 	WALInsertLockPadded *WALInsertLocks;
 } XLogCtlInsert;
 
-typedef struct RnodeForkKey {
-	Oid rnode;
-	ForkNumber forknum;
-} RnodeForkKey;
-
 /*
  * Total shared-memory state for XLOG.
  */
@@ -763,7 +758,7 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr	lastWrittenPageLsn;
 	XLogRecPtr	lastWrittenPageCacheLsn[LAST_WRITTEN_CACHE_SIZE];
-	RnodeForkKey	lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
+	Oid			lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
 	size_t		lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
 
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
@@ -8109,8 +8104,7 @@ StartupXLOG(void)
 	for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
 	{
 		XLogCtl->lastWrittenPageCacheLsn[i] = InvalidXLogRecPtr;
-		struct RnodeForkKey key = {InvalidOid, InvalidForkNumber};
-		XLogCtl->lastWrittenPageCacheOid[i] = key;
+		XLogCtl->lastWrittenPageCacheOid[i] = InvalidOid;
 	}
 	XLogCtl->lastWrittenPageCacheClock = 0;
 	LocalSetXLogInsertAllowed();
@@ -8837,7 +8831,7 @@ GetInsertRecPtr(void)
  * GetLastWrittenPageLSN -- Returns maximal LSN of written page
  */
 XLogRecPtr
-GetLastWrittenPageLSN(Oid rnode, ForkNumber forknum)
+GetLastWrittenPageLSN(Oid rnode)
 {
 	XLogRecPtr lsn;
 	SpinLockAcquire(&XLogCtl->info_lck);
@@ -8846,8 +8840,7 @@ GetLastWrittenPageLSN(Oid rnode, ForkNumber forknum)
 	{
 		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
 		{
-			RnodeForkKey key = XLogCtl->lastWrittenPageCacheOid[i];
-			if (rnode == key.rnode &&  forknum == key.rnode)
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
 			{
 				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
 				break;
@@ -8872,8 +8865,11 @@ GetLastWrittenPageLSN(Oid rnode, ForkNumber forknum)
  * SetLastWrittenPageLSN -- Set maximal LSN of written page
  */
 void
-SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode, ForkNumber forknum)
+SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
 {
+	if (lsn == InvalidXLogRecPtr)
+		return;
+
 	SpinLockAcquire(&XLogCtl->info_lck);
 	if (rnode == InvalidOid)
 	{
@@ -8885,8 +8881,7 @@ SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode, ForkNumber forknum)
 		int i = LAST_WRITTEN_CACHE_SIZE;
 		while (--i >= 0)
 		{
-			RnodeForkKey key = XLogCtl->lastWrittenPageCacheOid[i];
-			if (rnode == key.rnode &&  forknum == key.rnode)
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
 			{
 				if (lsn > XLogCtl->lastWrittenPageCacheLsn[i])
 				{
@@ -8902,9 +8897,7 @@ SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode, ForkNumber forknum)
 			{
 				XLogCtl->lastWrittenPageLsn = XLogCtl->lastWrittenPageCacheLsn[victim];
 			}
-			struct RnodeForkKey key = {rnode, forknum};
-			XLogCtl->lastWrittenPageCacheOid[victim] = key;
-			XLogCtl->lastWrittenPageCacheLsn[victim] = lsn;
+			XLogCtl->lastWrittenPageCacheOid[victim] = rnode;
 		}
  	}
 	SpinLockRelease(&XLogCtl->info_lck);
