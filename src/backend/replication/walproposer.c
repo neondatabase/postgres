@@ -1159,6 +1159,21 @@ GetEpoch(Safekeeper *sk)
 	return GetHighestTerm(&sk->voteResponse.termHistory);
 }
 
+/* If LSN points to the page header, skip it */
+static XLogRecPtr
+SkipXLogPageHeader(XLogRecPtr lsn)
+{
+	if (XLogSegmentOffset(lsn, wal_segment_size) == 0)
+	{
+		lsn += SizeOfXLogLongPHD;
+	}
+	else if (lsn % XLOG_BLCKSZ == 0)
+	{
+		lsn += SizeOfXLogShortPHD;
+	}
+	return lsn;
+}
+
 /*
  * Called after majority of acceptors gave votes, it calculates the most
  * advanced safekeeper (who will be the donor) and epochStartLsn -- LSN since
@@ -1260,7 +1275,13 @@ DetermineEpochStartLsn(void)
 	 */
 	if (!syncSafekeepers)
 	{
-		if (propEpochStartLsn != GetRedoStartLsn())
+		/*
+		 *  Basebackup LSN always points to the beginning of the record (not the
+		 *  page), as StartupXLOG most probably wants it this way. Safekeepers
+		 *  don't skip header as they need continious stream of data, so
+		 *  correct LSN for comparison.
+		 */
+		if (SkipXLogPageHeader(propEpochStartLsn) != GetRedoStartLsn())
 		{
 			/*
 			 * However, allow to proceed if previously elected leader was me; plain
