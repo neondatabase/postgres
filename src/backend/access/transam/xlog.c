@@ -8903,6 +8903,7 @@ SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
 				XLogCtl->lastWrittenPageLsn = XLogCtl->lastWrittenPageCacheLsn[victim];
 			}
 			XLogCtl->lastWrittenPageCacheOid[victim] = rnode;
+			XLogCtl->lastWrittenPageCacheLsn[victim] = lsn;
 		}
  	}
 	SpinLockRelease(&XLogCtl->info_lck);
