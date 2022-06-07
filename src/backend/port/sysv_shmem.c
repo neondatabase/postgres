@@ -155,13 +155,15 @@ InternalIpcMemoryCreate(IpcMemoryKey memKey, Size size)
 		}
 	}
 #endif
+
 	/*
-	 * NEON: do not create shared memory segments for single user wal redo postgres.
-	 * Many spawned instances of wal redo may exhaust kernel.shmmni
+	 * NEON: do not create shared memory segments for single user wal redo
+	 * postgres. Many spawned instances of wal redo may exhaust kernel.shmmni
 	 */
 	if (am_wal_redo_postgres)
 	{
-		void* ptr = malloc(size);
+		void	   *ptr = malloc(size);
+
 		if (ptr == NULL)
 		{
 			ereport(FATAL,
