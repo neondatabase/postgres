@@ -49,7 +49,7 @@ backpressure_lsns(PG_FUNCTION_ARGS)
 	bool		nulls[3];
 	TupleDesc	tupdesc;
 
-	zenith_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
+	replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
 
 	tupdesc = CreateTemplateTupleDesc(3);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "received_lsn", PG_LSNOID, -1, 0);

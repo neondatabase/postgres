@@ -271,7 +271,7 @@ typedef struct HotStandbyFeedback
 } HotStandbyFeedback;
 
 
-typedef	struct ZenithFeedback
+typedef	struct ReplicationFeedback
 {
 	// current size of the timeline on pageserver
 	uint64 currentClusterSize;
@@ -280,13 +280,13 @@ typedef	struct ZenithFeedback
 	XLogRecPtr ps_flushlsn;
 	XLogRecPtr ps_applylsn;
 	TimestampTz ps_replytime;
-} ZenithFeedback;
+} ReplicationFeedback;
 
 
 typedef struct WalproposerShmemState
 {
 	slock_t		mutex;
-	ZenithFeedback feedback;
+	ReplicationFeedback feedback;
 	term_t		mineLastElectedTerm;
 } WalproposerShmemState;
 
@@ -310,12 +310,12 @@ typedef struct AppendResponse
 	// Feedback recieved from pageserver includes standby_status_update fields
 	// and custom zenith feedback.
 	// This part of the message is extensible.
-	ZenithFeedback zf;
+	ReplicationFeedback rf;
 } AppendResponse;
 
-// ZenithFeedback is extensible part of the message that is parsed separately
+// ReplicationFeedback is extensible part of the message that is parsed separately
 // Other fields are fixed part
-#define APPENDRESPONSE_FIXEDPART_SIZE offsetof(AppendResponse, zf)
+#define APPENDRESPONSE_FIXEDPART_SIZE offsetof(AppendResponse, rf)
 
 
 /*
@@ -388,15 +388,15 @@ void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									uint32		feedbackEpoch,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
-void ParseZenithFeedbackMessage(StringInfo reply_message,
-								ZenithFeedback *zf);
+void ParseReplicationFeedbackMessage(StringInfo reply_message,
+								ReplicationFeedback *rf);
 void       StartReplication(StartReplicationCmd *cmd);
 void       WalProposerSync(int argc, char *argv[]);
 
 Size WalproposerShmemSize(void);
 bool WalproposerShmemInit(void);
-void zenith_feedback_set(ZenithFeedback *zf);
-void zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn);
+void replication_feedback_set(ReplicationFeedback *rf);
+void replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn);
 
 /* libpqwalproposer hooks & helper type */
 
