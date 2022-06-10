@@ -71,25 +71,6 @@ zenith_connect()
 				 errdetail_internal("%s", msg)));
 	}
 
-	/* Ask the Page Server to connect to us, and stream WAL from us. */
-	if (callmemaybe_connstring && callmemaybe_connstring[0]
-		&& zenith_tenant
-		&& zenith_timeline)
-	{
-		PGresult   *res;
-
-		query = psprintf("callmemaybe %s %s %s", zenith_tenant, zenith_timeline, callmemaybe_connstring);
-		res = PQexec(pageserver_conn, query);
-		if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		{
-			PQfinish(pageserver_conn);
-			pageserver_conn = NULL;
-			zenith_log(ERROR,
-					   "[ZENITH_SMGR] callmemaybe command failed");
-		}
-		PQclear(res);
-	}
-
 	query = psprintf("pagestream %s %s", zenith_tenant, zenith_timeline);
 	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
@@ -378,15 +359,6 @@ _PG_init(void)
 							   "connection string to the page server",
 							   NULL,
 							   &page_server_connstring_raw,
-							   "",
-							   PGC_POSTMASTER,
-							   0,	/* no flags required */
-							   NULL, NULL, NULL);
-
-	DefineCustomStringVariable("neon.callmemaybe_connstring",
-							   "Connection string that Page Server or WAL safekeeper should use to connect to us",
-							   NULL,
-							   &callmemaybe_connstring,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
