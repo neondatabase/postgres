@@ -239,7 +239,7 @@ void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
-static void ProcessZenithFeedbackMessage(void);
+static void ProcessReplicationFeedbackMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
 static void ProcessPendingWrites(void);
@@ -1878,7 +1878,7 @@ ProcessStandbyMessage(void)
 			break;
 
 		case 'z':
-			ProcessZenithFeedbackMessage();
+			ProcessReplicationFeedbackMessage();
 			break;
 
 		default:
@@ -1953,25 +1953,25 @@ ProcessStandbyReplyMessage(void)
 					LSN_FORMAT_ARGS(applyPtr));
 }
 
-// This message is a zenith extension of postgres replication protocol
+// This message is a neon extension of postgres replication protocol
 static void
-ProcessZenithFeedbackMessage(void)
+ProcessReplicationFeedbackMessage(void)
 {
-	ZenithFeedback zf;
+	ReplicationFeedback rf;
 
 	// consume message length
 	pq_getmsgint64(&reply_message);
 
-	ParseZenithFeedbackMessage(&reply_message, &zf);
+	ParseReplicationFeedbackMessage(&reply_message, &rf);
 
-	zenith_feedback_set(&zf);
+	replication_feedback_set(&rf);
 
-	SetZenithCurrentClusterSize(zf.currentClusterSize);
+	SetZenithCurrentClusterSize(rf.currentClusterSize);
 
-	ProcessStandbyReply(zf.ps_writelsn,
-						zf.ps_flushlsn,
-						zf.ps_applylsn,
-						zf.ps_replytime,
+	ProcessStandbyReply(rf.ps_writelsn,
+						rf.ps_flushlsn,
+						rf.ps_applylsn,
+						rf.ps_replytime,
 						false);
 }
 
@@ -2058,7 +2058,7 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
 
-	/* 
+	/*
 	 * walproposer use trunclateLsn instead of flushPtr for confirmed
 	 * received location, so we shouldn't update restart_lsn here.
 	 */
@@ -3863,10 +3863,10 @@ backpressure_lag(void)
 		XLogRecPtr applyPtr;
 		XLogRecPtr myFlushLsn = GetFlushRecPtr();
 
-		zenith_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
+		replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
 		#define MB ((XLogRecPtr)1024*1024)
 
-		elog(DEBUG2, "current flushLsn %X/%X ZenithFeedback: write %X/%X flush %X/%X apply %X/%X",
+		elog(DEBUG2, "current flushLsn %X/%X ReplicationFeedback: write %X/%X flush %X/%X apply %X/%X",
 			LSN_FORMAT_ARGS(myFlushLsn),
 			LSN_FORMAT_ARGS(writePtr),
 			LSN_FORMAT_ARGS(flushPtr),
