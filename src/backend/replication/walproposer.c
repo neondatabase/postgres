@@ -1783,9 +1783,9 @@ RecvAppendResponses(Safekeeper *sk)
 	return sk->state == SS_ACTIVE;
 }
 
-/* Parse a ZenithFeedback message, or the ZenithFeedback part of an AppendResponse */
+/* Parse a ReplicationFeedback message, or the ReplicationFeedback part of an AppendResponse */
 void
-ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
+ParseReplicationFeedbackMessage(StringInfo reply_message, ReplicationFeedback *rf)
 {
 	uint8 nkeys;
 	int i;
@@ -1800,42 +1800,42 @@ ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 		if (strcmp(key, "current_timeline_size") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->currentClusterSize = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: current_timeline_size %lu",
-					zf->currentClusterSize);
+				rf->currentClusterSize = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: current_timeline_size %lu",
+					rf->currentClusterSize);
 		}
 		else if (strcmp(key, "ps_writelsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_writelsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_writelsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_writelsn));
+				rf->ps_writelsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_writelsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_writelsn));
 		}
 		else if (strcmp(key, "ps_flushlsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_flushlsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_flushlsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_flushlsn));
+				rf->ps_flushlsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_flushlsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_flushlsn));
 		}
 		else if (strcmp(key, "ps_applylsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_applylsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_applylsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_applylsn));
+				rf->ps_applylsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_applylsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_applylsn));
 		}
 		else if (strcmp(key, "ps_replytime") == 0)
 		{
 			pq_getmsgint(reply_message, sizeof(int32)); // read value length
-			zf->ps_replytime = pq_getmsgint64(reply_message);
+			rf->ps_replytime = pq_getmsgint64(reply_message);
 			{
 				char	   *replyTimeStr;
 
 				/* Copy because timestamptz_to_str returns a static buffer */
-				replyTimeStr = pstrdup(timestamptz_to_str(zf->ps_replytime));
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_replytime %lu reply_time: %s",
-					zf->ps_replytime, replyTimeStr);
+				replyTimeStr = pstrdup(timestamptz_to_str(rf->ps_replytime));
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_replytime %lu reply_time: %s",
+					rf->ps_replytime, replyTimeStr);
 
 				pfree(replyTimeStr);
 			}
@@ -1844,7 +1844,7 @@ ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 		{
 			len = pq_getmsgint(reply_message, sizeof(int32)); // read value length
 			// Skip unknown keys to support backward compatibile protocol changes
-			elog(LOG, "ParseZenithFeedbackMessage: unknown key: %s len %d", key, len);
+			elog(LOG, "ParseReplicationFeedbackMessage: unknown key: %s len %d", key, len);
 			pq_getmsgbytes(reply_message, len);
 		};
 	}
@@ -1924,7 +1924,7 @@ GetAcknowledgedByQuorumWALPosition(void)
 }
 
 /*
- * ZenithFeedbackShmemSize --- report amount of shared memory space needed
+ * ReplicationFeedbackShmemSize --- report amount of shared memory space needed
  */
 Size
 WalproposerShmemSize(void)
@@ -1953,16 +1953,16 @@ WalproposerShmemInit(void)
 }
 
 void
-zenith_feedback_set(ZenithFeedback *zf)
+replication_feedback_set(ReplicationFeedback *rf)
 {
 	SpinLockAcquire(&walprop_shared->mutex);
-	memcpy(&walprop_shared->feedback, zf, sizeof(ZenithFeedback));
+	memcpy(&walprop_shared->feedback, rf, sizeof(ReplicationFeedback));
 	SpinLockRelease(&walprop_shared->mutex);
 }
 
 
 void
-zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
+replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
 {
 	SpinLockAcquire(&walprop_shared->mutex);
 	*writeLsn = walprop_shared->feedback.ps_writelsn;
@@ -1973,37 +1973,37 @@ zenith_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr 
 
 
 /*
- * Get ZenithFeedback fields from the most advanced safekeeper
+ * Get ReplicationFeedback fields from the most advanced safekeeper
  */
 static void
-GetLatestZentihFeedback(ZenithFeedback *zf)
+GetLatestZentihFeedback(ReplicationFeedback *rf)
 {
 	int latest_safekeeper = 0;
 	XLogRecPtr ps_writelsn = InvalidXLogRecPtr;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].appendResponse.zf.ps_writelsn > ps_writelsn)
+		if (safekeeper[i].appendResponse.rf.ps_writelsn > ps_writelsn)
 		{
 			latest_safekeeper = i;
-			ps_writelsn = safekeeper[i].appendResponse.zf.ps_writelsn;
+			ps_writelsn = safekeeper[i].appendResponse.rf.ps_writelsn;
 		}
 	}
 
-	zf->currentClusterSize = safekeeper[latest_safekeeper].appendResponse.zf.currentClusterSize;
-	zf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_writelsn;
-	zf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_flushlsn;
-	zf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_applylsn;
-	zf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.zf.ps_replytime;
+	rf->currentClusterSize = safekeeper[latest_safekeeper].appendResponse.rf.currentClusterSize;
+	rf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_writelsn;
+	rf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_flushlsn;
+	rf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_applylsn;
+	rf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.rf.ps_replytime;
 
 	elog(DEBUG2, "GetLatestZentihFeedback: currentClusterSize %lu,"
 			  " ps_writelsn %X/%X, ps_flushlsn %X/%X, ps_applylsn %X/%X, ps_replytime %lu",
-		zf->currentClusterSize,
-		LSN_FORMAT_ARGS(zf->ps_writelsn),
-		LSN_FORMAT_ARGS(zf->ps_flushlsn),
-		LSN_FORMAT_ARGS(zf->ps_applylsn),
-		zf->ps_replytime);
+		rf->currentClusterSize,
+		LSN_FORMAT_ARGS(rf->ps_writelsn),
+		LSN_FORMAT_ARGS(rf->ps_flushlsn),
+		LSN_FORMAT_ARGS(rf->ps_applylsn),
+		rf->ps_replytime);
 
-	zenith_feedback_set(zf);
+	replication_feedback_set(rf);
 }
 
 static void
@@ -2016,16 +2016,16 @@ HandleSafekeeperResponse(void)
 
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-	diskConsistentLsn = quorumFeedback.zf.ps_flushlsn;
+	diskConsistentLsn = quorumFeedback.rf.ps_flushlsn;
 
 	if (!syncSafekeepers)
 	{
-		// Get ZenithFeedback fields from the most advanced safekeeper
-		GetLatestZentihFeedback(&quorumFeedback.zf);
-		SetZenithCurrentClusterSize(quorumFeedback.zf.currentClusterSize);
+		// Get ReplicationFeedback fields from the most advanced safekeeper
+		GetLatestZentihFeedback(&quorumFeedback.rf);
+		SetZenithCurrentClusterSize(quorumFeedback.rf.currentClusterSize);
 	}
 
-	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.zf.ps_flushlsn)
+	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.rf.ps_flushlsn)
 	{
 
 		if (minQuorumLsn > quorumFeedback.flushLsn)
@@ -2039,7 +2039,7 @@ HandleSafekeeperResponse(void)
 								//flush_lsn - This is what durably stored in WAL service.
 								quorumFeedback.flushLsn,
 								//apply_lsn - This is what processed and durably saved at pageserver.
-								quorumFeedback.zf.ps_flushlsn,
+								quorumFeedback.rf.ps_flushlsn,
 								GetCurrentTimestamp(), false);
 	}
 
@@ -2222,7 +2222,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			msg->hs.xmin.value = pq_getmsgint64_le(&s);
 			msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);
 			if (buf_size > APPENDRESPONSE_FIXEDPART_SIZE)
-				ParseZenithFeedbackMessage(&s, &msg->zf);
+				ParseReplicationFeedbackMessage(&s, &msg->rf);
 			pq_getmsgend(&s);
 			return true;
 		}
