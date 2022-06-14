@@ -3824,6 +3824,10 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 	*apply_lsn = min_apply_lsn;
 }
 
+static bool is_write_fall_behind = false;
+static bool is_flush_fall_behind = false;
+static bool is_apply_fall_behind = false;
+
 // Check if we need to suspend inserts because of lagging replication.
 uint64
 backpressure_lag(void)
@@ -3845,25 +3849,52 @@ backpressure_lag(void)
 			LSN_FORMAT_ARGS(applyPtr));
 
 		if ((writePtr != UnknownXLogRecPtr
-			&& max_replication_write_lag > 0
-			&& myFlushLsn > writePtr + max_replication_write_lag*MB))
-		{
-			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
-		}
+			 && max_replication_write_lag > 0)) {
+				if (is_write_fall_behind) {
+					if (myFlushLsn > writePtr) {
+						return (myFlushLsn - writePtr);
+					} else {
+						is_write_fall_behind = false;
+					}
+				} else {
+					if (myFlushLsn > writePtr + max_replication_write_lag*MB) {
+						is_write_fall_behind = true;
+						return (myFlushLsn - writePtr - max_replication_write_lag*MB);
+					}
+				}
+			}
 
 		if ((flushPtr != UnknownXLogRecPtr
-			&& max_replication_flush_lag > 0
-			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
-		{
-			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
-		}
+			 && max_replication_flush_lag > 0)) {
+				if (is_flush_fall_behind) {
+					if (myFlushLsn > flushPtr) {
+						return (myFlushLsn - flushPtr);
+					} else {
+						is_flush_fall_behind = false;
+					}
+				} else {
+					if (myFlushLsn > flushPtr + max_replication_flush_lag*MB) {
+						is_flush_fall_behind = true;
+						return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
+					}
+				}
+			}
 
 		if ((applyPtr != UnknownXLogRecPtr
-			&& max_replication_apply_lag > 0
-			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
-		{
-			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
-		}
+			 && max_replication_apply_lag > 0)) {
+				if (is_apply_fall_behind) {
+					if (myFlushLsn > applyPtr) {
+						return (myFlushLsn - applyPtr);
+					} else {
+						is_apply_fall_behind = false;
+					}
+				} else {
+					if (myFlushLsn > applyPtr + max_replication_apply_lag*MB) {
+						is_apply_fall_behind = true;
+						return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
+					}
+				}
+			}
 	}
 	return 0;
 }
