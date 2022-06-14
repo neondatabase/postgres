@@ -3824,7 +3824,7 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 	*apply_lsn = min_apply_lsn;
 }
 
-static bool is_write_fall_behind = false;
+static volatile bool is_write_fall_behind = false;
 
 // Check if we need to suspend inserts because of lagging replication.
 uint64
