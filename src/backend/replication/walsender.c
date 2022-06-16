@@ -3849,8 +3849,8 @@ backpressure_lag(void)
 		if ((writePtr != UnknownXLogRecPtr
 			 && max_replication_write_lag > 0)) {
 				if (is_write_fall_behind) {
-					if (myFlushLsn > writePtr) {
-						return (myFlushLsn - writePtr);
+					if (myFlushLsn > writePtr + MB) {
+						return (myFlushLsn - writePtr - MB);
 					} else {
 						is_write_fall_behind = false;
 					}
