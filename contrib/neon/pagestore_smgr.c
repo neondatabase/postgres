@@ -697,7 +697,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 
 	if (get_cached_relsize(reln->smgr_rnode.node, forkNum, &n_blocks))
 	{
-		return true;
+		return n_blocks != InvalidBlockNumber;
 	}
 
 	/*
@@ -753,6 +753,22 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
 	}
 	pfree(resp);
+
+	/*
+	 * Update the size cache, so that if smgrexists() is called repeatedly,
+	 * we don't need the roundtrip to the page server on subsequent calls.
+	 */
+	if (exists)
+	{
+		/* this updates the size cache as a size effect */
+		(void) zenith_nblocks(reln, forkNum);
+	}
+	else
+	{
+		/* remember that it does not exist */
+		set_cached_relsize(reln->smgr_rnode.node, forkNum, InvalidBlockNumber);
+	}
+
 	return exists;
 }
 
@@ -1277,12 +1293,30 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 
 	if (get_cached_relsize(reln->smgr_rnode.node, forknum, &n_blocks))
 	{
-		elog(SmgrTrace, "cached nblocks for %u/%u/%u.%u: %u blocks",
-			 reln->smgr_rnode.node.spcNode,
-			 reln->smgr_rnode.node.dbNode,
-			 reln->smgr_rnode.node.relNode,
-			 forknum, n_blocks);
-		return n_blocks;
+		if (n_blocks == InvalidBlockNumber)
+		{
+			/*
+			 * Now this is surprising: our cache says that the fork does not exist.
+			 * PostgreSQL should not call smgrnblocks() on a non-existent fork,
+			 * that's an error in md.c too. It probably means that there's a bug in
+			 * our relation size caching, and we've forgotten to update it. Warn,
+			 * and fall through to get the real size from the page server.
+			 */
+			elog(WARNING, "smgrnblocks() called on %u/%u/%u.%u, but relsize cache says the fork does not exist",
+				 reln->smgr_rnode.node.spcNode,
+				 reln->smgr_rnode.node.dbNode,
+				 reln->smgr_rnode.node.relNode,
+				 forknum);
+		}
+		else
+		{
+			elog(SmgrTrace, "cached nblocks for %u/%u/%u.%u: %u blocks",
+				 reln->smgr_rnode.node.spcNode,
+				 reln->smgr_rnode.node.dbNode,
+				 reln->smgr_rnode.node.relNode,
+				 forknum, n_blocks);
+			return n_blocks;
+		}
 	}
 
 	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode);
