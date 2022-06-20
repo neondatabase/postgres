@@ -756,7 +756,7 @@ typedef struct XLogCtlData
 	 * Cache of last written page LSN.
 	 * We store this value for up to LAST_WRITTEN_CACHE_SIZE relations + maximum for all other relations.
 	 */
-	XLogRecPtr	lastWrittenPageLsn;
+	XLogRecPtr	lastWrittenPageNonCacheLsn;
 	XLogRecPtr	lastWrittenPageCacheLsn[LAST_WRITTEN_CACHE_SIZE];
 	Oid			lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
 	size_t		lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
