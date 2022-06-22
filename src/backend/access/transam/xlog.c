@@ -87,9 +87,6 @@ extern uint32 bootstrap_data_checksum_version;
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
 #define RECOVERY_COMMAND_DONE	"recovery.done"
 
-/* Size of last written page LSN cache. Should not be large because sequential search is used. */
-#define LAST_WRITTEN_CACHE_SIZE 4
-
 /* User-settable parameters */
 int			max_wal_size_mb = 1024; /* 1 GB */
 int			min_wal_size_mb = 80;	/* 80 MB */
@@ -115,6 +112,7 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
 uint64      predefined_sysidentifier;
+int			lastWrittenLsnCacheSize;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -183,6 +181,28 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{"shutdown", RECOVERY_TARGET_ACTION_SHUTDOWN, false},
 	{NULL, 0, false}
 };
+
+
+/*
+ * We are not taken in acccout dbnode, spcnode, forknum fields of
+ * relation tag, because possibility of collision is assumed to be small
+ * and should not affect performance. And reducing cache key size speed-up
+ * hash calculation and comparison.
+ */
+typedef struct LastWrittenLsnCacheKey
+{
+	Oid         relid;
+	BlockNumber basket;
+} LastWrittenLsnCacheKey;
+
+typedef struct LastWrittenLsnCacheEntry
+{
+	LastWrittenLsnCacheKey key;
+	XLogRecPtr             lsn;
+	/* L2-List for LRU replacement algorithm */
+	struct LastWrittenLsnCacheEntry* next;
+	struct LastWrittenLsnCacheEntry* prev;
+} LastWrittenLsnCacheEntry;
 
 /*
  * Statistics for current checkpoint are collected in this global struct.
@@ -753,13 +773,14 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 
 	/*
-	 * Cache of last written page LSN.
-	 * We store this value for up to LAST_WRITTEN_CACHE_SIZE relations + maximum for all other relations.
+	 * Maximal last written LSN for pges not present in lastWrittenLsnCache
 	 */
-	XLogRecPtr	lastWrittenPageLsn;
-	XLogRecPtr	lastWrittenPageCacheLsn[LAST_WRITTEN_CACHE_SIZE];
-	Oid			lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
-	size_t		lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
+	XLogRecPtr  maxLastWrittenLsn;
+
+	/*
+	 * Double linked list to implement LRU replacement policy for last written LSN cache
+	 */
+	LastWrittenLsnCacheEntry lastWrittenLsnLRU;
 
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
@@ -782,6 +803,11 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  * We maintain an image of pg_control in shared memory.
  */
 static ControlFileData *ControlFile = NULL;
+
+
+static HTAB *lastWrittenLsnCache;
+
+#define LAST_WRITTEN_LSN_CACHE_BASKET 1024 /* blocks = 8Mb */
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -5143,11 +5169,8 @@ LocalProcessControlFile(bool reset)
 	ReadControlFile();
 }
 
-/*
- * Initialization of shared memory for XLOG
- */
-Size
-XLOGShmemSize(void)
+static Size
+XLOGCtlShmemSize(void)
 {
 	Size		size;
 
@@ -5187,6 +5210,16 @@ XLOGShmemSize(void)
 	return size;
 }
 
+/*
+ * Initialization of shared memory for XLOG
+ */
+Size
+XLOGShmemSize(void)
+{
+	return XLOGCtlShmemSize() +
+		hash_estimate_size(lastWrittenLsnCacheSize, sizeof(LastWrittenLsnCacheEntry));
+}
+
 void
 XLOGShmemInit(void)
 {
@@ -5216,6 +5249,15 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
+	{
+		static HASHCTL info;
+		info.keysize = sizeof(LastWrittenLsnCacheKey);
+		info.entrysize = sizeof(LastWrittenLsnCacheEntry);
+		lastWrittenLsnCache = ShmemInitHash("last_written_lsn_cache",
+											lastWrittenLsnCacheSize, lastWrittenLsnCacheSize,
+											&info,
+											HASH_ELEM | HASH_BLOBS);
+	}
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
@@ -8100,13 +8142,8 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->lastWrittenPageLsn = EndOfLog;
-	for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
-	{
-		XLogCtl->lastWrittenPageCacheLsn[i] = InvalidXLogRecPtr;
-		XLogCtl->lastWrittenPageCacheOid[i] = InvalidOid;
-	}
-	XLogCtl->lastWrittenPageCacheClock = 0;
+	XLogCtl->maxLastWrittenLsn = EndOfLog;
+	XLogCtl->lastWrittenLsnLRU.next = XLogCtl->lastWrittenLsnLRU.prev = &XLogCtl->lastWrittenLsnLRU;
 	LocalSetXLogInsertAllowed();
 
 	/* If necessary, write overwrite-contrecord before doing anything else */
@@ -8828,85 +8865,106 @@ GetInsertRecPtr(void)
 }
 
 /*
- * GetLastWrittenPageLSN -- Returns maximal LSN of written page.
+ * GetLastWrittenLSN -- Returns maximal LSN of written page.
  * It returns either cached last written LSN of particular relation,
  * either global maximum of last written LSNs among all relations.
  */
 XLogRecPtr
-GetLastWrittenPageLSN(Oid rnode)
+GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 {
 	XLogRecPtr lsn;
-	SpinLockAcquire(&XLogCtl->info_lck);
-	lsn = XLogCtl->lastWrittenPageLsn;
+	LastWrittenLsnCacheEntry* entry;
+
+	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+
+	/* Maximal last written LSN among all non-cached pages */
+	lsn = XLogCtl->maxLastWrittenLsn;
+
 	if (rnode != InvalidOid)
 	{
-		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
-		{
-			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
-			{
-				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
-				break;
-			}
-		}
+		LastWrittenLsnCacheKey key;
+		key.relid = rnode;
+		key.basket = blkno / LAST_WRITTEN_LSN_CACHE_BASKET;
+		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
+		if (entry != NULL)
+			lsn = entry->lsn;
 	}
 	else
 	{
+		HASH_SEQ_STATUS seq;
 		/* Find maximum of all cached LSNs */
-		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
+		hash_seq_init(&seq, lastWrittenLsnCache);
+		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
 		{
-			if (XLogCtl->lastWrittenPageCacheLsn[i] > lsn)
-				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
+			if (entry->lsn > lsn)
+				lsn = entry->lsn;
 		}
 	}
-	SpinLockRelease(&XLogCtl->info_lck);
+	LWLockRelease(LastWrittenLsnLock);
 
 	return lsn;
 }
 
 /*
- * SetLastWrittenPageLSN -- Set maximal LSN of written page.
- * We maintain small shared cache for last written LSN of least recently updated
- * pages. This cache allows to keep global lastWrittenPageLsn unchanged and
- * so avoid long wait for LSN for read requests to other relations.
+ * SetLastWrittenLSN -- Set maximal LSN of written page.
+ * We maintain cache of last written LSNs with limited size and LRU replacement
+ * policy. To reduce cache size we store max LSN not for each page, but for
+ * backet (1024 blocks). This cache allows to use old LSN when
+ * requesting pages of unchanged or appended relations.
  */
 void
-SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
+SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 {
 	if (lsn == InvalidXLogRecPtr)
 		return;
 
-	SpinLockAcquire(&XLogCtl->info_lck);
+	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
 	if (rnode == InvalidOid)
 	{
-		if (lsn > XLogCtl->lastWrittenPageLsn)
-			XLogCtl->lastWrittenPageLsn = lsn;
+		if (lsn > XLogCtl->maxLastWrittenLsn)
+			XLogCtl->maxLastWrittenLsn = lsn;
 	}
 	else
 	{
-		int i = LAST_WRITTEN_CACHE_SIZE;
-		while (--i >= 0)
+		LastWrittenLsnCacheEntry* entry;
+		LastWrittenLsnCacheKey key;
+		bool found;
+		BlockNumber basket;
+
+		key.relid = rnode;
+		for (basket = from / LAST_WRITTEN_LSN_CACHE_BASKET;
+			 basket <= till / LAST_WRITTEN_LSN_CACHE_BASKET;
+			 basket++)
 		{
-			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
+			key.basket = basket;
+			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
+			if (found)
 			{
-				if (lsn > XLogCtl->lastWrittenPageCacheLsn[i])
+				if (lsn > entry->lsn)
+					entry->lsn = lsn;
+				/* Unlink from LRU list */
+				entry->next->prev = entry->prev;
+				entry->prev->next = entry->next;
+			}
+			else
+			{
+				entry->lsn = lsn;
+				if (hash_get_num_entries(lastWrittenLsnCache) > lastWrittenLsnCacheSize)
 				{
-					XLogCtl->lastWrittenPageCacheLsn[i] = lsn;
+					/* Replace least recently used entry */
+					LastWrittenLsnCacheEntry* victim = XLogCtl->lastWrittenLsnLRU.prev;
+					victim->next->prev = victim->prev;
+					victim->prev->next = victim->next;
+					hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
 				}
-				break;
 			}
+			/* Link to the head of LRU list */
+			entry->next = XLogCtl->lastWrittenLsnLRU.next;
+			entry->prev = &XLogCtl->lastWrittenLsnLRU;
+			XLogCtl->lastWrittenLsnLRU.next = entry->next->prev = entry;
 		}
-		if (i < 0)
-		{
-			int victim = ++XLogCtl->lastWrittenPageCacheClock % LAST_WRITTEN_CACHE_SIZE;
-			if (XLogCtl->lastWrittenPageCacheLsn[victim] > XLogCtl->lastWrittenPageLsn)
-			{
-				XLogCtl->lastWrittenPageLsn = XLogCtl->lastWrittenPageCacheLsn[victim];
-			}
-			XLogCtl->lastWrittenPageCacheOid[victim] = rnode;
-			XLogCtl->lastWrittenPageCacheLsn[victim] = lsn;
-		}
- 	}
-	SpinLockRelease(&XLogCtl->info_lck);
+	}
+	LWLockRelease(LastWrittenLsnLock);
 }
 
 /*

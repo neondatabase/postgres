@@ -84,6 +84,10 @@ static char *hexdump_page(char *page);
 
 const int	SmgrTrace = DEBUG5;
 
+/*
+ * Pseudo block number used to associate LSN with relation metadata (relation size */
+#define REL_METADATA_PSEUDO_BLOCKNO 0xFFFFFFFE
+
 page_server_api *page_server;
 
 /* GUCs */
@@ -559,7 +563,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
 	 */
-	SetLastWrittenPageLSN(lsn, reln->smgr_rnode.node.relNode);
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, blocknum, blocknum);
 }
 
 
@@ -604,7 +608,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(bool *latest, Oid rnode)
+zenith_get_request_lsn(bool *latest, Oid rnode, BlockNumber blkno)
 {
 	XLogRecPtr	lsn;
 
@@ -631,9 +635,9 @@ zenith_get_request_lsn(bool *latest, Oid rnode)
 		 * so our request cannot concern those.
 		 */
 		*latest = true;
-		lsn = GetLastWrittenPageLSN(rnode);
+		lsn = GetLastWrittenLSN(rnode, blkno);
 		Assert(lsn != InvalidXLogRecPtr);
-		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
+		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenLSN lsn %X/%X ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 
 		lsn = zm_adjust_lsn(lsn);
@@ -717,7 +721,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		return false;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithExistsRequest request = {
 			.req.tag = T_ZenithExistsRequest,
@@ -792,10 +796,10 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 *
 	 * FIXME: This is currently not just an optimization, but required for
 	 * correctness. Postgres can call smgrnblocks() on the newly-created
-	 * relation. Currently, we don't call SetLastWrittenPageLSN() when a new
+	 * relation. Currently, we don't call SetLastWritten7LSN() when a new
 	 * relation created, so if we didn't remember the size in the relsize
 	 * cache, we might call smgrnblocks() on the newly-created relation before
-	 * the creation WAL record hass been received by the page server.
+	 * the creation WAL record has been received by the page server.
 	 */
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, 0);
 
@@ -905,6 +909,8 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	if (IS_LOCAL_REL(reln))
 		mdextend(reln, forkNum, blkno, buffer, skipFsync);
 #endif
+
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 }
 
 /*
@@ -1080,7 +1086,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, blkno);
 	zenith_read_at_lsn(reln->smgr_rnode.node, forkNum, blkno, request_lsn, latest, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
@@ -1285,7 +1291,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		return n_blocks;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithNblocksRequest request = {
 			.req.tag = T_ZenithNblocksRequest,
@@ -1345,7 +1351,7 @@ zenith_dbsize(Oid dbNode)
 	XLogRecPtr request_lsn;
 	bool		latest;
 
-	request_lsn = zenith_get_request_lsn(&latest, InvalidOid);
+	request_lsn = zenith_get_request_lsn(&latest, InvalidOid, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithDbSizeRequest request = {
 			.req.tag = T_ZenithDbSizeRequest,
@@ -1432,7 +1438,7 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 */
 	XLogFlush(lsn);
 
-	SetLastWrittenPageLSN(lsn, reln->smgr_rnode.node.relNode);
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
