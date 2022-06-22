@@ -796,7 +796,7 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 *
 	 * FIXME: This is currently not just an optimization, but required for
 	 * correctness. Postgres can call smgrnblocks() on the newly-created
-	 * relation. Currently, we don't call SetLastWritten7LSN() when a new
+	 * relation. Currently, we don't call SetLastWrittenLSN() when a new
 	 * relation created, so if we didn't remember the size in the relsize
 	 * cache, we might call smgrnblocks() on the newly-created relation before
 	 * the creation WAL record has been received by the page server.
