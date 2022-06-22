@@ -8953,6 +8953,10 @@ SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 				{
 					/* Replace least recently used entry */
 					LastWrittenLsnCacheEntry* victim = XLogCtl->lastWrittenLsnLRU.prev;
+					/* Adjust max LSN for not cached relations/chunks if needed */
+					if (victim->lsn > XLogCtl->maxLastWrittenLsn)
+						XLogCtl->maxLastWrittenLsn = victim->lsn;
+
 					victim->next->prev = victim->prev;
 					victim->prev->next = victim->next;
 					hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
