@@ -36,9 +36,8 @@ typedef struct WalProposerConn WalProposerConn;
 struct WalMessage;
 typedef struct WalMessage WalMessage;
 
-extern char *zenith_timeline_walproposer;
-extern char *zenith_tenant_walproposer;
-extern char	*zenith_pageserver_connstring_walproposer;
+extern char *walproposer_timeline;
+extern char *walproposer_tenant;
 
 /* Possible return values from ReadPGAsync */
 typedef enum
@@ -162,7 +161,7 @@ typedef struct ProposerGreeting
 	uint32	   pgVersion;
 	pg_uuid_t  proposerId;
 	uint64	   systemId;		  /* Postgres system identifier */
-	uint8	   ztimelineid[16];	  /* Zenith timeline id */
+	uint8	   ztimelineid[16];	  /* Timeline id */
 	uint8	   ztenantid[16];
 	TimeLineID timeline;
 	uint32	   walSegSize;

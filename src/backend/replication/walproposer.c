@@ -62,9 +62,8 @@ int			wal_acceptor_reconnect_timeout;
 int			wal_acceptor_connect_timeout;
 bool		am_wal_proposer;
 
-char	   *zenith_timeline_walproposer = NULL;
-char	   *zenith_tenant_walproposer = NULL;
-char	   *zenith_pageserver_connstring_walproposer = NULL;
+char	   *walproposer_timeline = NULL;
+char	   *walproposer_tenant = NULL;
 
 /* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
 WalProposerFunctionsType *WalProposerFunctions = NULL;
@@ -436,16 +435,16 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	greetRequest.pgVersion = PG_VERSION_NUM;
 	pg_strong_random(&greetRequest.proposerId, sizeof(greetRequest.proposerId));
 	greetRequest.systemId = systemId;
-	if (!zenith_timeline_walproposer)
+	if (!walproposer_timeline)
 		elog(FATAL, "neon.timeline_id is not provided");
-	if (*zenith_timeline_walproposer != '\0' &&
-		!HexDecodeString(greetRequest.ztimelineid, zenith_timeline_walproposer, 16))
-		elog(FATAL, "Could not parse neon.timeline_id, %s", zenith_timeline_walproposer);
-	if (!zenith_tenant_walproposer)
+	if (*walproposer_timeline != '\0' &&
+		!HexDecodeString(greetRequest.ztimelineid, walproposer_timeline, 16))
+		elog(FATAL, "Could not parse neon.timeline_id, %s", walproposer_timeline);
+	if (!walproposer_tenant)
 		elog(FATAL, "neon.tenant_id is not provided");
-	if (*zenith_tenant_walproposer != '\0' &&
-		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
-		elog(FATAL, "Could not parse neon.tenant_id, %s", zenith_tenant_walproposer);
+	if (*walproposer_tenant != '\0' &&
+		!HexDecodeString(greetRequest.ztenantid, walproposer_tenant, 16))
+		elog(FATAL, "Could not parse neon.tenant_id, %s", walproposer_tenant);
 
 	greetRequest.timeline = ThisTimeLineID;
 	greetRequest.walSegSize = wal_segment_size;
@@ -589,7 +588,7 @@ ResetConnection(Safekeeper *sk)
 		int written = 0;
 		written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
 				"host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
-				sk->host, sk->port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+				sk->host, sk->port, walproposer_timeline, walproposer_tenant);
 		// currently connection string is not that long, but once we pass something like jwt we might overflow the buffer,
 		// so it is better to be defensive and check that everything aligns well
 		if (written > MAXCONNINFO || written < 0)
@@ -862,21 +861,13 @@ HandleConnectionEvent(Safekeeper *sk)
 static void
 SendStartWALPush(Safekeeper *sk)
 {
-	char *query = NULL;
-	if (zenith_pageserver_connstring_walproposer != NULL) {
-		query = psprintf("START_WAL_PUSH %s", zenith_pageserver_connstring_walproposer);
-	} else {
-		query = psprintf("START_WAL_PUSH");
-	}
-	if (!walprop_send_query(sk->conn, query))
+	if (!walprop_send_query(sk->conn, "START_WAL_PUSH"))
 	{
-		pfree(query);
 		elog(WARNING, "Failed to send 'START_WAL_PUSH' query to safekeeper %s:%s: %s",
 			sk->host, sk->port, walprop_error_message(sk->conn));
 		ShutdownConnection(sk);
 		return;
 	}
-	pfree(query);
 	sk->state = SS_WAIT_EXEC_RESULT;
 	UpdateEventSet(sk, WL_SOCKET_READABLE);
 }
@@ -952,6 +943,15 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	sk->greetResponse.apm.tag = 'g';
 	if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->greetResponse))
 		return;
+
+	for (int i = 0; i < n_safekeepers; i++)
+	{
+		if (&safekeeper[i] == sk)
+			continue;
+		
+		if (sk->greetResponse.nodeId == safekeeper[i].greetResponse.nodeId)
+			elog(FATAL, "duplicate node id %ld found in greeting", sk->greetResponse.nodeId);
+	}
 
 	/* Protocol is all good, move to voting. */
 	sk->state = SS_VOTING;
@@ -1313,7 +1313,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	WalRcvStreamOptions options;
 
 	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
-			safekeeper[donor].host, safekeeper[donor].port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+			safekeeper[donor].host, safekeeper[donor].port, walproposer_timeline, walproposer_tenant);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
 	{
@@ -1324,8 +1324,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 		return false;
 	}
 	elog(LOG,
-		 "start recovery from %s:%s starting from %X/%08X till %X/%08X timeline "
-		 "%d",
+		 "start recovery from %s:%s starting from %X/%08X till %X/%08X timeline %d",
 		 safekeeper[donor].host, safekeeper[donor].port, (uint32) (startpos >> 32),
 		 (uint32) startpos, (uint32) (endpos >> 32), (uint32) endpos, timeline);
 

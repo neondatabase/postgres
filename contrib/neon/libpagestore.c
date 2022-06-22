@@ -413,10 +413,8 @@ _PG_init(void)
 	page_server_connstring = substitute_pageserver_password(page_server_connstring_raw);
 
 	/* Is there more correct way to pass CustomGUC to postgres code? */
-	zenith_timeline_walproposer = zenith_timeline;
-	zenith_tenant_walproposer = zenith_tenant;
-	/* Walproposer instructcs safekeeper which pageserver to use for replication */
-	zenith_pageserver_connstring_walproposer = page_server_connstring;
+	walproposer_timeline = zenith_timeline;
+	walproposer_tenant = zenith_tenant;
 
 	if (wal_redo)
 	{
