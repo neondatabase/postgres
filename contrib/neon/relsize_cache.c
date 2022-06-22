@@ -34,7 +34,7 @@ typedef struct
 typedef struct
 {
 	RelTag		tag;
-	BlockNumber size;
+	BlockNumber size; /* InvalidBlockNumber means that the fork does not exist */
 } RelSizeEntry;
 
 static HTAB *relsize_hash;
@@ -91,6 +91,10 @@ get_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber *size)
 	return found;
 }
 
+/*
+ * Remember the size of given relation fork. Size InvalidBlockNumber can
+ * be used for a negative cache entry, to remember that the fork does not exist.
+ */
 void
 set_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 {
@@ -121,7 +125,7 @@ update_cached_relsize(RelFileNode rnode, ForkNumber forknum, BlockNumber size)
 		tag.forknum = forknum;
 		LWLockAcquire(relsize_lock, LW_EXCLUSIVE);
 		entry = hash_search(relsize_hash, &tag, HASH_ENTER, &found);
-		if (!found || entry->size < size)
+		if (!found || entry->size == InvalidBlockNumber || entry->size < size)
 			entry->size = size;
 		LWLockRelease(relsize_lock);
 	}
