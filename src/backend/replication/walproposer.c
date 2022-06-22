@@ -1762,6 +1762,14 @@ RecvAppendResponses(Safekeeper *sk)
 						LSN_FORMAT_ARGS(sk->appendResponse.commitLsn),
 						sk->host, sk->port)));
 
+		if (sk->appendResponse.term > propTerm)
+		{
+			/* Another compute with higher term is running. */
+			elog(PANIC, "WAL acceptor %s:%s with term " INT64_FORMAT " rejected our request, our term " INT64_FORMAT "",
+					sk->host, sk->port,
+					sk->appendResponse.term, propTerm);
+		}
+
 		readAnything = true;
 	}
 
