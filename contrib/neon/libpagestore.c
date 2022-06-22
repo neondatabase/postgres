@@ -110,8 +110,7 @@ pageserver_connect()
 		}
 	}
 
-	/* FIXME: when auth is enabled this prints JWT to logs */
-	neon_log(LOG, "libpagestore: connected to '%s'", page_server_connstring);
+	neon_log(LOG, "libpagestore: connected to '%s'", page_server_connstring_raw);
 
 	connected = true;
 }
