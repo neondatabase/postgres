@@ -553,6 +553,7 @@ ShutdownConnection(Safekeeper *sk)
 	sk->state = SS_OFFLINE;
 	sk->flushWrite = false;
 	sk->streamingAt = InvalidXLogRecPtr;
+	sk->startStreamingAt = InvalidXLogRecPtr;
 
 	if (sk->voteResponse.termHistory.entries)
 		pfree(sk->voteResponse.termHistory.entries);
@@ -1741,10 +1742,13 @@ static bool
 RecvAppendResponses(Safekeeper *sk)
 {
 	XLogRecPtr	minQuorumLsn;
+	XLogRecPtr  prevFlushLsn;
 	bool readAnything = false;
 
 	while (true)
 	{
+		prevFlushLsn = sk->appendResponse.flushLsn;
+
 		/*
 		 * If our reading doesn't immediately succeed, any
 		 * necessary error handling or state setting is taken care
@@ -1768,6 +1772,10 @@ RecvAppendResponses(Safekeeper *sk)
 					sk->host, sk->port,
 					sk->appendResponse.term, propTerm);
 		}
+		Assert(sk->appendResponse.term == propTerm);
+		Assert(sk->appendResponse.flushLsn >= prevFlushLsn);
+		Assert(sk->appendResponse.flushLsn >= sk->appendResponse.commitLsn);
+		Assert(sk->appendResponse.commitLsn >= timelineStartLsn);
 
 		readAnything = true;
 	}
@@ -1918,9 +1926,12 @@ GetAcknowledgedByQuorumWALPosition(void)
 		/*
 		 * Like in Raft, we aren't allowed to commit entries from previous
 		 * terms, so ignore reported LSN until it gets to epochStartLsn.
+		 * 
+		 * timelineStartLsn is a start position, WAL up to this point is
+		 * considered committed.
 		 */
 		responses[i] = safekeeper[i].appendResponse.flushLsn >= propEpochStartLsn ?
-			safekeeper[i].appendResponse.flushLsn : 0;
+			safekeeper[i].appendResponse.flushLsn : timelineStartLsn;
 	}
 	qsort(responses, n_safekeepers, sizeof(XLogRecPtr), CompareLsn);
 
