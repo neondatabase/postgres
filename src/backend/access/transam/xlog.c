@@ -812,8 +812,8 @@ static ControlFileData *ControlFile = NULL;
  * Cache of last written LSN for each relation chunk (hash bucket).
  * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
  * relation metadata update.
- * Size of the cache is limited by GUC variable lastWrittnLsnCacheSize ("lsn_cache_size"),
- * pages are replaced using LRU algirithm, based on L2-list.
+ * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
+ * pages are replaced using LRU algorithm, based on L2-list.
  * Access to this cache is protected by 'LastWrittenLsnLock'.
  */
 static HTAB *lastWrittenLsnCache;
