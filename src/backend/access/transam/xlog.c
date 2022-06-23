@@ -184,7 +184,7 @@ const struct config_enum_entry recovery_target_action_options[] = {
 
 
 /*
- * We are not taken in acccout dbnode, spcnode, forknum fields of
+ * We are not taken in account dbnode, spcnode, forknum fields of
  * relation tag, because possibility of collision is assumed to be small
  * and should not affect performance. And reducing cache key size speed-up
  * hash calculation and comparison.
@@ -192,7 +192,7 @@ const struct config_enum_entry recovery_target_action_options[] = {
 typedef struct LastWrittenLsnCacheKey
 {
 	Oid         relid;
-	BlockNumber basket;
+	BlockNumber bucket;
 } LastWrittenLsnCacheKey;
 
 typedef struct LastWrittenLsnCacheEntry
@@ -773,12 +773,13 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 
 	/*
-	 * Maximal last written LSN for pges not present in lastWrittenLsnCache
+	 * Maximal last written LSN for pages not present in lastWrittenLsnCache
 	 */
 	XLogRecPtr  maxLastWrittenLsn;
 
 	/*
-	 * Double linked list to implement LRU replacement policy for last written LSN cache
+	 * Double linked list to implement LRU replacement policy for last written LSN cache.
+	 * Access to this list as well as to last written LSN cache is protected by 'LastWrittenLsnLock'.
 	 */
 	LastWrittenLsnCacheEntry lastWrittenLsnLRU;
 
@@ -804,10 +805,18 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  */
 static ControlFileData *ControlFile = NULL;
 
+#define LAST_WRITTEN_LSN_CACHE_BUCKET 1024 /* blocks = 8Mb */
 
+
+/*
+ * Cache of last written LSN for each relation chunk (hash bucket).
+ * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
+ * relation metadata update.
+ * Size of the cache is limited by GUC variable lastWrittnLsnCacheSize ("lsn_cache_size"),
+ * pages are replaced using LRU algirithm, based on L2-list.
+ * Access to this cache is protected by 'LastWrittenLsnLock'.
+ */
 static HTAB *lastWrittenLsnCache;
-
-#define LAST_WRITTEN_LSN_CACHE_BASKET 1024 /* blocks = 8Mb */
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -8866,8 +8875,11 @@ GetInsertRecPtr(void)
 
 /*
  * GetLastWrittenLSN -- Returns maximal LSN of written page.
- * It returns either cached last written LSN of particular relation,
- * either global maximum of last written LSNs among all relations.
+ * It returns an upper bound for the last written LSN of a given page,
+ * either from a cached last written LSN or a global maximum last written LSN.
+ * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
+ * If cache is large enough ,iterting through all hash items may be rather expensive.
+ * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
  */
 XLogRecPtr
 GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
@@ -8884,7 +8896,7 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 	{
 		LastWrittenLsnCacheKey key;
 		key.relid = rnode;
-		key.basket = blkno / LAST_WRITTEN_LSN_CACHE_BASKET;
+		key.bucket = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
@@ -8909,8 +8921,11 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
  * SetLastWrittenLSN -- Set maximal LSN of written page.
  * We maintain cache of last written LSNs with limited size and LRU replacement
  * policy. To reduce cache size we store max LSN not for each page, but for
- * backet (1024 blocks). This cache allows to use old LSN when
+ * bucket (1024 blocks). This cache allows to use old LSN when
  * requesting pages of unchanged or appended relations.
+ *
+ * rnode can be InvalidOid, in this case maxLastWrittenLsn is updated. SetLastWrittensn with InvalidOid
+ * is used by createdb and dbase_redo functions.
  */
 void
 SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
@@ -8929,14 +8944,14 @@ SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 		LastWrittenLsnCacheEntry* entry;
 		LastWrittenLsnCacheKey key;
 		bool found;
-		BlockNumber basket;
+		BlockNumber bucket;
 
 		key.relid = rnode;
-		for (basket = from / LAST_WRITTEN_LSN_CACHE_BASKET;
-			 basket <= till / LAST_WRITTEN_LSN_CACHE_BASKET;
-			 basket++)
+		for (bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
+			 bucket <= till / LAST_WRITTEN_LSN_CACHE_BUCKET;
+			 bucket++)
 		{
-			key.basket = basket;
+			key.bucket = bucket;
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
 			if (found)
 			{

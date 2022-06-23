@@ -2372,7 +2372,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&lastWrittenLsnCacheSize,
-		1024, 10, 1000000, /* 1024 is enough to hold 10GB database with 8Mb basket */
+		1024, 10, 1000000, /* 1024 is enough to hold 10GB database with 8Mb bucket */
 		NULL, NULL, NULL
 	},
 
