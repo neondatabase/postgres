@@ -105,6 +105,9 @@ int			PostAuthDelay = 0;
 /* Time between checks that the client is still connected. */
 int			client_connection_check_interval = 0;
 
+/* Neon: delay for throttling backend by backpressure mechanism */
+int			zenith_backpressure_delay;
+
 /* ----------------
  *		private typedefs etc
  * ----------------
@@ -3368,35 +3371,197 @@ ProcessInterrupts_pg(void)
 		ProcessLogMemoryContextInterrupt();
 }
 
+#define MB ((XLogRecPtr)1024*1024)
+#define MS 1000
+#define PREDICTABLE_BACKPRESSURE 1
+
 void
 ProcessInterrupts(void)
 {
-	uint64 lag;
-
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
+
+	ProcessInterrupts_pg();
 
 	// Don't throttle read only transactions and wal sender
 	if (am_walsender || !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
 	{
-		ProcessInterrupts_pg();
 		return;
 	}
 
-	#define BACK_PRESSURE_DELAY 10000L // 0.01 sec
-	while(true)
+	if (zenith_backpressure_delay != 0)
 	{
-		ProcessInterrupts_pg();
+#if PREDICTABLE_BACKPRESSURE
+		//
+		// We are collecting statitics about replication lag in cyclic buffer.
+		// The size of this buffers is expected to be large enough to keep information about few minutes of work.
+		// ProcessInterrupts is called by CHECK_FOR_INTERRUPTS when either backend receive some signal,
+		// either walsender receives replica response and determines that replication lag exceed on of specified limits.
+		//
+		// The key idea of the algorithm is to delay execution of write transaction so that till next interrupt
+		// replica can catch up. It can be defined using the following formula:
+		//
+		//     lag + (interval - delay)*tx_speed = interval * rx_speed
+		//
+		// where tx_speed is estimatd speed of producing WAL by compute node and rx_speed - estimated speed of consuming WAL by pageserver.
+		// So the meaning of this formula is that during next interval replica continue to consume WAL and backend is throttled
+		// for `delay` and works during `interval` - `delay`. Replica should consume lag and WAL produced by master.
+		//
+		// We do not take in the account that there are three different kinds of lag: write (last_record_lsn), flush (disk_consistent_lsn)
+		// and apply (persistent_disk_consistent_lsn). backpressure_lag() doesn't make difference between them.
+		// Moreover it returns lag exceeding specified threshold. It may be more correct to rewrite formula above as
+		//
+		//     lag + max_replication_write_lag * MB + (interval - delay)*tx_speed = interval * rx_speed
+		//
+		// But looks like requirement for replica to completely catch up just slow down writes.
+		//
+		#define HISTORY_SIZE 1024
+		#define MAX_ITERATIONS 1000
+		static struct  {
+			XLogRecPtr  clientLSN;
+			XLogRecPtr  serverLSN;
+			TimestampTz timestamp;
+		} history[HISTORY_SIZE];
 
-		// Suspend writers until replicas catch up
-		lag = backpressure_lag();
-		if (lag <= 0)
-			break;
+		static size_t curr_index = 0;
+		static size_t n_backpressure_events = 0;
 
-		set_ps_display("backpressure throttling");
+		uint64 lag = backpressure_lag();
+		if (lag > 0)
+		{
+			int64 n_iterations = 1;
+			history[curr_index].timestamp = GetCurrentTimestamp();
+			history[curr_index].clientLSN = GetFlushRecPtr();
+			history[curr_index].serverLSN = history[curr_index].clientLSN - lag;
+			if (n_backpressure_events > 0)
+			{
+				// lag + (interval - delay)*tx_speed = interval * rx_speed
+				size_t first_event = (curr_index - n_backpressure_events ) % HISTORY_SIZE;
+				TimestampTz history_interval = history[curr_index].timestamp - history[first_event].timestamp;
+				if (history_interval != 0)
+				{
+					uint64 tx_speed = (history[curr_index].clientLSN - history[first_event].clientLSN) * USECS_PER_SEC / history_interval;
+					uint64 rx_speed = (history[curr_index].serverLSN - history[first_event].serverLSN) * USECS_PER_SEC / history_interval;
+					if (tx_speed != 0)
+					{
+						TimestampTz avg_interval = history_interval / (n_backpressure_events + 1);
+						int64 delay = (int64)(lag * USECS_PER_SEC - avg_interval * rx_speed) / (int64)tx_speed + avg_interval;
+						n_iterations = Min(MAX_ITERATIONS, delay / zenith_backpressure_delay / MS);
+						elog(DEBUG1, "lag=%ld, history_interval=%ld, avg_interval=%ld, tx_speed=%ld, rx_speed=%ld, delay=%ld, n_iterations=%ld",
+							 lag, history_interval, avg_interval, tx_speed, rx_speed, delay, n_iterations);
+					}
+					else
+					{
+						elog(DEBUG1, "lag=%ld, history_interval=%ld, tx_speed=%ld, rx_speed=%ld",
+							 lag, history_interval, tx_speed, rx_speed);
+					}
+				} else
+					elog(DEBUG1, "lag=%ld, history_interval=%ld", lag, history_interval);
+			}
+			if (n_backpressure_events + 1 < HISTORY_SIZE)
+			{
+				n_backpressure_events += 1;
+			}
+			curr_index = (curr_index + 1) % HISTORY_SIZE;
 
-		elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-		pg_usleep(BACK_PRESSURE_DELAY);
+			set_ps_display("backpressure throttling");
+
+			for (int64 i = 0; i < n_iterations; i++)
+			{
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+				if (backpressure_lag() <= 0) {
+					break;
+				}
+			}
+		}
+#elif EXPONENTIAL_BACKPRESSURE
+		const int MAX_BACKPRESSURE_ITERATIONS = 1024;
+		static int backpressure_iterations = 1;
+		uint64 lag = 0;
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			lag = backpressure_lag();
+			if (lag > 0)
+			{
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+			}
+			else
+			{
+				backpressure_iterations = 1;
+				return;
+			}
+		}
+		elog(DEBUG1, "backpressure throttling: lag %llu, iterations %d", lag, backpressure_iterations);
+		if (backpressure_iterations < MAX_BACKPRESSURE_ITERATIONS)
+		{
+			backpressure_iterations *= 2;
+		}
+#elif PROPORTIONAL_BACKPRESSURE
+		int backpressure_iterations = 1;
+
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				backpressure_iterations = lag/max_replication_flush_lag/MB;
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+			}
+			else
+			{
+				break;
+			}
+		}
+#elif LINEAR_BACKPRESSURE
+		static int backpressure_iterations = 1;
+
+		for (int i = 0; i < backpressure_iterations; i++)
+		{
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				// Suspend writer for a while to let replicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+			}
+			else
+			{
+				backpressure_iterations = 1;
+				return;
+			}
+		}
+		backpressure_iterations += 1;
+#else
+		while (true) {
+			uint64 lag = backpressure_lag();
+			if (lag > 0)
+			{
+				// Suspend writer until replyicas catch up
+				set_ps_display("backpressure throttling");
+
+				elog(DEBUG1, "backpressure throttling: lag %llu, last written LSN %llx, flush LSN %llx, replication LSN %llx", lag, GetLastWrittenPageLSN(), GetFlushRecPtr(), GetFlushRecPtr() - max_replication_write_lag*MB-lag);
+				pg_usleep(zenith_backpressure_delay*MS);
+				ProcessInterrupts_pg();
+			} else {
+				break;
+			}
+		}
+#endif
 	}
 }
 
@@ -3418,7 +3583,7 @@ ProcessInterrupts(void)
 #define ia64_get_bsp() ((char *) (_Asm_mov_from_ar(_AREG_BSP, _NO_FENCE)))
 #elif defined(__INTEL_COMPILER)
 /* icc */
-#include <asm/ia64regs.h>
+!#include <asm/ia64regs.h>
 #define ia64_get_bsp() ((char *) __getReg(_IA64_REG_AR_BSP))
 #else
 /* gcc */

@@ -3611,6 +3611,17 @@ static struct config_int ConfigureNamesInt[] =
 		check_client_connection_check_interval, NULL, NULL
 	},
 
+	{
+		{"zenith_backpressure_delay", PGC_SUSET, UNGROUPED,
+			gettext_noop("Delay for throttling backend by backpressure mechanism."),
+			NULL,
+			GUC_UNIT_MS,
+		},
+		&zenith_backpressure_delay,
+		1, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL
