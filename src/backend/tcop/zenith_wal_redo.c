@@ -98,6 +98,11 @@ static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
 
+/*
+ * Buffer with target WAL redo page.
+ * We need to pin this buffer i memory but we c an not just call ReadBuffer because
+ * in some contexts it is assumed that buffer is not locked.
+ */
 Buffer		wal_redo_buffer;
 bool		am_wal_redo_postgres;
 
@@ -516,6 +521,7 @@ BeginRedoForBlock(StringInfo input_message)
 	rnode.dbNode = pq_getmsgint(input_message, 4);
 	rnode.relNode = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
+	wal_redo_buffer = InvalidBuffer;
 
 	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
 
@@ -565,6 +571,7 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
+	Assert(!BufferIsInvalid(buf));
 	wal_redo_buffer = buf;
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
@@ -624,7 +631,16 @@ ApplyRecord(StringInfo input_message)
 	redo_read_buffer_filter = redo_block_filter;
 
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
-
+	/*
+	 * If there is WAL record with FPI, then no image is provided and so PushPage is not called.
+	 * We need to initialize wal_redo_buffers in this case.
+	 */
+	if (BufferIsInvalid(wal_redo_buffer))
+	{
+		wal_redo_buffer = ReadBufferWithoutRelcache(target_redo_tag.rnode, target_redo_tag.forkNum, target_redo_tag.blockNum, RBM_NORMAL, NULL);
+		Assert(!BufferIsInvalid(wal_redo_buffer));
+		ReleaseBuffer(wal_redo_buffer);
+	}
 	redo_read_buffer_filter = NULL;
 
 	/* Pop the error context stack */
@@ -714,6 +730,7 @@ GetPage(StringInfo input_message)
 	/* FIXME: check that we got a BeginRedoForBlock message or this earlier */
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_NORMAL, NULL);
+	Assert(buf == wal_redo_buffer);
 	page = BufferGetPage(buf);
 	/* single thread, so don't bother locking the page */
 
@@ -736,6 +753,7 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropRelFileNodeAllLocalBuffers(rnode);
+	wal_redo_buffer = InvalidBuffer;
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }
