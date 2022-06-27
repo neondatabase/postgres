@@ -100,8 +100,9 @@ static BufferTag target_redo_tag;
 
 /*
  * Buffer with target WAL redo page.
- * We need to pin this buffer i memory but we c an not just call ReadBuffer because
- * in some contexts it is assumed that buffer is not locked.
+ * We must not evict this page from the buffer pool, but we cannot just keep it pinned because
+ * some WAL redo functions expect the page to not be pinned. So we have a special check in
+ * localbuf.c to prevent this buffer from being evicted.
  */
 Buffer		wal_redo_buffer;
 bool		am_wal_redo_postgres;
@@ -130,6 +131,7 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(mmap),
 		PG_SCMP_ALLOW(munmap),
 #endif
+
 		/*
 		 * getpid() is called on assertion failure, in ExceptionalCondition.
 		 * It's not really needed, but seems pointless to hide it either. The
@@ -138,12 +140,11 @@ enter_seccomp_mode(void)
 		 */
 		PG_SCMP_ALLOW(getpid),
 
-		/* Enable those for a proper shutdown.
-		PG_SCMP_ALLOW(munmap),
-		PG_SCMP_ALLOW(shmctl),
-		PG_SCMP_ALLOW(shmdt),
-		PG_SCMP_ALLOW(unlink), // shm_unlink
-		*/
+		/*
+		 * Enable those for a proper shutdown. PG_SCMP_ALLOW(munmap),
+		 * PG_SCMP_ALLOW(shmctl), PG_SCMP_ALLOW(shmdt), PG_SCMP_ALLOW(unlink),
+		 * // shm_unlink
+		 */
 	};
 
 #ifdef MALLOC_NO_MMAP
@@ -197,10 +198,9 @@ WalRedoMain(int argc, char *argv[],
 	num_temp_buffers = 4;
 
 	/*
-	 * Parse command-line options.
-	 * TODO
+	 * Parse command-line options. TODO
 	 */
-	//process_postgres_switches(argc, argv, PGC_POSTMASTER, &dbname);
+	/* process_postgres_switches(argc, argv, PGC_POSTMASTER, &dbname); */
 
 	/* Acquire configuration parameters */
 	if (!SelectConfigFiles(NULL, progname))
@@ -265,7 +265,8 @@ WalRedoMain(int argc, char *argv[],
 #endif
 
 	/*
-	 * Validate we have been given a reasonable-looking DataDir and change into it.
+	 * Validate we have been given a reasonable-looking DataDir and change
+	 * into it.
 	 */
 	checkDataDir();
 	ChangeToDataDir();
@@ -287,8 +288,8 @@ WalRedoMain(int argc, char *argv[],
 	BaseInit();
 
 	/*
-	 * Create a per-backend PGPROC struct in shared memory. We must do
-	 * this before we can use LWLocks.
+	 * Create a per-backend PGPROC struct in shared memory. We must do this
+	 * before we can use LWLocks.
 	 */
 	InitAuxiliaryProcess();
 
@@ -327,9 +328,9 @@ WalRedoMain(int argc, char *argv[],
 			enable_seccomp = false;
 
 	/*
-	 * We deliberately delay the transition to the seccomp mode
-	 * until it's time to enter the main processing loop;
-	 * else we'd have to add a lot more syscalls to the allowlist.
+	 * We deliberately delay the transition to the seccomp mode until it's
+	 * time to enter the main processing loop; else we'd have to add a lot
+	 * more syscalls to the allowlist.
 	 */
 	if (enable_seccomp)
 		enter_seccomp_mode();
@@ -378,15 +379,17 @@ WalRedoMain(int argc, char *argv[],
 						(errmsg("received EOF on stdin, shutting down")));
 
 #ifdef HAVE_LIBSECCOMP
+
 				/*
 				 * Skip the shutdown sequence, leaving some garbage behind.
-				 * Hopefully, postgres will clean it up in the next run.
-				 * This way we don't have to enable extra syscalls, which is nice.
+				 * Hopefully, postgres will clean it up in the next run. This
+				 * way we don't have to enable extra syscalls, which is nice.
 				 * See enter_seccomp_mode() above.
 				 */
 				if (enable_seccomp)
 					_exit(0);
 #endif
+
 				/*
 				 * NOTE: if you are tempted to add more code here, DON'T!
 				 * Whatever you had in mind to do should be set up as an
@@ -413,12 +416,15 @@ static char *
 pprint_buffer(char *data, int len)
 {
 	StringInfoData s;
+
 	initStringInfo(&s);
 	appendStringInfo(&s, "\n");
-	for (int i = 0; i < len; i++) {
+	for (int i = 0; i < len; i++)
+	{
 
-		appendStringInfo(&s, "%02x ", (*(((char *) data) + i) & 0xff) );
-		if (i % 32 == 31) {
+		appendStringInfo(&s, "%02x ", (*(((char *) data) + i) & 0xff));
+		if (i % 32 == 31)
+		{
 			appendStringInfo(&s, "\n");
 		}
 	}
@@ -503,18 +509,14 @@ static void
 BeginRedoForBlock(StringInfo input_message)
 {
 	RelFileNode rnode;
-	ForkNumber forknum;
+	ForkNumber	forknum;
 	BlockNumber blknum;
 	SMgrRelation reln;
 
 	/*
 	 * message format:
 	 *
-	 * spcNode
-	 * dbNode
-	 * relNode
-	 * ForkNumber
-	 * BlockNumber
+	 * spcNode dbNode relNode ForkNumber BlockNumber
 	 */
 	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
@@ -547,7 +549,7 @@ static void
 PushPage(StringInfo input_message)
 {
 	RelFileNode rnode;
-	ForkNumber forknum;
+	ForkNumber	forknum;
 	BlockNumber blknum;
 	const char *content;
 	Buffer		buf;
@@ -556,12 +558,7 @@ PushPage(StringInfo input_message)
 	/*
 	 * message format:
 	 *
-	 * spcNode
-	 * dbNode
-	 * relNode
-	 * ForkNumber
-	 * BlockNumber
-	 * 8k page content
+	 * spcNode dbNode relNode ForkNumber BlockNumber 8k page content
 	 */
 	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
@@ -571,11 +568,10 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
-	Assert(!BufferIsInvalid(buf));
 	wal_redo_buffer = buf;
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
-	MarkBufferDirty(buf); /* pro forma */
+	MarkBufferDirty(buf);		/* pro forma */
 	UnlockReleaseBuffer(buf);
 }
 
@@ -596,8 +592,7 @@ ApplyRecord(StringInfo input_message)
 	/*
 	 * message format:
 	 *
-	 * LSN (the *end* of the record)
-	 * record
+	 * LSN (the *end* of the record) record
 	 */
 	lsn = pq_getmsgint64(input_message);
 
@@ -618,6 +613,7 @@ ApplyRecord(StringInfo input_message)
 	error_context_stack = &errcallback;
 
 	XLogBeginRead(reader_state, lsn);
+
 	/*
 	 * In lieu of calling XLogReadRecord, store the record 'decoded_record'
 	 * buffer directly.
@@ -631,13 +627,15 @@ ApplyRecord(StringInfo input_message)
 	redo_read_buffer_filter = redo_block_filter;
 
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
+
 	/*
-	 * If there is WAL record with FPI, then no image is provided and so PushPage is not called.
-	 * We need to initialize wal_redo_buffers in this case.
+	 * If no base image of the page was provided by PushPage, initialize
+	 * wal_redo_buffer here. The first WAL record must initialize the page in
+	 * that case.
 	 */
 	if (BufferIsInvalid(wal_redo_buffer))
 	{
-		wal_redo_buffer = ReadBufferWithoutRelcache(target_redo_tag.rnode, target_redo_tag.forkNum, target_redo_tag.blockNum, RBM_NORMAL, NULL);
+		wal_redo_buffer = ReadBufferWithoutRelcache(target_redo_tag.rnode, target_redo_tag.forkNum, target_redo_tag.blockNum, RBM_ZERO, NULL);
 		Assert(!BufferIsInvalid(wal_redo_buffer));
 		ReleaseBuffer(wal_redo_buffer);
 	}
@@ -706,7 +704,7 @@ static void
 GetPage(StringInfo input_message)
 {
 	RelFileNode rnode;
-	ForkNumber forknum;
+	ForkNumber	forknum;
 	BlockNumber blknum;
 	Buffer		buf;
 	Page		page;
@@ -715,11 +713,7 @@ GetPage(StringInfo input_message)
 	/*
 	 * message format:
 	 *
-	 * spcNode
-	 * dbNode
-	 * relNode
-	 * ForkNumber
-	 * BlockNumber
+	 * spcNode dbNode relNode ForkNumber BlockNumber
 	 */
 	forknum = pq_getmsgbyte(input_message);
 	rnode.spcNode = pq_getmsgint(input_message, 4);
@@ -736,11 +730,13 @@ GetPage(StringInfo input_message)
 
 	/* Response: Page content */
 	tot_written = 0;
-	do {
+	do
+	{
 		ssize_t		rc;
 
 		rc = write(STDOUT_FILENO, &page[tot_written], BLCKSZ - tot_written);
-		if (rc < 0) {
+		if (rc < 0)
+		{
 			/* If interrupted by signal, just retry */
 			if (errno == EINTR)
 				continue;
