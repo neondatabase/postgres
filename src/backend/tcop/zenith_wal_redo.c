@@ -633,8 +633,8 @@ ApplyRecord(StringInfo input_message)
 
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
 	/*
-	 * If there is WAL record with FPI, then no image is provided and so PushPage is not called.
-	 * We need to initialize wal_redo_buffers in this case.
+	 * If no base image of the page was provided by PushPage, initialize wal_redo_buffer here.
+	 * The first WAL record must initialize the page in that case.
 	 */
 	if (BufferIsInvalid(wal_redo_buffer))
 	{
