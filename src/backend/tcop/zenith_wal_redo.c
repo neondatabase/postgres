@@ -571,7 +571,6 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
-	Assert(!BufferIsInvalid(buf));
 	wal_redo_buffer = buf;
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
