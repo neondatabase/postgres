@@ -100,8 +100,9 @@ static BufferTag target_redo_tag;
 
 /*
  * Buffer with target WAL redo page.
- * We need to pin this buffer i memory but we c an not just call ReadBuffer because
- * in some contexts it is assumed that buffer is not locked.
+ * We must not evict this page from the buffer pool, but we cannot just keep it pinned because
+ * some WAL redo functions expect the page to not be pinned. So we have a special check in
+ * localbuf.c to prevent this buffer from being evicted.
  */
 Buffer		wal_redo_buffer;
 bool		am_wal_redo_postgres;
