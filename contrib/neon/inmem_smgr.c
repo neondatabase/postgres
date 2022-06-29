@@ -82,7 +82,7 @@ inmem_exists(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- *	inmem_create() -- Create a new relation on zenithd storage
+ *	inmem_create() -- Create a new relation on neond storage
  *
  * If isRedo is true, it's okay for the relation to exist already.
  */

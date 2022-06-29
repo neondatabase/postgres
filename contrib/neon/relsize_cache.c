@@ -49,7 +49,7 @@ static shmem_startup_hook_type prev_shmem_startup_hook = NULL;
 #define DEFAULT_RELSIZE_HASH_SIZE (64 * 1024)
 
 static void
-zenith_smgr_shmem_startup(void)
+neon_smgr_shmem_startup(void)
 {
 	static HASHCTL info;
 
@@ -162,6 +162,6 @@ relsize_hash_init(void)
 		RequestNamedLWLockTranche("neon_relsize", 1);
 
 		prev_shmem_startup_hook = shmem_startup_hook;
-		shmem_startup_hook = zenith_smgr_shmem_startup;
+		shmem_startup_hook = neon_smgr_shmem_startup;
 	}
 }

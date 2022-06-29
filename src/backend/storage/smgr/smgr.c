@@ -674,7 +674,7 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- * Zenith-added functions to mark the phases of an unlogged index build.
+ * Neon-added functions to mark the phases of an unlogged index build.
  */
 void
 smgr_start_unlogged_build(SMgrRelation reln)

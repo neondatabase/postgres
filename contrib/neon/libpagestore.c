@@ -35,7 +35,7 @@ void		_PG_init(void);
 #define PqPageStoreTrace DEBUG5
 
 #define ZENITH_TAG "[ZENITH_SMGR] "
-#define zenith_log(tag, fmt, ...) ereport(tag, \
+#define neon_log(tag, fmt, ...) ereport(tag, \
 		(errmsg(ZENITH_TAG fmt, ## __VA_ARGS__), \
 		 errhidestmt(true), errhidecontext(true)))
 
@@ -44,13 +44,13 @@ PGconn	   *pageserver_conn = NULL;
 
 char	   *page_server_connstring_raw;
 
-static ZenithResponse *zenith_call(ZenithRequest *request);
+static NeonResponse *neon_call(NeonRequest *request);
 page_server_api api = {
-	.request = zenith_call
+	.request = neon_call
 };
 
 static void
-zenith_connect()
+neon_connect()
 {
 	char	   *query;
 	int			ret;
@@ -71,13 +71,13 @@ zenith_connect()
 				 errdetail_internal("%s", msg)));
 	}
 
-	query = psprintf("pagestream %s %s", zenith_tenant, zenith_timeline);
+	query = psprintf("pagestream %s %s", neon_tenant, neon_timeline);
 	ret = PQsendQuery(pageserver_conn, query);
 	if (ret != 1)
 	{
 		PQfinish(pageserver_conn);
 		pageserver_conn = NULL;
-		zenith_log(ERROR,
+		neon_log(ERROR,
 				   "[ZENITH_SMGR] failed to start dispatcher_loop on pageserver");
 	}
 
@@ -105,14 +105,14 @@ zenith_connect()
 				PQfinish(pageserver_conn);
 				pageserver_conn = NULL;
 
-				zenith_log(ERROR, "[ZENITH_SMGR] failed to get handshake from pageserver: %s",
+				neon_log(ERROR, "[ZENITH_SMGR] failed to get handshake from pageserver: %s",
 						   msg);
 			}
 		}
 	}
 
 	// FIXME: when auth is enabled this ptints JWT to logs
-	zenith_log(LOG, "libpqpagestore: connected to '%s'", page_server_connstring);
+	neon_log(LOG, "libpqpagestore: connected to '%s'", page_server_connstring);
 
 	connected = true;
 }
@@ -146,7 +146,7 @@ retry:
 		if (wc & WL_SOCKET_READABLE)
 		{
 			if (!PQconsumeInput(conn))
-				zenith_log(ERROR, "could not get response from pageserver: %s",
+				neon_log(ERROR, "could not get response from pageserver: %s",
 						   PQerrorMessage(conn));
 		}
 
@@ -157,12 +157,12 @@ retry:
 }
 
 
-static ZenithResponse *
-zenith_call(ZenithRequest *request)
+static NeonResponse *
+neon_call(NeonRequest *request)
 {
 	StringInfoData req_buff;
 	StringInfoData resp_buff;
-	ZenithResponse *resp;
+	NeonResponse *resp;
 
 	PG_TRY();
 	{
@@ -175,7 +175,7 @@ zenith_call(ZenithRequest *request)
 		}
 
 		if (!connected)
-			zenith_connect();
+			neon_connect();
 
 		req_buff = zm_pack_request(request);
 
@@ -189,16 +189,16 @@ zenith_call(ZenithRequest *request)
 		 */
 		if (PQputCopyData(pageserver_conn, req_buff.data, req_buff.len) <= 0 || PQflush(pageserver_conn))
 		{
-			zenith_log(ERROR, "failed to send page request: %s",
+			neon_log(ERROR, "failed to send page request: %s",
 					   PQerrorMessage(pageserver_conn));
 		}
 		pfree(req_buff.data);
 
 		if (message_level_is_interesting(PqPageStoreTrace))
 		{
-			char	   *msg = zm_to_string((ZenithMessage *) request);
+			char	   *msg = zm_to_string((NeonMessage *) request);
 
-			zenith_log(PqPageStoreTrace, "Sent request: %s", msg);
+			neon_log(PqPageStoreTrace, "Sent request: %s", msg);
 			pfree(msg);
 		}
 
@@ -207,18 +207,18 @@ zenith_call(ZenithRequest *request)
 		resp_buff.cursor = 0;
 
 		if (resp_buff.len == -1)
-			zenith_log(ERROR, "end of COPY");
+			neon_log(ERROR, "end of COPY");
 		else if (resp_buff.len == -2)
-			zenith_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
+			neon_log(ERROR, "could not read COPY data: %s", PQerrorMessage(pageserver_conn));
 
 		resp = zm_unpack_response(&resp_buff);
 		PQfreemem(resp_buff.data);
 
 		if (message_level_is_interesting(PqPageStoreTrace))
 		{
-			char	   *msg = zm_to_string((ZenithMessage *) resp);
+			char	   *msg = zm_to_string((NeonMessage *) resp);
 
-			zenith_log(PqPageStoreTrace, "Got response: %s", msg);
+			neon_log(PqPageStoreTrace, "Got response: %s", msg);
 			pfree(msg);
 		}
 
@@ -238,7 +238,7 @@ zenith_call(ZenithRequest *request)
 		 */
 		if (connected)
 		{
-			zenith_log(LOG, "dropping connection to page server due to error");
+			neon_log(LOG, "dropping connection to page server due to error");
 			PQfinish(pageserver_conn);
 			pageserver_conn = NULL;
 			connected = false;
@@ -247,12 +247,12 @@ zenith_call(ZenithRequest *request)
 	}
 	PG_END_TRY();
 
-	return (ZenithResponse *) resp;
+	return (NeonResponse *) resp;
 }
 
 
 static bool
-check_zenith_id(char **newval, void **extra, GucSource source)
+check_neon_id(char **newval, void **extra, GucSource source)
 {
 	uint8		zid[16];
 
@@ -324,7 +324,7 @@ substitute_pageserver_password(const char *page_server_connstring_raw)
 							(errcode(ERRCODE_CONNECTION_EXCEPTION),
 							 errmsg("expected placeholder value in pageserver password starting from $ but found: %s", &conn_option->val[1])));
 
-				zenith_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
+				neon_log(LOG, "found auth token placeholder in pageserver conn string %s", &conn_option->val[1]);
 				auth_token = getenv(&conn_option->val[1]);
 				if (!auth_token)
 				{
@@ -334,7 +334,7 @@ substitute_pageserver_password(const char *page_server_connstring_raw)
 				}
 				else
 				{
-					zenith_log(LOG, "using auth token from environment passed via env");
+					neon_log(LOG, "using auth token from environment passed via env");
 				}
 			}
 		}
@@ -365,22 +365,22 @@ _PG_init(void)
 							   NULL, NULL, NULL);
 
 	DefineCustomStringVariable("neon.timeline_id",
-							   "Zenith timelineid the server is running on",
+							   "Neon timelineid the server is running on",
 							   NULL,
-							   &zenith_timeline,
+							   &neon_timeline,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
-							   check_zenith_id, NULL, NULL);
+							   check_neon_id, NULL, NULL);
 
 	DefineCustomStringVariable("neon.tenant_id",
 							   "Neon tenantid the server is running on",
 							   NULL,
-							   &zenith_tenant,
+							   &neon_tenant,
 							   "",
 							   PGC_POSTMASTER,
 							   0,	/* no flags required */
-							   check_zenith_id, NULL, NULL);
+							   check_neon_id, NULL, NULL);
 
 	DefineCustomBoolVariable("neon.wal_redo",
 							 "start in wal-redo mode",
@@ -404,31 +404,31 @@ _PG_init(void)
 	EmitWarningsOnPlaceholders("neon");
 
 	if (page_server != NULL)
-		zenith_log(ERROR, "libpqpagestore already loaded");
+		neon_log(ERROR, "libpqpagestore already loaded");
 
-	zenith_log(PqPageStoreTrace, "libpqpagestore already loaded");
+	neon_log(PqPageStoreTrace, "libpqpagestore already loaded");
 	page_server = &api;
 
 	/* substitute password in pageserver_connstring */
 	page_server_connstring = substitute_pageserver_password(page_server_connstring_raw);
 
 	/* Is there more correct way to pass CustomGUC to postgres code? */
-	zenith_timeline_walproposer = zenith_timeline;
-	zenith_tenant_walproposer = zenith_tenant;
+	neon_timeline_walproposer = neon_timeline;
+	neon_tenant_walproposer = neon_tenant;
 	/* Walproposer instructcs safekeeper which pageserver to use for replication */
-	zenith_pageserver_connstring_walproposer = page_server_connstring;
+	neon_pageserver_connstring_walproposer = page_server_connstring;
 
 	if (wal_redo)
 	{
-		zenith_log(PqPageStoreTrace, "set inmem_smgr hook");
+		neon_log(PqPageStoreTrace, "set inmem_smgr hook");
 		smgr_hook = smgr_inmem;
 		smgr_init_hook = smgr_init_inmem;
 	}
 	else if (page_server_connstring && page_server_connstring[0])
 	{
-		zenith_log(PqPageStoreTrace, "set zenith_smgr hook");
-		smgr_hook = smgr_zenith;
-		smgr_init_hook = smgr_init_zenith;
-		dbsize_hook = zenith_dbsize;
+		neon_log(PqPageStoreTrace, "set neon_smgr hook");
+		smgr_hook = smgr_neon;
+		smgr_init_hook = smgr_init_neon;
+		dbsize_hook = neon_dbsize;
 	}
 }

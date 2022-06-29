@@ -1938,7 +1938,7 @@ ProcessReplicationFeedbackMessage(void)
 
 	replication_feedback_set(&rf);
 
-	SetZenithCurrentClusterSize(rf.currentClusterSize);
+	SetNeonCurrentClusterSize(rf.currentClusterSize);
 
 	ProcessStandbyReply(rf.ps_writelsn,
 						rf.ps_flushlsn,
@@ -3032,7 +3032,7 @@ WalSndDone(WalSndSendDataCallback send_data)
 	 * flush location if valid, write otherwise. Tools like pg_receivewal will
 	 * usually (unless in synchronous mode) return an invalid flush location.
 	 */
-	// XXX Zenith uses flush_lsn to pass extra payload, so use write_lsn here
+	// XXX Neon uses flush_lsn to pass extra payload, so use write_lsn here
 	replicatedPtr = MyWalSnd->write;
 
 	if (WalSndCaughtUp && sentPtr == replicatedPtr &&

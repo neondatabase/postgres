@@ -356,8 +356,8 @@ extern XLogRecPtr GetLastWrittenPageLSN(void);
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
-extern void SetZenithCurrentClusterSize(uint64 size);
-extern uint64 GetZenithCurrentClusterSize(void);
+extern void SetNeonCurrentClusterSize(uint64 size);
+extern uint64 GetNeonCurrentClusterSize(void);
 
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
@@ -409,7 +409,7 @@ extern SessionBackupState get_backup_status(void);
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
 
-#define ZENITH_SIGNAL_FILE		"zenith.signal"
+#define ZENITH_SIGNAL_FILE		"neon.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"

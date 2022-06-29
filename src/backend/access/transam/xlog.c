@@ -282,11 +282,11 @@ static bool standby_signal_file_found = false;
 static bool recovery_signal_file_found = false;
 
 /*
- * Variables read from 'zenith.signal' file.
+ * Variables read from 'neon.signal' file.
  */
-bool		ZenithRecoveryRequested = false;
-XLogRecPtr	zenithLastRec = InvalidXLogRecPtr;
-bool		zenithWriteOk = false;
+bool		NeonRecoveryRequested = false;
+XLogRecPtr	neonLastRec = InvalidXLogRecPtr;
+bool		neonWriteOk = false;
 
 /* Was the last xlog file restored from archive, or local? */
 static bool restoredFromArchive = false;
@@ -754,10 +754,10 @@ typedef struct XLogCtlData
 	XLogRecPtr	RedoStartLSN;
 
 	/*
-	 * size of a timeline in zenith pageserver.
+	 * size of a timeline in neon pageserver.
 	 * used to enforce timeline size limit.
 	 */
-	uint64 		zenithCurrentClusterSize;
+	uint64 		neonCurrentClusterSize;
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -5561,7 +5561,7 @@ readRecoverySignalFile(void)
 }
 
 static void
-readZenithSignalFile(void)
+readNeonSignalFile(void)
 {
 	int			fd;
 
@@ -5595,8 +5595,8 @@ readZenithSignalFile(void)
 		if (strcmp(prev_lsn_str, "invalid") == 0)
 		{
 			/* No prev LSN. Forbid starting up in read-write mode */
-			zenithLastRec = InvalidXLogRecPtr;
-			zenithWriteOk = false;
+			neonLastRec = InvalidXLogRecPtr;
+			neonWriteOk = false;
 		}
 		else if (strcmp(prev_lsn_str, "none") == 0)
 		{
@@ -5605,8 +5605,8 @@ readZenithSignalFile(void)
 			 * to start without it. This happens when you start the compute
 			 * node for the first time on a new branch.
 			 */
-			zenithLastRec = InvalidXLogRecPtr;
-			zenithWriteOk = true;
+			neonLastRec = InvalidXLogRecPtr;
+			neonWriteOk = true;
 		}
 		else
 		{
@@ -5617,21 +5617,21 @@ readZenithSignalFile(void)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
-			zenithLastRec = ((uint64) hi) << 32 | lo;
+			neonLastRec = ((uint64) hi) << 32 | lo;
 
 			/* If prev LSN is given, it better be valid */
-			if (zenithLastRec == InvalidXLogRecPtr)
+			if (neonLastRec == InvalidXLogRecPtr)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("invalid prev-LSN in file \"%s\"", ZENITH_SIGNAL_FILE)));
-			zenithWriteOk = true;
+			neonWriteOk = true;
 		}
-		ZenithRecoveryRequested = true;
+		NeonRecoveryRequested = true;
 		close(fd);
 
 		elog(LOG,
-			 "[ZENITH] found 'zenith.signal' file. setting prev LSN to %X/%X",
-			 LSN_FORMAT_ARGS(zenithLastRec));
+			 "[ZENITH] found 'neon.signal' file. setting prev LSN to %X/%X",
+			 LSN_FORMAT_ARGS(neonLastRec));
 	}
 }
 
@@ -6616,14 +6616,14 @@ StartupXLOG(void)
 	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	/*
-	 * Read zenith.signal before anything else.
+	 * Read neon.signal before anything else.
 	 */
-	readZenithSignalFile();
+	readNeonSignalFile();
 
 	/*
 	 * Check that contents look valid.
 	 */
-	if (!XRecOffIsValid(ControlFile->checkPoint) && !ZenithRecoveryRequested)
+	if (!XRecOffIsValid(ControlFile->checkPoint) && !NeonRecoveryRequested)
 		ereport(FATAL,
 				(errmsg("control file contains invalid checkpoint location")));
 
@@ -6753,9 +6753,9 @@ StartupXLOG(void)
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
-		else if (ZenithRecoveryRequested)
+		else if (NeonRecoveryRequested)
 			ereport(LOG,
-					(errmsg("starting zenith recovery")));
+					(errmsg("starting neon recovery")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -6886,18 +6886,18 @@ StartupXLOG(void)
 		/* set flag to delete it later */
 		haveBackupLabel = true;
 	}
-	else if (ZenithRecoveryRequested)
+	else if (NeonRecoveryRequested)
 	{
 		/*
-		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
-		 * just finished reading the record that started at 'zenithLastRec'
+		 * Neon hacks to spawn compute node without WAL.  Pretend that we
+		 * just finished reading the record that started at 'neonLastRec'
 		 * and ended at checkpoint.redo
 		 */
-		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
+		elog(LOG, "starting with neon basebackup at LSN %X/%X, prev %X/%X",
 			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
-			 LSN_FORMAT_ARGS(zenithLastRec));
+			 LSN_FORMAT_ARGS(neonLastRec));
 
-		checkPointLoc = zenithLastRec;
+		checkPointLoc = neonLastRec;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
 		/* make basebackup LSN available for walproposer */
 		XLogCtl->RedoStartLSN = RedoStartLSN;
@@ -7170,7 +7170,7 @@ StartupXLOG(void)
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
-	if (RecPtr < checkPoint.redo && !ZenithRecoveryRequested)
+	if (RecPtr < checkPoint.redo && !NeonRecoveryRequested)
 		ereport(PANIC,
 				(errmsg("invalid redo in checkpoint record")));
 
@@ -7838,13 +7838,13 @@ StartupXLOG(void)
 	 * valid or last applied record, so we can identify the exact endpoint of
 	 * what we consider the valid portion of WAL.
 	 *
-	 * When starting from a zenith base backup, we don't have WAL. Initialize
+	 * When starting from a neon base backup, we don't have WAL. Initialize
 	 * the WAL page where we will start writing new records from scratch,
 	 * instead.
 	 */
-	if (ZenithRecoveryRequested)
+	if (NeonRecoveryRequested)
 	{
-		if (!zenithWriteOk)
+		if (!neonWriteOk)
 		{
 			/*
 			 * We cannot start generating new WAL if we don't have a valid prev-LSN
@@ -7869,7 +7869,7 @@ StartupXLOG(void)
 
 			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
 
-			// FIXME: should we unlink zenith.signal?
+			// FIXME: should we unlink neon.signal?
 		}
 	}
 	else
@@ -8065,7 +8065,7 @@ StartupXLOG(void)
 		/* Copy the valid part of the last block, and zero the rest */
 		page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
 		len = EndOfLog % XLOG_BLCKSZ;
-		if (!ZenithRecoveryRequested)
+		if (!NeonRecoveryRequested)
 			memcpy(page, xlogreader->readBuf, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
@@ -8848,11 +8848,11 @@ GetRedoStartLsn(void)
 
 
 uint64
-GetZenithCurrentClusterSize(void)
+GetNeonCurrentClusterSize(void)
 {
 	uint64 size;
 	SpinLockAcquire(&XLogCtl->info_lck);
-	size = XLogCtl->zenithCurrentClusterSize;
+	size = XLogCtl->neonCurrentClusterSize;
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return size;
@@ -8860,10 +8860,10 @@ GetZenithCurrentClusterSize(void)
 
 
 void
-SetZenithCurrentClusterSize(uint64 size)
+SetNeonCurrentClusterSize(uint64 size)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
-	XLogCtl->zenithCurrentClusterSize = size;
+	XLogCtl->neonCurrentClusterSize = size;
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 

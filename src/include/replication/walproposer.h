@@ -36,9 +36,9 @@ typedef struct WalProposerConn WalProposerConn;
 struct WalMessage;
 typedef struct WalMessage WalMessage;
 
-extern char *zenith_timeline_walproposer;
-extern char *zenith_tenant_walproposer;
-extern char	*zenith_pageserver_connstring_walproposer;
+extern char *neon_timeline_walproposer;
+extern char *neon_tenant_walproposer;
+extern char	*neon_pageserver_connstring_walproposer;
 
 /* Possible return values from ReadPGAsync */
 typedef enum
@@ -162,7 +162,7 @@ typedef struct ProposerGreeting
 	uint32	   pgVersion;
 	pg_uuid_t  proposerId;
 	uint64	   systemId;		  /* Postgres system identifier */
-	uint8	   ztimelineid[16];	  /* Zenith timeline id */
+	uint8	   ztimelineid[16];	  /* Neon timeline id */
 	uint8	   ztenantid[16];
 	TimeLineID timeline;
 	uint32	   walSegSize;
@@ -308,7 +308,7 @@ typedef struct AppendResponse
 	XLogRecPtr commitLsn;
 	HotStandbyFeedback hs;
 	// Feedback recieved from pageserver includes standby_status_update fields
-	// and custom zenith feedback.
+	// and custom neon feedback.
 	// This part of the message is extensible.
 	ReplicationFeedback rf;
 } AppendResponse;

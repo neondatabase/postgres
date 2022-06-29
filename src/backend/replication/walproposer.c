@@ -62,9 +62,9 @@ int			wal_acceptor_reconnect_timeout;
 int			wal_acceptor_connect_timeout;
 bool		am_wal_proposer;
 
-char	   *zenith_timeline_walproposer = NULL;
-char	   *zenith_tenant_walproposer = NULL;
-char	   *zenith_pageserver_connstring_walproposer = NULL;
+char	   *neon_timeline_walproposer = NULL;
+char	   *neon_tenant_walproposer = NULL;
+char	   *neon_pageserver_connstring_walproposer = NULL;
 
 /* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
 WalProposerFunctionsType *WalProposerFunctions = NULL;
@@ -216,7 +216,7 @@ WalProposerSync(int argc, char *argv[])
 
 	/*
 	 * Imitate we are early in bootstrap loading shared_preload_libraries;
-	 * zenith extension sets PGC_POSTMASTER gucs requiring this.
+	 * neon extension sets PGC_POSTMASTER gucs requiring this.
 	 */
 	process_shared_preload_libraries_in_progress = true;
 
@@ -436,16 +436,16 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	greetRequest.pgVersion = PG_VERSION_NUM;
 	pg_strong_random(&greetRequest.proposerId, sizeof(greetRequest.proposerId));
 	greetRequest.systemId = systemId;
-	if (!zenith_timeline_walproposer)
+	if (!neon_timeline_walproposer)
 		elog(FATAL, "neon.timeline_id is not provided");
-	if (*zenith_timeline_walproposer != '\0' &&
-		!HexDecodeString(greetRequest.ztimelineid, zenith_timeline_walproposer, 16))
-		elog(FATAL, "Could not parse neon.timeline_id, %s", zenith_timeline_walproposer);
-	if (!zenith_tenant_walproposer)
+	if (*neon_timeline_walproposer != '\0' &&
+		!HexDecodeString(greetRequest.ztimelineid, neon_timeline_walproposer, 16))
+		elog(FATAL, "Could not parse neon.timeline_id, %s", neon_timeline_walproposer);
+	if (!neon_tenant_walproposer)
 		elog(FATAL, "neon.tenant_id is not provided");
-	if (*zenith_tenant_walproposer != '\0' &&
-		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
-		elog(FATAL, "Could not parse neon.tenant_id, %s", zenith_tenant_walproposer);
+	if (*neon_tenant_walproposer != '\0' &&
+		!HexDecodeString(greetRequest.ztenantid, neon_tenant_walproposer, 16))
+		elog(FATAL, "Could not parse neon.tenant_id, %s", neon_tenant_walproposer);
 
 	greetRequest.timeline = ThisTimeLineID;
 	greetRequest.walSegSize = wal_segment_size;
@@ -589,7 +589,7 @@ ResetConnection(Safekeeper *sk)
 		int written = 0;
 		written = snprintf((char *) &sk->conninfo, MAXCONNINFO,
 				"host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
-				sk->host, sk->port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+				sk->host, sk->port, neon_timeline_walproposer, neon_tenant_walproposer);
 		// currently connection string is not that long, but once we pass something like jwt we might overflow the buffer,
 		// so it is better to be defensive and check that everything aligns well
 		if (written > MAXCONNINFO || written < 0)
@@ -863,8 +863,8 @@ static void
 SendStartWALPush(Safekeeper *sk)
 {
 	char *query = NULL;
-	if (zenith_pageserver_connstring_walproposer != NULL) {
-		query = psprintf("START_WAL_PUSH %s", zenith_pageserver_connstring_walproposer);
+	if (neon_pageserver_connstring_walproposer != NULL) {
+		query = psprintf("START_WAL_PUSH %s", neon_pageserver_connstring_walproposer);
 	} else {
 		query = psprintf("START_WAL_PUSH");
 	}
@@ -1313,7 +1313,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 	WalRcvStreamOptions options;
 
 	sprintf(conninfo, "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
-			safekeeper[donor].host, safekeeper[donor].port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+			safekeeper[donor].host, safekeeper[donor].port, neon_timeline_walproposer, neon_tenant_walproposer);
 	wrconn = walrcv_connect(conninfo, false, "wal_proposer_recovery", &err);
 	if (!wrconn)
 	{
@@ -2030,7 +2030,7 @@ HandleSafekeeperResponse(void)
 	{
 		// Get ReplicationFeedback fields from the most advanced safekeeper
 		GetLatestZentihFeedback(&quorumFeedback.rf);
-		SetZenithCurrentClusterSize(quorumFeedback.rf.currentClusterSize);
+		SetNeonCurrentClusterSize(quorumFeedback.rf.currentClusterSize);
 	}
 
 	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.rf.ps_flushlsn)

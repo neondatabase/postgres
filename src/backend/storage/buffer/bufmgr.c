@@ -158,7 +158,7 @@ int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
 
 /* Evict unpinned pages (for better test coverage) */
-bool		zenith_test_evict = false;
+bool		neon_test_evict = false;
 
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
@@ -1925,7 +1925,7 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 		}
 		ForgetPrivateRefCountEntry(ref);
 
-		if (zenith_test_evict && !InRecovery)
+		if (neon_test_evict && !InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
 			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
