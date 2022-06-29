@@ -3,7 +3,7 @@
  * inmem_smgr.c
  *
  * This is an implementation of the SMGR interface, used in the WAL redo
- * process (see src/backend/tcop/zenith_wal_redo.c). It has no persistent
+ * process (see src/backend/tcop/neon_wal_redo.c). It has no persistent
  * storage, the pages that are written out are kept in a small number of
  * in-memory buffers.
  *

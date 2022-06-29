@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * zenith_wal_redo.c
+ * neon_wal_redo.c
  *	  Entry point for WAL redo helper
  *
  *
@@ -40,7 +40,7 @@
  *
  *
  * IDENTIFICATION
- *	  src/backend/tcop/zenith_wal_redo.c
+ *	  src/backend/tcop/neon_wal_redo.c
  *
  *-------------------------------------------------------------------------
  */
