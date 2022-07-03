@@ -12,7 +12,7 @@
 #include "access/remotexact.h"
 
 /* GUC variable */
-int current_region;
+int			current_region;
 
 get_region_lsn_hook_type get_region_lsn_hook = NULL;
 
@@ -24,6 +24,12 @@ void
 SetRemoteXactHook(const RemoteXactHook *hook)
 {
 	remote_xact_hook = hook;
+}
+
+void
+CollectRegion(Relation relation)
+{
+	CallHook(collect_region) (relation);
 }
 
 void

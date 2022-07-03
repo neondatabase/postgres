@@ -92,6 +92,7 @@ decode_header(RWSet *rwset, StringInfo msg)
 {
 	rwset->header.dbid = pq_getmsgint(msg, 4);
 	rwset->header.xid = pq_getmsgint(msg, 4);
+	rwset->header.region_set = pq_getmsgint64(msg);
 }
 
 RWSetRelation *
@@ -231,7 +232,8 @@ RWSetToString(RWSet *rwset)
 	/* Header */
 	header = &rwset->header;
 	appendStringInfoString(&s, "{\n\"header\": ");
-	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d }", header->dbid, header->xid);
+	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d, \"region_set\": %lld }",
+					 header->dbid, header->xid, header->region_set);
 
 	/* Relations */
 	appendStringInfoString(&s, ",\n\"relations\": [");

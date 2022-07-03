@@ -21,6 +21,7 @@ typedef struct RWSetHeader
 {
 	Oid			dbid;
 	TransactionId xid;
+	uint64		region_set;
 } RWSetHeader;
 
 /*
@@ -67,8 +68,8 @@ typedef struct RWSet
 	MemoryContext context;
 	RWSetHeader header;
 	dlist_head	relations;
-	char	*writes;
-	int		writes_len;
+	char	   *writes;
+	int			writes_len;
 } RWSet;
 
 extern RWSet *RWSetAllocate(void);

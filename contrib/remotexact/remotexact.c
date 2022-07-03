@@ -9,6 +9,7 @@
 #include "replication/logicalproto.h"
 #include "rwset.h"
 #include "storage/predicate.h"
+#include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
@@ -75,7 +76,8 @@ init_rwset_collection_buffer(Oid dbid)
 
 	if (rwset_collection_buffer)
 	{
-		Oid old_dbid = rwset_collection_buffer->header.dbid; 
+		Oid old_dbid = rwset_collection_buffer->header.dbid;
+
 		if (old_dbid != dbid)
 			ereport(ERROR,
 					errmsg("Remotexact can access only one database"),
@@ -90,6 +92,7 @@ init_rwset_collection_buffer(Oid dbid)
 
 	rwset_collection_buffer->header.dbid = dbid;
 	rwset_collection_buffer->header.xid = InvalidTransactionId;
+	rwset_collection_buffer->header.region_set = 0;
 
 	hash_ctl.hcxt = rwset_collection_buffer->context;
 	hash_ctl.keysize = sizeof(ReadSetRelationKey);
@@ -101,6 +104,23 @@ init_rwset_collection_buffer(Oid dbid)
 	initStringInfo(&rwset_collection_buffer->writes);
 
 	MemoryContextSwitchTo(old_context);
+}
+
+static void
+rx_collect_region(Relation relation)
+{
+	int			region = relation->rd_smgr->smgr_region;
+	uint64	   *region_set = &rwset_collection_buffer->header.region_set;
+	int			max_nregions = BITS_PER_BYTE * sizeof(*region_set);
+
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
+
+	if (region < 0 || region >= max_nregions)
+		ereport(ERROR,
+				errmsg("Region id is out of bound"),
+				errdetail("region id: %u, min: 0, max: %u", region, max_nregions));
+
+	(*region_set) |= UINT64CONST(1) << relation->rd_smgr->smgr_region;
 }
 
 static void
@@ -155,19 +175,21 @@ rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset)
 static void
 rx_collect_insert(Relation relation, HeapTuple newtuple)
 {
-	StringInfo buf = NULL;
+	StringInfo	buf = NULL;
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
 	buf = &rwset_collection_buffer->writes;
 	logicalrep_write_insert(buf, InvalidTransactionId, relation, newtuple, true /* binary */);
+
+	rx_collect_region(relation);
 }
 
 static void
 rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 {
-	StringInfo buf = NULL;
-	char	relreplident = relation->rd_rel->relreplident;
+	StringInfo	buf = NULL;
+	char		relreplident = relation->rd_rel->relreplident;
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
@@ -181,13 +203,15 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 
 	buf = &rwset_collection_buffer->writes;
 	logicalrep_write_update(buf, InvalidTransactionId, relation, oldtuple, newtuple, true /* binary */);
+
+	rx_collect_region(relation);
 }
 
 static void
 rx_collect_delete(Relation relation, HeapTuple oldtuple)
 {
-	StringInfo buf = NULL;
-	char	relreplident = relation->rd_rel->relreplident;
+	StringInfo	buf = NULL;
+	char		relreplident = relation->rd_rel->relreplident;
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
@@ -204,6 +228,8 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 
 	buf = &rwset_collection_buffer->writes;
 	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldtuple, true /* binary */);
+
+	rx_collect_region(relation);
 }
 
 
@@ -235,6 +261,7 @@ rx_send_rwset_and_wait(void)
 	header = &rwset_collection_buffer->header;
 	pq_sendint32(&buf, header->dbid);
 	pq_sendint32(&buf, header->xid);
+	pq_sendint64(&buf, header->region_set);
 
 	/* Cursor now points to where the length of the read section is stored */
 	buf.cursor = buf.len;
@@ -280,7 +307,10 @@ rx_send_rwset_and_wait(void)
 	if (PQputCopyData(XactServerConn, buf.data, buf.len) <= 0 || PQflush(XactServerConn))
 		ereport(WARNING, errmsg("[remotexact] failed to send read/write set"));
 
-	/* TODO(ctring): This code is for debugging rwset remove all after the remote worker is implemented */
+	/*
+	 * TODO(ctring): This code is for debugging rwset remove all after the
+	 * remote worker is implemented
+	 */
 	rwset = RWSetAllocate();
 	buf.cursor = 0;
 	RWSetDecode(rwset, &buf);
@@ -370,6 +400,7 @@ connect_to_txn_server(void)
 
 static const RemoteXactHook remote_xact_hook =
 {
+	.collect_region = rx_collect_region,
 	.collect_tuple = rx_collect_tuple,
 	.collect_relation = rx_collect_relation,
 	.collect_page = rx_collect_page,
