@@ -717,6 +717,9 @@ GetPage(StringInfo input_message)
 	page = BufferGetPage(buf);
 	/* single thread, so don't bother locking the page */
 
+	/* Calculate checksums on the newly materialized page if needed. */
+	PageSetChecksumInplace(page, blknum);
+
 	/* Response: Page content */
 	tot_written = 0;
 	do {

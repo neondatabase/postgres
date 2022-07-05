@@ -436,6 +436,9 @@ PageIsEmptyHeapPage(char *buffer)
 
 	PageInit((Page) empty_page.data, BLCKSZ, 0);
 
+	/* Ignore checksum when comparing empty pages */
+	((PageHeader)empty_page.data)->pd_checksum = ((PageHeader)buffer)->pd_checksum;
+
 	return memcmp(buffer, empty_page.data, BLCKSZ) == 0;
 }
 

@@ -208,7 +208,12 @@ extern PGDLLIMPORT int wal_level;
  * of the bits make it to disk, but the checksum wouldn't match.  Also WAL-log
  * them if forced by wal_log_hints=on.
  */
-#define XLogHintBitIsNeeded() (DataChecksumsEnabled() || wal_log_hints)
+/*
+ * NEON: don't force FPI if checksums are enabled. As mentioned above it was
+ * done to protect from torn pages, but we don't seem to have this problem
+ * in Neon as all pages arrive to pageserver via WAL.
+ */
+#define XLogHintBitIsNeeded() (wal_log_hints)
 
 /* Do we need to WAL-log information required only for Hot Standby and logical replication? */
 #define XLogStandbyInfoActive() (wal_level >= WAL_LEVEL_REPLICA)
