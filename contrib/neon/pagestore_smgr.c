@@ -1439,6 +1439,10 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 */
 	XLogFlush(lsn);
 
+	/*
+	 * Truncate may affect several chunks of relations. So we should either update last written LSN for all of them,
+	 * either update LSN for "dummy" metadata block. Second approach seems to be more efficient.
+	 */
 	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 
 #ifdef DEBUG_COMPARE_LOCAL
