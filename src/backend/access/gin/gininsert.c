@@ -423,6 +423,7 @@ ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 						  true);
 		SetLastWrittenLSN(XactLastRecEnd, index->rd_smgr->smgr_rnode.node.relNode, 0, RelationGetNumberOfBlocks(index));
 	}
+
 	smgr_end_unlogged_build(index->rd_smgr);
 
 	/*

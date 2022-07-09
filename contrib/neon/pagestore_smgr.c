@@ -93,7 +93,6 @@ page_server_api *page_server;
 
 /* GUCs */
 char	   *page_server_connstring; // with substituted password
-char	   *callmemaybe_connstring;
 char	   *zenith_timeline;
 char	   *zenith_tenant;
 bool		wal_redo = false;
@@ -800,7 +799,7 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 * relation. Currently, we don't call SetLastWrittenLSN() when a new
 	 * relation created, so if we didn't remember the size in the relsize
 	 * cache, we might call smgrnblocks() on the newly-created relation before
-	 * the creation WAL record has been received by the page server.
+	 * the creation WAL record hass been received by the page server.
 	 */
 	set_cached_relsize(reln->smgr_rnode.node, forkNum, 0);
 
