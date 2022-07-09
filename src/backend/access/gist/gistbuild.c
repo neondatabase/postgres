@@ -335,9 +335,10 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			log_newpage_range(index, MAIN_FORKNUM,
 							  0, RelationGetNumberOfBlocks(index),
 							  true);
+			SetLastWrittenLSN(XactLastRecEnd,
+							  index->rd_smgr->smgr_rnode.node.relNode,
+							  0, RelationGetNumberOfBlocks(index));
 		}
-		SetLastWrittenPageLSN(XactLastRecEnd);
-
 		smgr_end_unlogged_build(index->rd_smgr);
 	}
 
@@ -467,7 +468,8 @@ gist_indexsortbuild(GISTBuildState *state)
 
 		lsn = log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					pagestate->page, true);
-		SetLastWrittenPageLSN(lsn);
+		SetLastWrittenLSN(lsn, state->indexrel->rd_smgr->smgr_rnode.node.relNode,
+							  GIST_ROOT_BLKNO, GIST_ROOT_BLKNO);
 	}
 
 	pfree(pagestate->page);
