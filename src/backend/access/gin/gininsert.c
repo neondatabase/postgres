@@ -421,8 +421,8 @@ ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		log_newpage_range(index, MAIN_FORKNUM,
 						  0, RelationGetNumberOfBlocks(index),
 						  true);
+		SetLastWrittenLSN(XactLastRecEnd, index->rd_smgr->smgr_rnode.node.relNode, 0, RelationGetNumberOfBlocks(index));
 	}
-	SetLastWrittenPageLSN(XactLastRecEnd);
 
 	smgr_end_unlogged_build(index->rd_smgr);
 

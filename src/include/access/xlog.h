@@ -132,6 +132,7 @@ extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
+extern int  lastWrittenLsnCacheSize;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -351,8 +352,8 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
-extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
-extern XLogRecPtr GetLastWrittenPageLSN(void);
+extern void SetLastWrittenLSN(XLogRecPtr lsn, Oid relfilenode, BlockNumber from, BlockNumber till);
+extern XLogRecPtr GetLastWrittenLSN(Oid relfilenode, BlockNumber blkno);
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
