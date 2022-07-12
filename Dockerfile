@@ -14,7 +14,7 @@ FROM neondatabase/compute-tools:$COMPUTE_TOOLS_TAG AS compute-deps
 FROM debian:buster-slim AS build-deps
 
 RUN apt-get update && apt-get -yq install automake libtool build-essential bison flex libreadline-dev zlib1g-dev libxml2-dev \
-                                          libcurl4-openssl-dev
+                                          libcurl4-openssl-dev libossp-uuid-dev
 
 #
 # Image with built Postgres
@@ -30,7 +30,7 @@ COPY . /pg/
 
 # Build and install Postgres locally
 RUN mkdir /pg/compute_build && cd /pg/compute_build && \
-    ../configure CFLAGS='-O0 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-cassert --enable-depend && \
+    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-uuid=ossp && \
     # Install main binaries and contribs
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s install && \
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/ install && \
