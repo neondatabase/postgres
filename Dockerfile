@@ -30,7 +30,7 @@ COPY . /pg/
 
 # Build and install Postgres locally
 RUN mkdir /pg/compute_build && cd /pg/compute_build && \
-    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-cassert --enable-uuid=ossp && \
+    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-uuid=ossp && \
     # Install main binaries and contribs
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s install && \
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/ install && \
