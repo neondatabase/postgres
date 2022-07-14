@@ -563,7 +563,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
 	 */
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, blocknum, blocknum);
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node, forknum,blocknum, blocknum);
 }
 
 
@@ -608,7 +608,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(bool *latest, Oid rnode, BlockNumber blkno)
+zenith_get_request_lsn(bool *latest, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
 	XLogRecPtr	lsn;
 
@@ -635,7 +635,7 @@ zenith_get_request_lsn(bool *latest, Oid rnode, BlockNumber blkno)
 		 * so our request cannot concern those.
 		 */
 		*latest = true;
-		lsn = GetLastWrittenLSN(rnode, blkno);
+		lsn = GetLastWrittenLSN(rnode, forknum, blkno);
 		Assert(lsn != InvalidXLogRecPtr);
 		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenLSN lsn %X/%X ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
@@ -721,7 +721,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		return false;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node, forkNum, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithExistsRequest request = {
 			.req.tag = T_ZenithExistsRequest,
@@ -910,7 +910,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		mdextend(reln, forkNum, blkno, buffer, skipFsync);
 #endif
 
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node, forkNum, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 }
 
 /*
@@ -1086,7 +1086,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, blkno);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node, forkNum, blkno);
 	zenith_read_at_lsn(reln->smgr_rnode.node, forkNum, blkno, request_lsn, latest, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
@@ -1253,6 +1253,8 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 #endif
 }
 
+extern XLogRecPtr oldLastWrittenCacheLsn;
+
 /*
  *	zenith_nblocks() -- Get the number of blocks stored in a relation.
  */
@@ -1291,7 +1293,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		return n_blocks;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
+	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node, forknum, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithNblocksRequest request = {
 			.req.tag = T_ZenithNblocksRequest,
@@ -1311,7 +1313,30 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 			break;
 
 		case T_ZenithErrorResponse:
-			ereport(ERROR,
+		{
+			ZenithNblocksRequest request = {
+				.req.tag = T_ZenithNblocksRequest,
+				.req.latest = latest,
+				.req.lsn = oldLastWrittenCacheLsn,
+				.rnode = reln->smgr_rnode.node,
+				.forknum = forknum,
+			};
+			pfree(resp);
+
+			resp = page_server->request((ZenithRequest *) &request);
+
+			if (resp->tag == T_ZenithNblocksResponse) {
+				n_blocks = ((ZenithNblocksResponse *) resp)->n_blocks;
+				elog(LOG, "Failed to get size of relation %u/%u/%u.%u with LSN %X/%08X but wit %X/%08X size is %d",
+					 reln->smgr_rnode.node.spcNode,
+					 reln->smgr_rnode.node.dbNode,
+					 reln->smgr_rnode.node.relNode,
+					 forknum,
+					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
+					 (uint32) (oldLastWrittenCacheLsn >> 32), (uint32) oldLastWrittenCacheLsn,
+					 n_blocks);
+			} else {
+				ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
 					 errmsg("could not read relation size of rel %u/%u/%u.%u from page server at lsn %X/%08X",
 							reln->smgr_rnode.node.spcNode,
@@ -1321,8 +1346,10 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 							(uint32) (request_lsn >> 32), (uint32) request_lsn),
 					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
-			break;
 
+			}
+			break;
+		}
 		default:
 			elog(ERROR, "unexpected response from page server with tag 0x%02x", resp->tag);
 	}
@@ -1350,8 +1377,8 @@ zenith_dbsize(Oid dbNode)
 	int64 db_size;
 	XLogRecPtr request_lsn;
 	bool		latest;
-
-	request_lsn = zenith_get_request_lsn(&latest, InvalidOid, REL_METADATA_PSEUDO_BLOCKNO);
+	RelFileNode dummy_node = {InvalidOid, InvalidOid, InvalidOid};
+	request_lsn = zenith_get_request_lsn(&latest, dummy_node, MAIN_FORKNUM, REL_METADATA_PSEUDO_BLOCKNO);
 	{
 		ZenithDbSizeRequest request = {
 			.req.tag = T_ZenithDbSizeRequest,
@@ -1442,7 +1469,7 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 * Truncate may affect several chunks of relations. So we should either update last written LSN for all of them,
 	 * either update LSN for "dummy" metadata block. Second approach seems to be more efficient.
 	 */
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
+	SetLastWrittenLSN(lsn, reln->smgr_rnode.node, forknum, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))

@@ -60,6 +60,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
@@ -183,22 +184,10 @@ const struct config_enum_entry recovery_target_action_options[] = {
 };
 
 
-/*
- * We are not taken in account dbnode, spcnode, forknum fields of
- * relation tag, because possibility of collision is assumed to be small
- * and should not affect performance. And reducing cache key size speed-up
- * hash calculation and comparison.
- */
-typedef struct LastWrittenLsnCacheKey
-{
-	Oid         relid;
-	BlockNumber bucket;
-} LastWrittenLsnCacheKey;
-
 typedef struct LastWrittenLsnCacheEntry
 {
-	LastWrittenLsnCacheKey key;
-	XLogRecPtr             lsn;
+	BufferTag	key;
+	XLogRecPtr	lsn;
 	/* L2-List for LRU replacement algorithm */
 	struct LastWrittenLsnCacheEntry* next;
 	struct LastWrittenLsnCacheEntry* prev;
@@ -777,6 +766,8 @@ typedef struct XLogCtlData
 	 * Maximal last written LSN for pages not present in lastWrittenLsnCache
 	 */
 	XLogRecPtr  maxLastWrittenLsn;
+
+	XLogRecPtr  oldLastWrittenLsn;
 
 	/*
 	 * Double linked list to implement LRU replacement policy for last written LSN cache.
@@ -5261,7 +5252,7 @@ XLOGShmemInit(void)
 
 	{
 		static HASHCTL info;
-		info.keysize = sizeof(LastWrittenLsnCacheKey);
+		info.keysize = sizeof(BufferTag);
 		info.entrysize = sizeof(LastWrittenLsnCacheEntry);
 		lastWrittenLsnCache = ShmemInitHash("last_written_lsn_cache",
 											lastWrittenLsnCacheSize, lastWrittenLsnCacheSize,
@@ -8153,6 +8144,7 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 	XLogCtl->maxLastWrittenLsn = EndOfLog;
+	XLogCtl->oldLastWrittenLsn = EndOfLog;
 	XLogCtl->lastWrittenLsnLRU.next = XLogCtl->lastWrittenLsnLRU.prev = &XLogCtl->lastWrittenLsnLRU;
 
 	LocalSetXLogInsertAllowed();
@@ -8883,8 +8875,9 @@ GetInsertRecPtr(void)
  * If cache is large enough ,iterting through all hash items may be rather expensive.
  * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
  */
+XLogRecPtr oldLastWrittenCacheLsn;
 XLogRecPtr
-GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
+GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
 	XLogRecPtr lsn;
 	LastWrittenLsnCacheEntry* entry;
@@ -8894,11 +8887,12 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 	/* Maximal last written LSN among all non-cached pages */
 	lsn = XLogCtl->maxLastWrittenLsn;
 
-	if (rnode != InvalidOid)
+	if (rnode.relNode != InvalidOid)
 	{
-		LastWrittenLsnCacheKey key;
-		key.relid = rnode;
-		key.bucket = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		BufferTag key;
+		key.rnode = rnode;
+		key.forkNum = forknum;
+		key.blockNum = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
@@ -8914,6 +8908,10 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 				lsn = entry->lsn;
 		}
 	}
+	if (lsn > XLogCtl->oldLastWrittenLsn) {
+		*(int*)0 = 0;
+	}
+	oldLastWrittenCacheLsn = XLogCtl->oldLastWrittenLsn;
 	LWLockRelease(LastWrittenLsnLock);
 
 	return lsn;
@@ -8930,13 +8928,13 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
  * is used by createdb and dbase_redo functions.
  */
 void
-SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
+SetLastWrittenLSN(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber till)
 {
 	if (lsn == InvalidXLogRecPtr)
 		return;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
-	if (rnode == InvalidOid)
+	if (rnode.relNode == InvalidOid)
 	{
 		if (lsn > XLogCtl->maxLastWrittenLsn)
 			XLogCtl->maxLastWrittenLsn = lsn;
@@ -8944,16 +8942,17 @@ SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 	else
 	{
 		LastWrittenLsnCacheEntry* entry;
-		LastWrittenLsnCacheKey key;
+		BufferTag key;
 		bool found;
 		BlockNumber bucket;
 
-		key.relid = rnode;
+		key.rnode = rnode;
+		key.forkNum = forknum;
 		for (bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
 			 bucket <= till / LAST_WRITTEN_LSN_CACHE_BUCKET;
 			 bucket++)
 		{
-			key.bucket = bucket;
+			key.blockNum = bucket;
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
 			if (found)
 			{
@@ -8984,6 +8983,10 @@ SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 			entry->prev = &XLogCtl->lastWrittenLsnLRU;
 			XLogCtl->lastWrittenLsnLRU.next = entry->next->prev = entry;
 		}
+	}
+	if (lsn > XLogCtl->oldLastWrittenLsn)
+	{
+		XLogCtl->oldLastWrittenLsn = lsn;
 	}
 	LWLockRelease(LastWrittenLsnLock);
 }

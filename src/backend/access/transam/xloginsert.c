@@ -33,6 +33,7 @@
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/wait_event.h"
 
 /* Buffer size required to store a compressed version of backup block image */
@@ -1023,6 +1024,7 @@ log_newpage(RelFileNode *rnode, ForkNumber forkNum, BlockNumber blkno,
 	XLogBeginInsert();
 	XLogRegisterBlock(0, rnode, forkNum, blkno, page, flags);
 	recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
+	SetLastWrittenLSN(recptr, *rnode, forkNum, blkno, blkno);
 
 	/*
 	 * The page may be uninitialized. If so, we can't set the LSN because that
@@ -1081,6 +1083,7 @@ log_newpages(RelFileNode *rnode, ForkNumber forkNum, int num_pages,
 
 		for (j = batch_start; j < i; j++)
 		{
+			SetLastWrittenLSN(recptr, *rnode, forkNum, blknos[i], blknos[i]);
 			/*
 			 * The page may be uninitialized. If so, we can't set the LSN
 			 * because that would corrupt the page.
@@ -1197,6 +1200,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 		}
 
 		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
+		SetLastWrittenLSN(recptr, rel->rd_node, forkNum, startblk, endblk-1);
 
 		for (i = 0; i < nbufs; i++)
 		{
