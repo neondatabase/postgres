@@ -84,11 +84,6 @@ static char *hexdump_page(char *page);
 
 const int	SmgrTrace = DEBUG5;
 
-/*
- * Pseudo block number used to associate LSN with relation metadata (relation size)
- */
-#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
-
 page_server_api *page_server;
 
 /* GUCs */
