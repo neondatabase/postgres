@@ -84,11 +84,6 @@ static char *hexdump_page(char *page);
 
 const int	SmgrTrace = DEBUG5;
 
-/*
- * Pseudo block number used to associate LSN with relation metadata (relation size)
- */
-#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
-
 page_server_api *page_server;
 
 /* GUCs */
@@ -1253,8 +1248,6 @@ zenith_write(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 #endif
 }
 
-extern XLogRecPtr oldLastWrittenCacheLsn;
-
 /*
  *	zenith_nblocks() -- Get the number of blocks stored in a relation.
  */
@@ -1314,29 +1307,8 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 
 		case T_ZenithErrorResponse:
 		{
-			ZenithNblocksRequest request = {
-				.req.tag = T_ZenithNblocksRequest,
-				.req.latest = latest,
-				.req.lsn = oldLastWrittenCacheLsn,
-				.rnode = reln->smgr_rnode.node,
-				.forknum = forknum,
-			};
-			pfree(resp);
-
 			resp = page_server->request((ZenithRequest *) &request);
-
-			if (resp->tag == T_ZenithNblocksResponse) {
-				n_blocks = ((ZenithNblocksResponse *) resp)->n_blocks;
-				elog(LOG, "Failed to get size of relation %u/%u/%u.%u with LSN %X/%08X but wit %X/%08X size is %d",
-					 reln->smgr_rnode.node.spcNode,
-					 reln->smgr_rnode.node.dbNode,
-					 reln->smgr_rnode.node.relNode,
-					 forknum,
-					 (uint32) (request_lsn >> 32), (uint32) request_lsn,
-					 (uint32) (oldLastWrittenCacheLsn >> 32), (uint32) oldLastWrittenCacheLsn,
-					 n_blocks);
-			} else {
-				ereport(ERROR,
+			ereport(ERROR,
 					(errcode(ERRCODE_IO_ERROR),
 					 errmsg("could not read relation size of rel %u/%u/%u.%u from page server at lsn %X/%08X",
 							reln->smgr_rnode.node.spcNode,
@@ -1347,7 +1319,6 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 					 errdetail("page server returned error: %s",
 							   ((ZenithErrorResponse *) resp)->message)));
 
-			}
 			break;
 		}
 		default:

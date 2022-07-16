@@ -767,8 +767,6 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr  maxLastWrittenLsn;
 
-	XLogRecPtr  oldLastWrittenLsn;
-
 	/*
 	 * Double linked list to implement LRU replacement policy for last written LSN cache.
 	 * Access to this list as well as to last written LSN cache is protected by 'LastWrittenLsnLock'.
@@ -8144,7 +8142,6 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	XLogCtl->oldLastWrittenLsn = EndOfLog;
 	XLogCtl->lastWrittenLsnLRU.next = XLogCtl->lastWrittenLsnLRU.prev = &XLogCtl->lastWrittenLsnLRU;
 
 	LocalSetXLogInsertAllowed();
@@ -8875,7 +8872,6 @@ GetInsertRecPtr(void)
  * If cache is large enough ,iterting through all hash items may be rather expensive.
  * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
  */
-XLogRecPtr oldLastWrittenCacheLsn;
 XLogRecPtr
 GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
@@ -8908,10 +8904,6 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 				lsn = entry->lsn;
 		}
 	}
-	if (lsn > XLogCtl->oldLastWrittenLsn) {
-		*(int*)0 = 0;
-	}
-	oldLastWrittenCacheLsn = XLogCtl->oldLastWrittenLsn;
 	LWLockRelease(LastWrittenLsnLock);
 
 	return lsn;
@@ -8983,10 +8975,6 @@ SetLastWrittenLSN(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNu
 			entry->prev = &XLogCtl->lastWrittenLsnLRU;
 			XLogCtl->lastWrittenLsnLRU.next = entry->next->prev = entry;
 		}
-	}
-	if (lsn > XLogCtl->oldLastWrittenLsn)
-	{
-		XLogCtl->oldLastWrittenLsn = lsn;
 	}
 	LWLockRelease(LastWrittenLsnLock);
 }

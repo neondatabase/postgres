@@ -29,6 +29,11 @@
 #define SYNC_METHOD_OPEN_DSYNC	4	/* for O_DSYNC */
 extern int	sync_method;
 
+/*
+ * Pseudo block number used to associate LSN with relation metadata (relation size)
+ */
+#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
+
 extern PGDLLIMPORT TimeLineID ThisTimeLineID;	/* current TLI */
 
 /*

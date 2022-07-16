@@ -338,6 +338,9 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			SetLastWrittenLSN(XactLastRecEnd,
 							  index->rd_smgr->smgr_rnode.node, MAIN_FORKNUM,
 							  0, RelationGetNumberOfBlocks(index));
+			SetLastWrittenLSN(XactLastRecEnd,
+							  index->rd_smgr->smgr_rnode.node, MAIN_FORKNUM,
+							  REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 		}
 		smgr_end_unlogged_build(index->rd_smgr);
 	}
@@ -472,6 +475,8 @@ gist_indexsortbuild(GISTBuildState *state)
 					pagestate->page, true);
 		SetLastWrittenLSN(lsn, state->indexrel->rd_smgr->smgr_rnode.node, MAIN_FORKNUM,
 							  GIST_ROOT_BLKNO, GIST_ROOT_BLKNO);
+		SetLastWrittenLSN(lsn, state->indexrel->rd_smgr->smgr_rnode.node, MAIN_FORKNUM,
+						  REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
 	}
 
 	pfree(pagestate->page);
