@@ -357,7 +357,10 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
-extern void SetLastWrittenLSN(XLogRecPtr lsn, Oid relfilenode, BlockNumber from, BlockNumber till);
+extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, Oid relfilenode, BlockNumber blkno);
+extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid relfilenode, BlockNumber from, BlockNumber till);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, Oid relfilenode);
 extern XLogRecPtr GetLastWrittenLSN(Oid relfilenode, BlockNumber blkno);
 
 extern XLogRecPtr GetRedoStartLsn(void);

@@ -558,7 +558,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
 	 */
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, blocknum, blocknum);
+	SetLastWrittenLSNForBlock(lsn, reln->smgr_rnode.node.relNode, blocknum);
 }
 
 
@@ -905,7 +905,7 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 		mdextend(reln, forkNum, blkno, buffer, skipFsync);
 #endif
 
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
+	SetLastWrittenLSNForRelation(lsn, reln->smgr_rnode.node.relNode);
 }
 
 /*
@@ -1437,7 +1437,7 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 * Truncate may affect several chunks of relations. So we should either update last written LSN for all of them,
 	 * either update LSN for "dummy" metadata block. Second approach seems to be more efficient.
 	 */
-	SetLastWrittenLSN(lsn, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO, REL_METADATA_PSEUDO_BLOCKNO);
+	SetLastWrittenLSNForRelation(lsn, reln->smgr_rnode.node.relNode);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
