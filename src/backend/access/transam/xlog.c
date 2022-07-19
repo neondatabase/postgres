@@ -8996,17 +8996,18 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 }
 
 /*
- * SetLastWrittenLSN -- Set maximal LSN of written page.
+ * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
  * policy. To reduce cache size we store max LSN not for each page, but for
  * bucket (1024 blocks). This cache allows to use old LSN when
  * requesting pages of unchanged or appended relations.
  *
- * rnode can be InvalidOid, in this case maxLastWrittenLsn is updated. SetLastWrittensn with InvalidOid
+ * rnode can be InvalidOid, in this case maxLastWrittenLsn is updated. 
+ * SetLastWrittenLsn with InvalidOid
  * is used by createdb and dbase_redo functions.
  */
 void
-SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
+SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 {
 	if (lsn == InvalidXLogRecPtr)
 		return;
@@ -9062,6 +9063,33 @@ SetLastWrittenLSN(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
 		}
 	}
 	LWLockRelease(LastWrittenLsnLock);
+}
+
+/*
+ * SetLastWrittenLSNForBlock -- Set maximal LSN for block
+ */
+void
+SetLastWrittenLSNForBlock(XLogRecPtr lsn, Oid rnode, BlockNumber blkno)
+{
+	SetLastWrittenLSNForBlockRange(lsn, rnode, blkno, blkno);
+}
+
+/*
+ * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
+ */
+void
+SetLastWrittenLSNForRelation(XLogRecPtr lsn, Oid rnode)
+{
+	SetLastWrittenLSNForBlock(lsn, rnode, REL_METADATA_PSEUDO_BLOCKNO);
+}
+
+/*
+ * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
+ */
+void
+SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
+{
+	SetLastWrittenLSNForBlock(lsn, InvalidOid, 0);
 }
 
 /*
