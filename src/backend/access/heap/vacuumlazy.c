@@ -1148,7 +1148,10 @@ lazy_scan_heap(LVRelState *vacrel)
 		else if (all_visible_according_to_vm && !PageIsAllVisible(page)
 				 && VM_ALL_VISIBLE(vacrel->rel, blkno, &vmbuffer))
 		{
-			elog(WARNING, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
+			/* ZENITH-XXX: all visible hint is not wal-logged
+			 * FIXME: Replay visibilitymap changes in pageserver
+			 */
+			elog(DEBUG1, "page is not marked all-visible but visibility map bit is set in relation \"%s\" page %u",
 				 vacrel->relname, blkno);
 			visibilitymap_clear(vacrel->rel, blkno, vmbuffer,
 								VISIBILITYMAP_VALID_BITS);

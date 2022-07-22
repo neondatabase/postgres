@@ -232,7 +232,7 @@ WALOpenSegmentInit(WALOpenSegment *seg, WALSegmentContext *segcxt,
 void
 XLogBeginRead(XLogReaderState *state, XLogRecPtr RecPtr)
 {
-	Assert(!XLogRecPtrIsInvalid(RecPtr));
+	Assert(!XLogRecPtrIsInvalid(RecPtr) || state->skip_lsn_checks);
 
 	ResetDecoder(state);
 
@@ -255,6 +255,14 @@ XLogReleasePreviousRecord(XLogReaderState *state)
 
 	if (!state->record)
 		return InvalidXLogRecPtr;
+
+#define SKIP_INVALID_RECORD(rec_ptr)  do { \
+										rec_ptr = MAXALIGN(rec_ptr + 1); \
+										if (rec_ptr % XLOG_BLCKSZ <= MAXALIGN(1)) \
+											goto restart; \
+										else \
+											goto skip_invalid; \
+									} while (0);
 
 	/*
 	 * Remove it from the decoded record queue.  It must be the oldest item
@@ -578,7 +586,7 @@ XLogDecodeNextRecord(XLogReaderState *state, bool nonblocking)
 		 * In this case, NextRecPtr should already be pointing to a valid
 		 * record starting position.
 		 */
-		Assert(XRecOffIsValid(RecPtr));
+		Assert(XRecOffIsValid(RecPtr) || state->skip_lsn_checks);
 		randAccess = true;
 	}
 
@@ -617,17 +625,23 @@ restart:
 	}
 	else if (targetRecOff < pageHeaderSize)
 	{
-		report_invalid_record(state, "invalid record offset at %X/%X",
+		if(!state->skip_page_validation)
+		{
+			report_invalid_record(state, "invalid record offset at %X/%X",
 							  LSN_FORMAT_ARGS(RecPtr));
-		goto err;
+			goto err;
+		}
 	}
 
 	if ((((XLogPageHeader) state->readBuf)->xlp_info & XLP_FIRST_IS_CONTRECORD) &&
 		targetRecOff == pageHeaderSize)
 	{
-		report_invalid_record(state, "contrecord is requested by %X/%X",
+		if(!state->skip_page_validation)
+		{
+			report_invalid_record(state, "contrecord is requested by %X/%X",
 							  LSN_FORMAT_ARGS(RecPtr));
-		goto err;
+			goto err;
+		}
 	}
 
 	/* ReadPageInternal has verified the page header */
@@ -642,6 +656,7 @@ restart:
 	 * cannot access any other fields until we've verified that we got the
 	 * whole header.
 	 */
+skip_invalid:
 	record = (XLogRecord *) (state->readBuf + RecPtr % XLOG_BLCKSZ);
 	total_len = record->xl_tot_len;
 
@@ -657,7 +672,13 @@ restart:
 	{
 		if (!ValidXLogRecordHeader(state, RecPtr, state->DecodeRecPtr, record,
 								   randAccess))
-			goto err;
+		{
+			if(!state->skip_invalid_records)
+				goto err;
+
+			SKIP_INVALID_RECORD(RecPtr);
+		}
+
 		gotheader = true;
 	}
 	else
@@ -665,11 +686,17 @@ restart:
 		/* There may be no next page if it's too small. */
 		if (total_len < SizeOfXLogRecord)
 		{
-			report_invalid_record(state,
-								  "invalid record length at %X/%X: wanted %u, got %u",
-								  LSN_FORMAT_ARGS(RecPtr),
-								  (uint32) SizeOfXLogRecord, total_len);
-			goto err;
+			if(!state->skip_invalid_records)
+			{
+				report_invalid_record(state,
+						"invalid record length at %X/%X: wanted %u, got %u",
+						LSN_FORMAT_ARGS(RecPtr),
+						(uint32) SizeOfXLogRecord, total_len);
+
+				goto err;
+			}
+
+			SKIP_INVALID_RECORD(RecPtr);
 		}
 		/* We'll validate the header once we have the next page. */
 		gotheader = false;
@@ -754,10 +781,15 @@ restart:
 			/* Check that the continuation on next page looks valid */
 			if (!(pageHeader->xlp_info & XLP_FIRST_IS_CONTRECORD))
 			{
-				report_invalid_record(state,
+				if(!state->skip_invalid_records)
+				{
+					report_invalid_record(state,
 									  "there is no contrecord flag at %X/%X",
 									  LSN_FORMAT_ARGS(RecPtr));
-				goto err;
+					goto err;
+				}
+
+				SKIP_INVALID_RECORD(RecPtr);
 			}
 
 			/*
@@ -767,12 +799,17 @@ restart:
 			if (pageHeader->xlp_rem_len == 0 ||
 				total_len != (pageHeader->xlp_rem_len + gotlen))
 			{
-				report_invalid_record(state,
+				if(!state->skip_invalid_records)
+				{
+					report_invalid_record(state,
 									  "invalid contrecord length %u (expected %lld) at %X/%X",
 									  pageHeader->xlp_rem_len,
 									  ((long long) total_len) - gotlen,
 									  LSN_FORMAT_ARGS(RecPtr));
-				goto err;
+					goto err;
+				}
+
+				SKIP_INVALID_RECORD(RecPtr);
 			}
 
 			/* Append the continuation from this page to the buffer */
@@ -803,7 +840,13 @@ restart:
 				record = (XLogRecord *) state->readRecordBuf;
 				if (!ValidXLogRecordHeader(state, RecPtr, state->DecodeRecPtr,
 										   record, randAccess))
-					goto err;
+				{
+					if(!state->skip_invalid_records)
+						goto err;
+
+					SKIP_INVALID_RECORD(RecPtr);
+				}
+
 				gotheader = true;
 			}
 
@@ -833,7 +876,12 @@ restart:
 
 		record = (XLogRecord *) state->readRecordBuf;
 		if (!ValidXLogRecord(state, record, RecPtr))
-			goto err;
+		{
+			if(!state->skip_invalid_records)
+				goto err;
+
+			SKIP_INVALID_RECORD(RecPtr);
+		}
 
 		pageHeaderSize = XLogPageHeaderSize((XLogPageHeader) state->readBuf);
 		state->DecodeRecPtr = RecPtr;
@@ -852,7 +900,12 @@ restart:
 
 		/* Record does not cross a page boundary */
 		if (!ValidXLogRecord(state, record, RecPtr))
-			goto err;
+		{
+			if(!state->skip_invalid_records)
+				goto err;
+
+			SKIP_INVALID_RECORD(RecPtr);
+		}
 
 		state->NextRecPtr = RecPtr + MAXALIGN(total_len);
 
@@ -1048,8 +1101,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 		/* we can be sure to have enough WAL available, we scrolled back */
 		Assert(readLen == XLOG_BLCKSZ);
 
-		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr,
-										  state->readBuf))
+		if (!XLogReaderValidatePageHeader(state, targetSegmentPtr, state->readBuf) && !state->skip_page_validation)
 			goto err;
 	}
 
@@ -1090,7 +1142,7 @@ ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 	/*
 	 * Now that we know we have the full header, validate it.
 	 */
-	if (!XLogReaderValidatePageHeader(state, pageptr, (char *) hdr))
+	if (!XLogReaderValidatePageHeader(state, pageptr, (char *) hdr) && !state->skip_page_validation)
 		goto err;
 
 	/* update read state information */
@@ -1149,7 +1201,7 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 		 * We can't exactly verify the prev-link, but surely it should be less
 		 * than the record's own address.
 		 */
-		if (!(record->xl_prev < RecPtr))
+		if (!(record->xl_prev < RecPtr)  && !state->skip_lsn_checks)
 		{
 			report_invalid_record(state,
 								  "record with incorrect prev-link %X/%X at %X/%X",
@@ -1165,7 +1217,7 @@ ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
 		 * check guards against torn WAL pages where a stale but valid-looking
 		 * WAL record starts on a sector boundary.
 		 */
-		if (record->xl_prev != PrevRecPtr)
+		if (record->xl_prev != PrevRecPtr && !state->skip_lsn_checks)
 		{
 			report_invalid_record(state,
 								  "record with incorrect prev-link %X/%X at %X/%X",
@@ -1310,7 +1362,7 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 	 * check typically fails when an old WAL segment is recycled, and hasn't
 	 * yet been overwritten with new data yet.
 	 */
-	if (hdr->xlp_pageaddr != recaddr)
+	if (hdr->xlp_pageaddr != recaddr && !state->skip_lsn_checks)
 	{
 		char		fname[MAXFNAMELEN];
 
@@ -1802,6 +1854,7 @@ DecodeXLogRecord(XLogReaderState *state,
 				}
 				else
 					blk->hole_length = BLCKSZ - blk->bimg_len;
+
 				datatotal += blk->bimg_len;
 
 				/*
@@ -1947,6 +2000,7 @@ DecodeXLogRecord(XLogReaderState *state,
 
 	/* Report the actual size we used. */
 	decoded->size = MAXALIGN(out - (char *) decoded);
+
 	Assert(DecodeXLogRecordRequiredSpace(record->xl_tot_len) >=
 		   decoded->size);
 

@@ -28,7 +28,12 @@ extern PGDLLIMPORT int sync_method;
 
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
 extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
+
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
+
+extern bool			ZenithRecoveryRequested;
+extern XLogRecPtr	zenithLastRec;
+extern bool			zenithWriteOk;
 
 /* these variables are GUC parameters related to XLOG */
 extern PGDLLIMPORT int wal_segment_size;
@@ -96,6 +101,7 @@ extern PGDLLIMPORT int wal_level;
 /* Is WAL archiving enabled always (even during recovery)? */
 #define XLogArchivingAlways() \
 	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
+
 
 /*
  * Is WAL-logging necessary for archival or log-shipping, or can we skip
@@ -211,6 +217,7 @@ extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 extern void xlog_redo(XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *xlog_identify(uint8 info);
+extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli);
 
@@ -242,6 +249,18 @@ extern XLogRecPtr GetInsertRecPtr(void);
 extern XLogRecPtr GetFlushRecPtr(TimeLineID *insertTLI);
 extern TimeLineID GetWALInsertionTimeLine(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
+
+/* neon specifics */
+
+extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
+extern XLogRecPtr GetLastWrittenPageLSN(void);
+
+extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
+extern XLogRecPtr GetRedoStartLsn(void);
+
+extern void SetZenithCurrentClusterSize(uint64 size);
+extern uint64 GetZenithCurrentClusterSize(void);
+
 
 extern void SetWalWriterSleeping(bool sleeping);
 
@@ -296,6 +315,8 @@ extern SessionBackupState get_backup_status(void);
 
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
+
+#define ZENITH_SIGNAL_FILE		"zenith.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"

@@ -41,6 +41,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "access/xloginsert.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogrecovery.h"
 #include "catalog/namespace.h"
@@ -85,6 +86,7 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#include "replication/walproposer.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
@@ -92,6 +94,7 @@
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/proc.h"
+#include "storage/smgr.h"
 #include "storage/standby.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
@@ -191,6 +194,7 @@ static int	syslog_facility = 0;
 static void assign_syslog_facility(int newval, void *extra);
 static void assign_syslog_ident(const char *newval, void *extra);
 static void assign_session_replication_role(int newval, void *extra);
+
 static bool check_temp_buffers(int *newval, void **extra, GucSource source);
 static bool check_bonjour(bool *newval, void **extra, GucSource source);
 static bool check_ssl(bool *newval, void **extra, GucSource source);
@@ -2172,6 +2176,16 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Evict unpinned pages (for better test coverage)"),
+		},
+		&zenith_test_evict,
+		false,
+		NULL, NULL, NULL
+	},
+
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
@@ -2344,6 +2358,28 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_receiver_timeout,
 		60 * 1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_acceptor_reconnect", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Timeout for reconnecting to offline wal acceptor."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_acceptor_reconnect_timeout,
+		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_acceptor_connect_timeout", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Timeout after which give up connection attempt to safekeeper."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_acceptor_connect_timeout,
+		5000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -2970,6 +3006,42 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&max_replication_slots,
 		10, 0, MAX_BACKENDS /* XXX? */ ,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_apply_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal write lag between master and replicas."),
+			gettext_noop("When lag between minimal apply position of replica and current LSN exceeds this value,"
+						 "backends are blocked."),
+			GUC_UNIT_MB,
+		},
+		&max_replication_apply_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_flush_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal flush lag between master and replicas."),
+			gettext_noop("When lag between minimal flush position of replica and current LSN exceeds this value,"
+						 "backends are blocked"),
+			GUC_UNIT_MB,
+		},
+		&max_replication_flush_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_write_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal write lag between master and replicas."),
+			gettext_noop("When lag between minimal write position of replica and current LSN exceeds this value,"
+						 "backends are blocked"),
+			GUC_UNIT_MB,
+		},
+		&max_replication_write_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 
@@ -4709,6 +4781,17 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
+	},
+
+	{
+		{"safekeepers", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("List of Neon WAL acceptors (host:port)"),
+			NULL,
+			GUC_LIST_INPUT | GUC_LIST_QUOTE
+		},
+		&wal_acceptors_list,
+		"",
+		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */
@@ -12243,6 +12326,7 @@ assign_session_replication_role(int newval, void *extra)
 	if (SessionReplicationRole != newval)
 		ResetPlanCache();
 }
+
 
 static bool
 check_temp_buffers(int *newval, void **extra, GucSource source)
