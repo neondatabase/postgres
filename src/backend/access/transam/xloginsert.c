@@ -37,9 +37,11 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "replication/origin.h"
+#include "replication/walsender.h"
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 #include "utils/memutils.h"
+#include "utils/wait_event.h"
 
 /*
  * Guess the maximum buffer size required to store a compressed version of
@@ -86,6 +88,11 @@ typedef struct
 	/* buffer to store a compressed version of backup block image */
 	char		compressed_page[COMPRESS_BUFSIZE];
 } registered_buffer;
+
+/* GUCs */
+int			max_replication_apply_lag;
+int			max_replication_flush_lag;
+int			max_replication_write_lag;
 
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
@@ -141,6 +148,9 @@ static XLogRecData *XLogRecordAssemble(RmgrId rmid, uint8 info,
 									   bool *topxid_included);
 static bool XLogCompressBackupBlock(char *page, uint16 hole_offset,
 									uint16 hole_length, char *dest, uint16 *dlen);
+
+/* Timeout in milliseconds for delaying WAL inserts to avoid WAL overflow */
+#define MB ((XLogRecPtr)1024*1024)
 
 /*
  * Begin constructing a WAL record. This must be called before the
@@ -468,6 +478,11 @@ XLogInsert(RmgrId rmid, uint8 info)
 		XLogResetInsertion();
 		EndPos = SizeOfXLogLongPHD; /* start of 1st chkpt record */
 		return EndPos;
+	}
+
+	if (backpressure_lag() > 0)
+	{
+		InterruptPending = true;
 	}
 
 	do

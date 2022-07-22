@@ -119,6 +119,7 @@
 #include "postmaster/syslogger.h"
 #include "replication/logicallauncher.h"
 #include "replication/walsender.h"
+#include "replication/walproposer.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pg_shmem.h"
@@ -1019,6 +1020,11 @@ PostmasterMain(int argc, char *argv[])
 	 * before any modules had a chance to take the background worker slots.
 	 */
 	ApplyLauncherRegister();
+
+	/*
+	 * Start WAL proposer bgworker is wal acceptors list is not empty
+	 */
+	WalProposerRegister();
 
 	/*
 	 * process any libraries that should be preloaded at postmaster start
