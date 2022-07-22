@@ -47,6 +47,7 @@
 
 uint32		bootstrap_data_checksum_version = 0;	/* No checksum */
 
+extern uint64 predefined_sysidentifier;
 
 static void CheckerModeMain(void);
 static void bootstrap_signals(void);
@@ -221,7 +222,7 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:s:X:-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -265,6 +266,16 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 									PGC_S_DYNAMIC_DEFAULT);
 				}
 				break;
+			case 's':
+			{
+				char* endptr;
+#ifdef HAVE_STRTOULL
+				predefined_sysidentifier = strtoull(optarg, &endptr, 10);
+#else
+				predefined_sysidentifier = strtoul(optarg, &endptr, 10);
+#endif
+				break;
+			}
 			case 'c':
 			case '-':
 				{

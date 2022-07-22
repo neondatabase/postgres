@@ -427,7 +427,6 @@ PageRestoreTempPage(Page tempPage, Page oldPage)
 
 	pageSize = PageGetPageSize(tempPage);
 	memcpy((char *) oldPage, (char *) tempPage, pageSize);
-
 	pfree(tempPage);
 }
 

@@ -27,4 +27,9 @@ OBJS = \
 	syslogger.o \
 	walwriter.o
 
+ifeq ($(with_libseccomp),yes)
+OBJS += \
+	seccomp.o
+endif
+
 include $(top_srcdir)/src/backend/common.mk
