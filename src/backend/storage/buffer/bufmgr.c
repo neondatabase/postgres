@@ -56,7 +56,7 @@
 #include "utils/rel.h"
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
-
+#include "replication/walsender.h"
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -158,6 +158,9 @@ int			maintenance_io_concurrency = 0;
 int			checkpoint_flush_after = 0;
 int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
+
+/* Evict unpinned pages (for better test coverage) */
+bool		zenith_test_evict = false;
 
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
@@ -802,13 +805,12 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 {
 	bool		hit;
 
-	SMgrRelation smgr = smgropen(rnode, InvalidBackendId);
+	SMgrRelation smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 
 	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
 							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
 							 mode, strategy, &hit);
 }
-
 
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants
@@ -824,7 +826,11 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	Block		bufBlock;
 	bool		found;
 	bool		isExtend;
-	bool		isLocalBuf = SmgrIsTemp(smgr);
+	/*
+	 * wal_redo postgres is working in single user mode, we do not need to synchronize access to shared buffer, 
+	 * so let's use local buffers instead
+	 */
+	bool		isLocalBuf = SmgrIsTemp(smgr) || am_wal_redo_postgres;
 
 	*hit = false;
 
@@ -934,11 +940,14 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 		if (!PageIsNew((Page) bufBlock))
-			ereport(ERROR,
+		{
+			 // XXX-ZENITH
+			 MemSet((char *) bufBlock, 0, BLCKSZ);
+			 ereport(DEBUG1,
 					(errmsg("unexpected data beyond EOF in block %u of relation %s",
 							blockNum, relpath(smgr->smgr_rnode, forkNum)),
 					 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
-
+		}
 		/*
 		 * We *must* do smgrextend before succeeding, else the page will not
 		 * be reserved by the kernel, and the next P_NEW call will decide to
@@ -1927,6 +1936,32 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 				UnlockBufHdr(buf, buf_state);
 		}
 		ForgetPrivateRefCountEntry(ref);
+
+		if (zenith_test_evict && !InRecovery)
+		{
+			buf_state = LockBufHdr(buf);
+			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+			{
+				if (buf_state & BM_DIRTY)
+				{
+					ReservePrivateRefCountEntry();
+					PinBuffer_Locked(buf);
+					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
+												 LW_SHARED))
+					{
+						FlushOneBuffer(b);
+						LWLockRelease(BufferDescriptorGetContentLock(buf));
+					}
+					UnpinBuffer(buf, true);
+				}
+				else
+				{
+					InvalidateBuffer(buf);
+				}
+			}
+			else
+				UnlockBufHdr(buf, buf_state);
+		}
 	}
 }
 
@@ -2848,7 +2883,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln)
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(buf->tag.rnode, InvalidBackendId);
+		reln = smgropen(buf->tag.rnode, InvalidBackendId, 0);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(buf->tag.forkNum,
 										buf->tag.blockNum,
@@ -4992,7 +5027,7 @@ IssuePendingWritebacks(WritebackContext *context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(tag.rnode, InvalidBackendId);
+		reln = smgropen(tag.rnode, InvalidBackendId, 0);
 		smgrwriteback(reln, tag.forkNum, tag.blockNum, nblocks);
 	}
 

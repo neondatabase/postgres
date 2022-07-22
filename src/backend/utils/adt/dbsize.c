@@ -23,6 +23,7 @@
 #include "commands/tablespace.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
+#include "storage/smgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/numeric.h"
@@ -98,6 +99,8 @@ db_dir_size(const char *path)
 	return dirsize;
 }
 
+dbsize_hook_type dbsize_hook = NULL;
+
 /*
  * calculate size of database in all tablespaces
  */
@@ -127,6 +130,13 @@ calculate_database_size(Oid dbOid)
 
 	/* Include pg_default storage */
 	snprintf(pathname, sizeof(pathname), "base/%u", dbOid);
+
+	if (dbsize_hook)
+	{
+		totalsize = (*dbsize_hook)(dbOid);
+		return totalsize;
+	}
+
 	totalsize = db_dir_size(pathname);
 
 	/* Scan the non-default tablespaces */
@@ -292,41 +302,17 @@ pg_tablespace_size_name(PG_FUNCTION_ARGS)
  * is no check here or at the call sites for that.
  */
 static int64
-calculate_relation_size(RelFileNode *rfn, BackendId backend, ForkNumber forknum)
+calculate_relation_size(RelFileNode *rfn, BackendId backend, ForkNumber forknum, char relpersistence)
 {
-	int64		totalsize = 0;
-	char	   *relationpath;
-	char		pathname[MAXPGPATH];
-	unsigned int segcount = 0;
+	SMgrRelation  srel = smgropen(*rfn, backend, relpersistence);
 
-	relationpath = relpathbackend(*rfn, backend, forknum);
-
-	for (segcount = 0;; segcount++)
+	if (smgrexists(srel, forknum))
 	{
-		struct stat fst;
+		BlockNumber n = smgrnblocks(srel, forknum);
 
-		CHECK_FOR_INTERRUPTS();
-
-		if (segcount == 0)
-			snprintf(pathname, MAXPGPATH, "%s",
-					 relationpath);
-		else
-			snprintf(pathname, MAXPGPATH, "%s.%u",
-					 relationpath, segcount);
-
-		if (stat(pathname, &fst) < 0)
-		{
-			if (errno == ENOENT)
-				break;
-			else
-				ereport(ERROR,
-						(errcode_for_file_access(),
-						 errmsg("could not stat file \"%s\": %m", pathname)));
-		}
-		totalsize += fst.st_size;
+		return (int64) n * BLCKSZ;
 	}
-
-	return totalsize;
+	return 0;
 }
 
 Datum
@@ -350,7 +336,8 @@ pg_relation_size(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	size = calculate_relation_size(&(rel->rd_node), rel->rd_backend,
-								   forkname_to_number(text_to_cstring(forkName)));
+								   forkname_to_number(text_to_cstring(forkName)),
+								   rel->rd_rel->relpersistence);
 
 	relation_close(rel, AccessShareLock);
 
@@ -375,7 +362,8 @@ calculate_toast_table_size(Oid toastrelid)
 	/* toast heap size, including FSM and VM size */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 		size += calculate_relation_size(&(toastRel->rd_node),
-										toastRel->rd_backend, forkNum);
+										toastRel->rd_backend, forkNum,
+										toastRel->rd_rel->relpersistence);
 
 	/* toast index size, including FSM and VM size */
 	indexlist = RelationGetIndexList(toastRel);
@@ -389,7 +377,8 @@ calculate_toast_table_size(Oid toastrelid)
 									AccessShareLock);
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 			size += calculate_relation_size(&(toastIdxRel->rd_node),
-											toastIdxRel->rd_backend, forkNum);
+											toastIdxRel->rd_backend, forkNum,
+											toastIdxRel->rd_rel->relpersistence);
 
 		relation_close(toastIdxRel, AccessShareLock);
 	}
@@ -418,7 +407,8 @@ calculate_table_size(Relation rel)
 	 */
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 		size += calculate_relation_size(&(rel->rd_node), rel->rd_backend,
-										forkNum);
+										forkNum,
+										rel->rd_rel->relpersistence);
 
 	/*
 	 * Size of toast relation
@@ -458,7 +448,8 @@ calculate_indexes_size(Relation rel)
 			for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
 				size += calculate_relation_size(&(idxRel->rd_node),
 												idxRel->rd_backend,
-												forkNum);
+												forkNum,
+												idxRel->rd_rel->relpersistence);
 
 			relation_close(idxRel, AccessShareLock);
 		}
