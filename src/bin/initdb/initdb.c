@@ -2859,6 +2859,7 @@ main(int argc, char *argv[])
 		{"discard-caches", no_argument, NULL, 14},
 		{"locale-provider", required_argument, NULL, 15},
 		{"icu-locale", required_argument, NULL, 16},
+		{"sysid", required_argument, NULL, 17},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3015,6 +3016,9 @@ main(int argc, char *argv[])
 				break;
 			case 16:
 				icu_locale = pg_strdup(optarg);
+				break;
+			case 17:
+				boot_options = psprintf("%s -s %s", boot_options, optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

@@ -2253,6 +2253,8 @@ RelMapFile
 RelMapping
 RelOptInfo
 RelOptKind
+RelSizeEntry
+RelTag
 RelToCheck
 RelToCluster
 RelabelType
@@ -2944,6 +2946,8 @@ WaitPMResult
 WalCloseMethod
 WalCompression
 WalLevel
+Safekeeper
+WalMessage
 WalRcvData
 WalRcvExecResult
 WalRcvExecStatus
@@ -3055,6 +3059,17 @@ XmlTableBuilderData
 YYLTYPE
 YYSTYPE
 YY_BUFFER_STATE
+ZenithErrorResponse
+ZenithExistsRequest
+ZenithExistsResponse
+ZenithGetPageRequest
+ZenithGetPageResponse
+ZenithMessage
+ZenithMessageTag
+ZenithNblocksRequest
+ZenithNblocksResponse
+ZenithRequest
+ZenithResponse
 ZSTD_CCtx
 ZSTD_DCtx
 ZSTD_inBuffer

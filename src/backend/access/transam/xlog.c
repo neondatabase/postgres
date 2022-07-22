@@ -136,6 +136,7 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
+uint64      predefined_sysidentifier;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -551,7 +552,16 @@ typedef struct XLogCtlData
 	 * XLOG_FPW_CHANGE record that instructs full_page_writes is disabled.
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
+	XLogRecPtr  lastWrittenPageLSN;
 
+	/* neon: copy of startup's RedoStartLSN for walproposer's use */
+	XLogRecPtr	RedoStartLSN;
+
+	/*
+	 * size of a timeline in zenith pageserver.
+	 * used to enforce timeline size limit.
+	 */
+	uint64 		zenithCurrentClusterSize;
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -633,6 +643,15 @@ static bool holdingAllLocks = false;
 #ifdef WAL_DEBUG
 static MemoryContext walDebugCxt = NULL;
 #endif
+
+
+/*
+ * Variables read from 'zenith.signal' file.
+ */
+bool		ZenithRecoveryRequested = false;
+XLogRecPtr	zenithLastRec = InvalidXLogRecPtr;
+bool		zenithWriteOk = false;
+
 
 static void CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI,
 										XLogRecPtr EndOfLog,
@@ -4525,9 +4544,16 @@ BootStrapXLOG(void)
 	 * perhaps be useful sometimes.
 	 */
 	gettimeofday(&tv, NULL);
-	sysidentifier = ((uint64) tv.tv_sec) << 32;
-	sysidentifier |= ((uint64) tv.tv_usec) << 12;
-	sysidentifier |= getpid() & 0xFFF;
+	if (predefined_sysidentifier != 0)
+	{
+		sysidentifier = predefined_sysidentifier;
+	}
+	else
+	{
+		sysidentifier = ((uint64) tv.tv_sec) << 32;
+		sysidentifier |= ((uint64) tv.tv_usec) << 12;
+		sysidentifier |= getpid() & 0xFFF;
+	}
 
 	/* page buffer must be aligned suitably for O_DIRECT */
 	buffer = (char *) palloc(XLOG_BLCKSZ + XLOG_BLCKSZ);
@@ -4660,6 +4686,7 @@ BootStrapXLOG(void)
 	 */
 	ReadControlFile();
 }
+
 
 static char *
 str_time(pg_time_t tnow)
@@ -4881,6 +4908,81 @@ CheckRequiredParameterValues(void)
 	}
 }
 
+static void
+readZenithSignalFile(void)
+{
+	int			fd;
+
+	fd = BasicOpenFile(ZENITH_SIGNAL_FILE, O_RDONLY | PG_BINARY);
+	if (fd >= 0)
+	{
+		struct stat statbuf;
+		char	   *content;
+		char		prev_lsn_str[20];
+
+		/* Slurp the file into a string */
+		if (stat(ZENITH_SIGNAL_FILE, &statbuf) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content = palloc(statbuf.st_size + 1);
+		if (read(fd, content, statbuf.st_size) != statbuf.st_size)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content[statbuf.st_size] = '\0';
+
+		/* Parse it */
+		if (sscanf(content, "PREV LSN: %19s", prev_lsn_str) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+
+		if (strcmp(prev_lsn_str, "invalid") == 0)
+		{
+			/* No prev LSN. Forbid starting up in read-write mode */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = false;
+		}
+		else if (strcmp(prev_lsn_str, "none") == 0)
+		{
+			/*
+			 * The page server had no valid prev LSN, but assured that it's ok
+			 * to start without it. This happens when you start the compute
+			 * node for the first time on a new branch.
+			 */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = true;
+		}
+		else
+		{
+			uint32		hi,
+						lo;
+
+			if (sscanf(prev_lsn_str, "%X/%X", &hi, &lo) != 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithLastRec = ((uint64) hi) << 32 | lo;
+
+			/* If prev LSN is given, it better be valid */
+			if (zenithLastRec == InvalidXLogRecPtr)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid prev-LSN in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithWriteOk = true;
+		}
+		ZenithRecoveryRequested = true;
+		close(fd);
+
+		elog(LOG,
+			 "[ZENITH] found 'zenith.signal' file. setting prev LSN to %X/%X",
+			 LSN_FORMAT_ARGS(zenithLastRec));
+	}
+}
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -4913,9 +5015,14 @@ StartupXLOG(void)
 	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	/*
+	 * Read zenith.signal before anything else.
+	 */
+	readZenithSignalFile();
+
+	/*
 	 * Check that contents look valid.
 	 */
-	if (!XRecOffIsValid(ControlFile->checkPoint))
+	if (!XRecOffIsValid(ControlFile->checkPoint) && !ZenithRecoveryRequested)
 		ereport(FATAL,
 				(errmsg("control file contains invalid checkpoint location")));
 
@@ -5512,6 +5619,7 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
+	XLogCtl->lastWrittenPageLSN = EndOfLog;
 
 	/*
 	 * Preallocate additional log files, if wanted.
@@ -5939,6 +6047,71 @@ GetInsertRecPtr(void)
 }
 
 /*
+ * GetLastWrittenPageLSN -- Returns maximal LSN of written page
+ */
+XLogRecPtr
+GetLastWrittenPageLSN(void)
+{
+	XLogRecPtr lsn;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	lsn = XLogCtl->lastWrittenPageLSN;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return lsn;
+}
+
+/*
+ * SetLastWrittenPageLSN -- Set maximal LSN of written page
+ */
+void
+SetLastWrittenPageLSN(XLogRecPtr lsn)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (lsn > XLogCtl->lastWrittenPageLSN)
+		XLogCtl->lastWrittenPageLSN = lsn;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+void
+SetRedoStartLsn(XLogRecPtr RedoStartLSN)
+{
+	XLogCtl->RedoStartLSN = RedoStartLSN;
+}
+
+/*
+ * RedoStartLsn is set only once by startup process, locking is not required
+ * after its exit.
+ */
+XLogRecPtr
+GetRedoStartLsn(void)
+{
+	return XLogCtl->RedoStartLSN;
+}
+
+
+uint64
+GetZenithCurrentClusterSize(void)
+{
+	uint64 size;
+	SpinLockAcquire(&XLogCtl->info_lck);
+	size = XLogCtl->zenithCurrentClusterSize;
+	SpinLockRelease(&XLogCtl->info_lck);
+
+	return size;
+}
+
+
+void
+SetZenithCurrentClusterSize(uint64 size)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->zenithCurrentClusterSize = size;
+	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+
+
+/*
  * GetFlushRecPtr -- Returns the current flush position, ie, the last WAL
  * position known to be fsync'd to disk. This should only be used on a
  * system that is known not to be in recovery.
@@ -5946,8 +6119,6 @@ GetInsertRecPtr(void)
 XLogRecPtr
 GetFlushRecPtr(TimeLineID *insertTLI)
 {
-	Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE);
-
 	SpinLockAcquire(&XLogCtl->info_lck);
 	LogwrtResult = XLogCtl->LogwrtResult;
 	SpinLockRelease(&XLogCtl->info_lck);
@@ -7802,6 +7973,8 @@ xlog_redo(XLogReaderState *record)
 		for (uint8 block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 		{
 			Buffer		buffer;
+			XLogRedoAction result;
+
 
 			if (!XLogRecHasBlockImage(record, block_id))
 			{
@@ -7809,10 +7982,19 @@ xlog_redo(XLogReaderState *record)
 					elog(ERROR, "XLOG_FPI record did not contain a full-page image");
 				continue;
 			}
-
-			if (XLogReadBufferForRedo(record, block_id, &buffer) != BLK_RESTORED)
+			result = XLogReadBufferForRedo(record, block_id, &buffer);
+			if (result == BLK_DONE && !IsUnderPostmaster)
+			{
+				/*
+				 * In the special WAL process, blocks that are being ignored
+				 * return BLK_DONE. Accept that.
+				 */
+			}
+			else if (XLogReadBufferForRedo(record, block_id, &buffer) != BLK_RESTORED)
 				elog(ERROR, "unexpected XLogReadBufferForRedo result when restoring backup block");
-			UnlockReleaseBuffer(buffer);
+
+			if (buffer != InvalidBuffer)
+				UnlockReleaseBuffer(buffer);
 		}
 	}
 	else if (info == XLOG_BACKUP_END)
