@@ -38,6 +38,10 @@
 #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
 									 * is taken */
 
+extern int max_replication_apply_lag;
+extern int max_replication_flush_lag;
+extern int max_replication_write_lag;
+
 /* prototypes for public functions in xloginsert.c: */
 extern void XLogBeginInsert(void);
 extern void XLogSetRecordFlags(uint8 flags);

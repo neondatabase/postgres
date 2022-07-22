@@ -562,6 +562,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
+		else if (ZenithRecoveryRequested)
+			ereport(LOG,
+					(errmsg("starting zenith recovery")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -702,6 +705,33 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		/* tell the caller to delete it later */
 		haveBackupLabel = true;
 	}
+	else if (ZenithRecoveryRequested)
+	{
+		/*
+		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
+		 * just finished reading the record that started at 'zenithLastRec'
+		 * and ended at checkpoint.redo
+		 */
+		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
+			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
+			 LSN_FORMAT_ARGS(zenithLastRec));
+
+		CheckPointLoc = zenithLastRec;
+		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
+		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		// FIXME needs review. rebase of ff41b709abea6a9c42100a4fcb0ff434b2c846c9
+		// Is it still relevant?
+		/* make basebackup LSN available for walproposer */
+		SetRedoStartLsn(RedoStartLSN);
+		//EndRecPtr = ControlFile->checkPointCopy.redo;
+
+		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
+		wasShutdown = true;
+
+		/* Initialize expectedTLEs, like ReadRecord() does */
+		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
+		XLogPrefetcherBeginRead(xlogprefetcher, ControlFile->checkPointCopy.redo);
+	}
 	else
 	{
 		/*
@@ -763,6 +793,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		CheckPointLoc = ControlFile->checkPoint;
 		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		SetRedoStartLsn(RedoStartLSN);
 		RedoStartTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		record = ReadCheckpointRecord(xlogprefetcher, CheckPointLoc, 1, true,
 									  CheckPointTLI);
@@ -852,7 +883,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				(errmsg("invalid next transaction ID")));
 
 	/* sanity check */
-	if (checkPoint.redo > CheckPointLoc)
+	if (checkPoint.redo > CheckPointLoc && !ZenithRecoveryRequested)
 		ereport(PANIC,
 				(errmsg("invalid redo in checkpoint record")));
 
@@ -1440,6 +1471,8 @@ FinishWalRecovery(void)
 	 * An important side-effect of this is to load the last page into
 	 * xlogreader. The caller uses it to initialize the WAL for writing.
 	 */
+
+
 	if (!InRecovery)
 	{
 		lastRec = CheckPointLoc;
@@ -1450,8 +1483,12 @@ FinishWalRecovery(void)
 		lastRec = XLogRecoveryCtl->lastReplayedReadRecPtr;
 		lastRecTLI = XLogRecoveryCtl->lastReplayedTLI;
 	}
-	XLogPrefetcherBeginRead(xlogprefetcher, lastRec);
-	(void) ReadRecord(xlogprefetcher, PANIC, false, lastRecTLI);
+
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherBeginRead(xlogprefetcher, lastRec);
+		(void) ReadRecord(xlogprefetcher, PANIC, false, lastRecTLI);
+	}
 	endOfLog = xlogreader->EndRecPtr;
 
 	/*
@@ -1489,7 +1526,45 @@ FinishWalRecovery(void)
 	 * Copy the last partial block to the caller, for initializing the WAL
 	 * buffer for appending new WAL.
 	 */
-	if (endOfLog % XLOG_BLCKSZ != 0)
+	/*
+	 * When starting from a zenith base backup, we don't have WAL. Initialize
+	 * the WAL page where we will start writing new records from scratch,
+	 * instead.
+	 */
+	if (ZenithRecoveryRequested)
+	{
+		if (!zenithWriteOk)
+		{
+			/*
+			 * We cannot start generating new WAL if we don't have a valid prev-LSN
+			 * to use for the first new WAL record. (Shouldn't happen.)
+			 */
+			ereport(ERROR,
+					(errmsg("cannot start in read-write mode from this base backup")));
+		}
+		else
+		{
+			int len = endOfLog % XLOG_BLCKSZ;
+			char *page = palloc0(len);
+			XLogRecPtr pageBeginPtr = endOfLog - (endOfLog % XLOG_BLCKSZ);
+
+			XLogPageHeader xlogPageHdr = (XLogPageHeader) (page);
+
+			xlogPageHdr->xlp_pageaddr = pageBeginPtr;
+			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+			xlogPageHdr->xlp_tli = recoveryTargetTLI;
+			xlogPageHdr->xlp_info = XLP_FIRST_IS_CONTRECORD; // FIXME
+			xlogPageHdr->xlp_rem_len = (endOfLog % XLOG_BLCKSZ) - SizeOfXLogShortPHD;
+			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
+
+			result->lastPageBeginPtr = pageBeginPtr;
+			result->lastPage = page;
+			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(xlogreader->EndRecPtr));
+
+			// FIXME: should we unlink zenith.signal?
+		}
+	}
+	else if (endOfLog % XLOG_BLCKSZ != 0)
 	{
 		char	   *page;
 		int			len;
@@ -1541,7 +1616,10 @@ ShutdownWalRecovery(void)
 	char		recoveryPath[MAXPGPATH];
 
 	/* Final update of pg_stat_recovery_prefetch. */
-	XLogPrefetcherComputeStats(xlogprefetcher);
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherComputeStats(xlogprefetcher);
+	}
 
 	/* Shut down xlogreader */
 	if (readFile >= 0)
@@ -1550,7 +1628,11 @@ ShutdownWalRecovery(void)
 		readFile = -1;
 	}
 	XLogReaderFree(xlogreader);
-	XLogPrefetcherFree(xlogprefetcher);
+
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherFree(xlogprefetcher);
+	}
 
 	if (ArchiveRecoveryRequested)
 	{
