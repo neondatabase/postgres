@@ -492,4 +492,7 @@ extern PGDLLIMPORT shmem_request_hook_type shmem_request_hook;
 /* in executor/nodeHash.c */
 extern size_t get_hash_memory_limit(void);
 
+/* in src/backend/tcop/zenith_wal_redo.c */
+extern bool am_wal_redo_postgres;
+
 #endif							/* MISCADMIN_H */
