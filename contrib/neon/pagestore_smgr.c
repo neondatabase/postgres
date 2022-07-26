@@ -558,7 +558,7 @@ zenith_wallog_page(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, 
 	 * Remember the LSN on this page. When we read the page again, we must
 	 * read the same or newer version of it.
 	 */
-	SetLastWrittenLSNForBlock(lsn, reln->smgr_rnode.node.relNode, blocknum);
+	SetLastWrittenPageLSN(lsn);
 }
 
 
@@ -603,7 +603,7 @@ zm_adjust_lsn(XLogRecPtr lsn)
  * Return LSN for requesting pages and number of blocks from page server
  */
 static XLogRecPtr
-zenith_get_request_lsn(bool *latest, Oid rnode, BlockNumber blkno)
+zenith_get_request_lsn(bool *latest)
 {
 	XLogRecPtr	lsn;
 
@@ -630,9 +630,9 @@ zenith_get_request_lsn(bool *latest, Oid rnode, BlockNumber blkno)
 		 * so our request cannot concern those.
 		 */
 		*latest = true;
-		lsn = GetLastWrittenLSN(rnode, blkno);
+		lsn = GetLastWrittenPageLSN();
 		Assert(lsn != InvalidXLogRecPtr);
-		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenLSN lsn %X/%X ",
+		elog(DEBUG1, "zenith_get_request_lsn GetLastWrittenPageLSN lsn %X/%X ",
 			 (uint32) ((lsn) >> 32), (uint32) (lsn));
 
 		lsn = zm_adjust_lsn(lsn);
@@ -716,7 +716,7 @@ zenith_exists(SMgrRelation reln, ForkNumber forkNum)
 		return false;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
+	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithExistsRequest request = {
 			.req.tag = T_ZenithExistsRequest,
@@ -791,7 +791,7 @@ zenith_create(SMgrRelation reln, ForkNumber forkNum, bool isRedo)
 	 *
 	 * FIXME: This is currently not just an optimization, but required for
 	 * correctness. Postgres can call smgrnblocks() on the newly-created
-	 * relation. Currently, we don't call SetLastWrittenLSN() when a new
+	 * relation. Currently, we don't call SetLastWrittenPageLSN() when a new
 	 * relation created, so if we didn't remember the size in the relsize
 	 * cache, we might call smgrnblocks() on the newly-created relation before
 	 * the creation WAL record hass been received by the page server.
@@ -904,8 +904,6 @@ zenith_extend(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 	if (IS_LOCAL_REL(reln))
 		mdextend(reln, forkNum, blkno, buffer, skipFsync);
 #endif
-
-	SetLastWrittenLSNForRelation(lsn, reln->smgr_rnode.node.relNode);
 }
 
 /*
@@ -1081,7 +1079,7 @@ zenith_read(SMgrRelation reln, ForkNumber forkNum, BlockNumber blkno,
 			elog(ERROR, "unknown relpersistence '%c'", reln->smgr_relpersistence);
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, blkno);
+	request_lsn = zenith_get_request_lsn(&latest);
 	zenith_read_at_lsn(reln->smgr_rnode.node, forkNum, blkno, request_lsn, latest, buffer);
 
 #ifdef DEBUG_COMPARE_LOCAL
@@ -1286,7 +1284,7 @@ zenith_nblocks(SMgrRelation reln, ForkNumber forknum)
 		return n_blocks;
 	}
 
-	request_lsn = zenith_get_request_lsn(&latest, reln->smgr_rnode.node.relNode, REL_METADATA_PSEUDO_BLOCKNO);
+	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithNblocksRequest request = {
 			.req.tag = T_ZenithNblocksRequest,
@@ -1346,7 +1344,7 @@ zenith_dbsize(Oid dbNode)
 	XLogRecPtr request_lsn;
 	bool		latest;
 
-	request_lsn = zenith_get_request_lsn(&latest, InvalidOid, REL_METADATA_PSEUDO_BLOCKNO);
+	request_lsn = zenith_get_request_lsn(&latest);
 	{
 		ZenithDbSizeRequest request = {
 			.req.tag = T_ZenithDbSizeRequest,
@@ -1433,11 +1431,7 @@ zenith_truncate(SMgrRelation reln, ForkNumber forknum, BlockNumber nblocks)
 	 */
 	XLogFlush(lsn);
 
-	/*
-	 * Truncate may affect several chunks of relations. So we should either update last written LSN for all of them,
-	 * either update LSN for "dummy" metadata block. Second approach seems to be more efficient.
-	 */
-	SetLastWrittenLSNForRelation(lsn, reln->smgr_rnode.node.relNode);
+	SetLastWrittenPageLSN(lsn);
 
 #ifdef DEBUG_COMPARE_LOCAL
 	if (IS_LOCAL_REL(reln))
