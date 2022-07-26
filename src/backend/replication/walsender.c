@@ -2058,13 +2058,6 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
 
-	/* 
-	 * walproposer use trunclateLsn instead of flushPtr for confirmed
-	 * received location, so we shouldn't update restart_lsn here.
-	 */
-	if (am_wal_proposer)
-		return;
-
 	/*
 	 * walproposer use trunclateLsn instead of flushPtr for confirmed
 	 * received location, so we shouldn't update restart_lsn here.

@@ -113,7 +113,6 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
 uint64      predefined_sysidentifier;
-int			lastWrittenLsnCacheSize;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -182,28 +181,6 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{"shutdown", RECOVERY_TARGET_ACTION_SHUTDOWN, false},
 	{NULL, 0, false}
 };
-
-
-/*
- * We are not taken in account dbnode, spcnode, forknum fields of
- * relation tag, because possibility of collision is assumed to be small
- * and should not affect performance. And reducing cache key size speed-up
- * hash calculation and comparison.
- */
-typedef struct LastWrittenLsnCacheKey
-{
-	Oid         relid;
-	BlockNumber bucket;
-} LastWrittenLsnCacheKey;
-
-typedef struct LastWrittenLsnCacheEntry
-{
-	LastWrittenLsnCacheKey key;
-	XLogRecPtr             lsn;
-	/* L2-List for LRU replacement algorithm */
-	struct LastWrittenLsnCacheEntry* next;
-	struct LastWrittenLsnCacheEntry* prev;
-} LastWrittenLsnCacheEntry;
 
 /*
  * Statistics for current checkpoint are collected in this global struct.
@@ -774,17 +751,6 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 	XLogRecPtr  lastWrittenPageLSN;
 
-	/*
-	 * Maximal last written LSN for pages not present in lastWrittenLsnCache
-	 */
-	XLogRecPtr  maxLastWrittenLsn;
-
-	/*
-	 * Double linked list to implement LRU replacement policy for last written LSN cache.
-	 * Access to this list as well as to last written LSN cache is protected by 'LastWrittenLsnLock'.
-	 */
-	LastWrittenLsnCacheEntry lastWrittenLsnLRU;
-
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
 
@@ -796,7 +762,6 @@ typedef struct XLogCtlData
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
-
 static XLogCtlData *XLogCtl = NULL;
 
 /* a private copy of XLogCtl->Insert.WALInsertLocks, for convenience */
@@ -806,19 +771,6 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  * We maintain an image of pg_control in shared memory.
  */
 static ControlFileData *ControlFile = NULL;
-
-#define LAST_WRITTEN_LSN_CACHE_BUCKET 1024 /* blocks = 8Mb */
-
-
-/*
- * Cache of last written LSN for each relation chunk (hash bucket).
- * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
- * relation metadata update.
- * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
- * pages are replaced using LRU algorithm, based on L2-list.
- * Access to this cache is protected by 'LastWrittenLsnLock'.
- */
-static HTAB *lastWrittenLsnCache;
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -5189,8 +5141,11 @@ LocalProcessControlFile(bool reset)
 	ReadControlFile();
 }
 
-static Size
-XLOGCtlShmemSize(void)
+/*
+ * Initialization of shared memory for XLOG
+ */
+Size
+XLOGShmemSize(void)
 {
 	Size		size;
 
@@ -5230,16 +5185,6 @@ XLOGCtlShmemSize(void)
 	return size;
 }
 
-/*
- * Initialization of shared memory for XLOG
- */
-Size
-XLOGShmemSize(void)
-{
-	return XLOGCtlShmemSize() +
-		hash_estimate_size(lastWrittenLsnCacheSize, sizeof(LastWrittenLsnCacheEntry));
-}
-
 void
 XLOGShmemInit(void)
 {
@@ -5269,15 +5214,6 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
-	{
-		static HASHCTL info;
-		info.keysize = sizeof(LastWrittenLsnCacheKey);
-		info.entrysize = sizeof(LastWrittenLsnCacheEntry);
-		lastWrittenLsnCache = ShmemInitHash("last_written_lsn_cache",
-											lastWrittenLsnCacheSize, lastWrittenLsnCacheSize,
-											&info,
-											HASH_ELEM | HASH_BLOBS);
-	}
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
@@ -8175,8 +8111,7 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	XLogCtl->lastWrittenLsnLRU.next = XLogCtl->lastWrittenLsnLRU.prev = &XLogCtl->lastWrittenLsnLRU;
+	XLogCtl->lastWrittenPageLSN = EndOfLog;
 
 	LocalSetXLogInsertAllowed();
 
@@ -8952,144 +8887,29 @@ GetInsertRecPtr(void)
 }
 
 /*
- * GetLastWrittenLSN -- Returns maximal LSN of written page.
- * It returns an upper bound for the last written LSN of a given page,
- * either from a cached last written LSN or a global maximum last written LSN.
- * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
- * If cache is large enough ,iterting through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
+ * GetLastWrittenPageLSN -- Returns maximal LSN of written page
  */
 XLogRecPtr
-GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
+GetLastWrittenPageLSN(void)
 {
 	XLogRecPtr lsn;
-	LastWrittenLsnCacheEntry* entry;
-
-	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
-
-	/* Maximal last written LSN among all non-cached pages */
-	lsn = XLogCtl->maxLastWrittenLsn;
-
-	if (rnode != InvalidOid)
-	{
-		LastWrittenLsnCacheKey key;
-		key.relid = rnode;
-		key.bucket = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
-		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
-		if (entry != NULL)
-			lsn = entry->lsn;
-	}
-	else
-	{
-		HASH_SEQ_STATUS seq;
-		/* Find maximum of all cached LSNs */
-		hash_seq_init(&seq, lastWrittenLsnCache);
-		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
-		{
-			if (entry->lsn > lsn)
-				lsn = entry->lsn;
-		}
-	}
-	LWLockRelease(LastWrittenLsnLock);
+	SpinLockAcquire(&XLogCtl->info_lck);
+	lsn = XLogCtl->lastWrittenPageLSN;
+	SpinLockRelease(&XLogCtl->info_lck);
 
 	return lsn;
 }
 
 /*
- * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. To reduce cache size we store max LSN not for each page, but for
- * bucket (1024 blocks). This cache allows to use old LSN when
- * requesting pages of unchanged or appended relations.
- *
- * rnode can be InvalidOid, in this case maxLastWrittenLsn is updated. 
- * SetLastWrittenLsn with InvalidOid
- * is used by createdb and dbase_redo functions.
+ * SetLastWrittenPageLSN -- Set maximal LSN of written page
  */
 void
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
+SetLastWrittenPageLSN(XLogRecPtr lsn)
 {
-	if (lsn == InvalidXLogRecPtr)
-		return;
-
-	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
-	if (rnode == InvalidOid)
-	{
-		if (lsn > XLogCtl->maxLastWrittenLsn)
-			XLogCtl->maxLastWrittenLsn = lsn;
-	}
-	else
-	{
-		LastWrittenLsnCacheEntry* entry;
-		LastWrittenLsnCacheKey key;
-		bool found;
-		BlockNumber bucket;
-
-		key.relid = rnode;
-		for (bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
-			 bucket <= till / LAST_WRITTEN_LSN_CACHE_BUCKET;
-			 bucket++)
-		{
-			key.bucket = bucket;
-			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
-			if (found)
-			{
-				if (lsn > entry->lsn)
-					entry->lsn = lsn;
-				/* Unlink from LRU list */
-				entry->next->prev = entry->prev;
-				entry->prev->next = entry->next;
-			}
-			else
-			{
-				entry->lsn = lsn;
-				if (hash_get_num_entries(lastWrittenLsnCache) > lastWrittenLsnCacheSize)
-				{
-					/* Replace least recently used entry */
-					LastWrittenLsnCacheEntry* victim = XLogCtl->lastWrittenLsnLRU.prev;
-					/* Adjust max LSN for not cached relations/chunks if needed */
-					if (victim->lsn > XLogCtl->maxLastWrittenLsn)
-						XLogCtl->maxLastWrittenLsn = victim->lsn;
-
-					victim->next->prev = victim->prev;
-					victim->prev->next = victim->next;
-					hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
-				}
-			}
-			/* Link to the head of LRU list */
-			entry->next = XLogCtl->lastWrittenLsnLRU.next;
-			entry->prev = &XLogCtl->lastWrittenLsnLRU;
-			XLogCtl->lastWrittenLsnLRU.next = entry->next->prev = entry;
-		}
-	}
-	LWLockRelease(LastWrittenLsnLock);
-}
-
-/*
- * SetLastWrittenLSNForBlock -- Set maximal LSN for block
- */
-void
-SetLastWrittenLSNForBlock(XLogRecPtr lsn, Oid rnode, BlockNumber blkno)
-{
-	SetLastWrittenLSNForBlockRange(lsn, rnode, blkno, blkno);
-}
-
-/*
- * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
- */
-void
-SetLastWrittenLSNForRelation(XLogRecPtr lsn, Oid rnode)
-{
-	SetLastWrittenLSNForBlock(lsn, rnode, REL_METADATA_PSEUDO_BLOCKNO);
-}
-
-/*
- * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
- */
-void
-SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
-{
-	SetLastWrittenLSNForBlock(lsn, InvalidOid, 0);
+	SpinLockAcquire(&XLogCtl->info_lck);
+	if (lsn > XLogCtl->lastWrittenPageLSN)
+		XLogCtl->lastWrittenPageLSN = lsn;
+	SpinLockRelease(&XLogCtl->info_lck);
 }
 
 /*
