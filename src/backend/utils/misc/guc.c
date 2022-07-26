@@ -2380,16 +2380,6 @@ static struct config_int ConfigureNamesInt[] =
 	},
 
 	{
-		{"lsn_cache_size", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Size of las written LSN cache used by Neon."),
-			NULL
-		},
-		&lastWrittenLsnCacheSize,
-		1024, 10, 1000000, /* 1024 is enough to hold 10GB database with 8Mb bucket */
-		NULL, NULL, NULL
-	},
-
-	{
 		{"temp_buffers", PGC_USERSET, RESOURCES_MEM,
 			gettext_noop("Sets the maximum number of temporary buffers used by each session."),
 			NULL,
