@@ -1,4 +1,0 @@
-# zenith extension
-comment = 'cloud storage for PostgreSQL'
-default_version = '1.0'
-module_pathname = '$libdir/zenith'
