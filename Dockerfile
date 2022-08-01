@@ -30,7 +30,7 @@ COPY . /pg/
 
 # Build and install Postgres locally
 RUN mkdir /pg/compute_build && cd /pg/compute_build && \
-    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-uuid=ossp && \
+    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --with-uuid=ossp && \
     # Install main binaries and contribs
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s install && \
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/ install && \
@@ -47,7 +47,7 @@ WORKDIR /pg
 FROM debian:buster-slim
 
 # libreadline-dev is required to run psql
-RUN apt-get update && apt-get -yq install libreadline-dev
+RUN apt-get update && apt-get -yq install libreadline-dev libossp-uuid-dev
 
 # Add user postgres
 RUN mkdir /var/db && useradd -m -d /var/db/postgres postgres && \
