@@ -1,8 +1,12 @@
+# Allow specifiyng the different compute-tools tag, so we were able to always use
+# the locally built image.
+ARG COMPUTE_TOOLS_TAG=latest
+
 #
 # Image with pre-built tools
 #
-FROM zenithdb/compute-tools:latest AS compute-deps
-# Only to get ready zenith_ctl binary as deppendency
+FROM neondatabase/compute-tools:$COMPUTE_TOOLS_TAG AS compute-deps
+# Only to get ready compute_ctl binary as deppendency
 
 #
 # Image with Postgres build deps
@@ -10,7 +14,7 @@ FROM zenithdb/compute-tools:latest AS compute-deps
 FROM debian:buster-slim AS build-deps
 
 RUN apt-get update && apt-get -yq install automake libtool build-essential bison flex libreadline-dev zlib1g-dev libxml2-dev \
-                                          libcurl4-openssl-dev
+                                          libcurl4-openssl-dev libossp-uuid-dev
 
 #
 # Image with built Postgres
@@ -26,11 +30,11 @@ COPY . /pg/
 
 # Build and install Postgres locally
 RUN mkdir /pg/compute_build && cd /pg/compute_build && \
-    ../configure CFLAGS='-O0 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-cassert --enable-depend && \
+    ../configure CFLAGS='-O2 -g3' --prefix=$(pwd)/postgres_bin --enable-debug --enable-uuid=ossp && \
     # Install main binaries and contribs
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s install && \
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/ install && \
-    make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/zenith install && \
+    make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C contrib/neon install && \
     # Install headers
     make MAKELEVEL=0 -j $(getconf _NPROCESSORS_ONLN) -s -C src/include install
 
@@ -56,11 +60,14 @@ RUN mkdir /var/db && useradd -m -d /var/db/postgres postgres && \
 COPY --from=pg-build /pg/compute_build/postgres_bin /usr/local
 
 # Copy binaries from compute-tools
-COPY --from=compute-deps /usr/local/bin/zenith_ctl /usr/local/bin/zenith_ctl
+COPY --from=compute-deps /usr/local/bin/compute_ctl /usr/local/bin/compute_ctl
+
+# XXX: temporary symlink for compatibility with old control-plane
+RUN ln -s /usr/local/bin/compute_ctl /usr/local/bin/zenith_ctl
 
 # Add postgres shared objects to the search path
 RUN echo '/usr/local/lib' >> /etc/ld.so.conf && /sbin/ldconfig
 
 USER postgres
 
-ENTRYPOINT ["/usr/local/bin/zenith_ctl"]
+ENTRYPOINT ["/usr/local/bin/compute_ctl"]

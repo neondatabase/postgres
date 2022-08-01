@@ -412,6 +412,7 @@ static const struct config_enum_entry backslash_quote_options[] = {
  */
 static const struct config_enum_entry compute_query_id_options[] = {
 	{"auto", COMPUTE_QUERY_ID_AUTO, false},
+	{"regress", COMPUTE_QUERY_ID_REGRESS, false},
 	{"on", COMPUTE_QUERY_ID_ON, false},
 	{"off", COMPUTE_QUERY_ID_OFF, false},
 	{"true", COMPUTE_QUERY_ID_ON, true},
@@ -2134,7 +2135,7 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
-		{"zenith_test_evict", PGC_POSTMASTER, UNGROUPED,
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
 			gettext_noop("Evict unpinned pages (for better test coverage)"),
 		},
 		&zenith_test_evict,
@@ -2335,6 +2336,17 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_acceptor_reconnect_timeout,
 		1000, 0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"wal_acceptor_connect_timeout", PGC_SIGHUP, REPLICATION_STANDBY,
+			gettext_noop("Timeout after which give up connection attempt to safekeeper."),
+			NULL,
+			GUC_UNIT_MS
+		},
+		&wal_acceptor_connect_timeout,
+		5000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4679,8 +4691,8 @@ static struct config_string ConfigureNamesString[] =
 	},
 
 	{
-		{"wal_acceptors", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("List of Zenith WAL acceptors (host:port)"),
+		{"safekeepers", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("List of Neon WAL acceptors (host:port)"),
 			NULL,
 			GUC_LIST_INPUT | GUC_LIST_QUOTE
 		},
@@ -5490,13 +5502,13 @@ valid_custom_variable_name(const char *name)
 			name_start = true;
 		}
 		else if (strchr("ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-						"abcdefghijklmnopqrstuvwxyz", *p) != NULL ||
+						"abcdefghijklmnopqrstuvwxyz_", *p) != NULL ||
 				 IS_HIGHBIT_SET(*p))
 		{
 			/* okay as first or non-first character */
 			name_start = false;
 		}
-		else if (!name_start && strchr("0123456789_$", *p) != NULL)
+		else if (!name_start && strchr("0123456789$", *p) != NULL)
 			 /* okay as non-first character */ ;
 		else
 			return false;
@@ -9515,7 +9527,16 @@ ShowAllGUCConfig(DestReceiver *dest)
 			isnull[1] = true;
 		}
 
-		values[2] = PointerGetDatum(cstring_to_text(conf->short_desc));
+		if (conf->short_desc)
+		{
+			values[2] = PointerGetDatum(cstring_to_text(conf->short_desc));
+			isnull[2] = false;
+		}
+		else
+		{
+			values[2] = PointerGetDatum(NULL);
+			isnull[2] = true;
+		}
 
 		/* send it to dest */
 		do_tup_output(tstate, values, isnull);
@@ -9527,7 +9548,8 @@ ShowAllGUCConfig(DestReceiver *dest)
 			pfree(setting);
 			pfree(DatumGetPointer(values[1]));
 		}
-		pfree(DatumGetPointer(values[2]));
+		if (conf->short_desc)
+			pfree(DatumGetPointer(values[2]));
 	}
 
 	end_tup_output(tstate);
@@ -9698,10 +9720,10 @@ GetConfigOptionByNum(int varnum, const char **values, bool *noshow)
 	values[3] = _(config_group_names[conf->group]);
 
 	/* short_desc */
-	values[4] = _(conf->short_desc);
+	values[4] = conf->short_desc != NULL ? _(conf->short_desc) : NULL;
 
 	/* extra_desc */
-	values[5] = _(conf->long_desc);
+	values[5] = conf->long_desc != NULL ? _(conf->long_desc) : NULL;
 
 	/* context */
 	values[6] = GucContext_Names[conf->context];

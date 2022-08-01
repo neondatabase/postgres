@@ -307,6 +307,7 @@ extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 extern void xlog_redo(XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *xlog_identify(uint8 info);
+extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno);
 
@@ -352,6 +353,8 @@ extern void RemovePromoteSignalFiles(void);
 
 extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
 extern XLogRecPtr GetLastWrittenPageLSN(void);
+
+extern XLogRecPtr GetRedoStartLsn(void);
 
 extern void SetZenithCurrentClusterSize(uint64 size);
 extern uint64 GetZenithCurrentClusterSize(void);

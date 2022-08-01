@@ -29,15 +29,15 @@
  *         safekeepers, learn start LSN of future epoch and run basebackup'
  *         won't work.
  *
- *      TODO: check that LSN on safekeepers after start is the same as it was
- *            after `postgres --sync-safekeepers`.
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
 
 #include <signal.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "access/xlogdefs.h"
+#include "access/xlogutils.h"
 #include "replication/walproposer.h"
 #include "storage/latch.h"
 #include "miscadmin.h"
@@ -59,6 +59,7 @@
 
 char	   *wal_acceptors_list;
 int			wal_acceptor_reconnect_timeout;
+int			wal_acceptor_connect_timeout;
 bool		am_wal_proposer;
 
 char	   *zenith_timeline_walproposer = NULL;
@@ -73,12 +74,8 @@ WalProposerFunctionsType *WalProposerFunctions = NULL;
 static int	n_safekeepers = 0;
 static int	quorum = 0;
 static Safekeeper safekeeper[MAX_SAFEKEEPERS];
-static WalMessage *msgQueueHead;
-static WalMessage *msgQueueTail;
-static XLogRecPtr lastSentLsn;	/* WAL has been appended to msg queue up to
-								 * this point */
-static XLogRecPtr lastSentCommitLsn;	/* last commitLsn broadcast to
-										 * safekeepers */
+static XLogRecPtr availableLsn;	/* WAL has been generated up to this point */
+static XLogRecPtr lastSentCommitLsn; /* last commitLsn broadcast to safekeepers */
 static ProposerGreeting greetRequest;
 static VoteRequest voteRequest; /* Vote request for safekeeper */
 static WaitEventSet *waitEvents;
@@ -100,12 +97,15 @@ static TermHistory propTermHistory; /* term history of the proposer */
 static XLogRecPtr propEpochStartLsn;	/* epoch start lsn of the proposer */
 static term_t donorEpoch;		/* Most advanced acceptor epoch */
 static int	donor;				/* Most advanced acceptor */
+static XLogRecPtr timelineStartLsn; /* timeline globally starts at this LSN */
 static int	n_votes = 0;
 static int	n_connected = 0;
 static TimestampTz last_reconnect_attempt;
 
 /* Set to true only in standalone run of `postgres --sync-safekeepers` (see comment on top) */
 static bool syncSafekeepers;
+
+static WalproposerShmemState *walprop_shared;
 
 /* Prototypes for private functions */
 static void WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId);
@@ -134,10 +134,8 @@ static bool WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr start
 static void SendProposerElected(Safekeeper *sk);
 static void WalProposerStartStreaming(XLogRecPtr startpos);
 static void StartStreaming(Safekeeper *sk);
-static void SendMessageToNode(Safekeeper *sk, WalMessage *msg);
-static void BroadcastMessage(WalMessage *msg);
-static WalMessage * CreateMessage(XLogRecPtr startpos, char *data, int len);
-static WalMessage * CreateMessageCommitLsnOnly(XLogRecPtr lsn);
+static void SendMessageToNode(Safekeeper *sk);
+static void BroadcastAppendRequest(void);
 static void HandleActiveState(Safekeeper *sk, uint32 events);
 static bool SendAppendRequests(Safekeeper *sk);
 static bool RecvAppendResponses(Safekeeper *sk);
@@ -197,7 +195,10 @@ WalProposerMain(Datum main_arg)
 void
 WalProposerSync(int argc, char *argv[])
 {
+	struct stat stat_buf;
+
 	syncSafekeepers = true;
+	ThisTimeLineID = 1;
 
 	InitStandaloneProcess(argv[0]);
 
@@ -232,6 +233,22 @@ WalProposerSync(int argc, char *argv[])
 				(errcode_for_socket_access(),
 				 errmsg_internal("could not set postmaster death monitoring pipe to nonblocking mode: %m")));
 
+	ChangeToDataDir();
+
+	/* Create pg_wal directory, if it doesn't exist */
+	if (stat(XLOGDIR, &stat_buf) != 0)
+	{
+		ereport(LOG, (errmsg("creating missing WAL directory \"%s\"", XLOGDIR)));
+		if (MakePGDirectory(XLOGDIR) < 0)
+		{
+			ereport(ERROR,
+					(errcode_for_file_access(),
+						errmsg("could not create directory \"%s\": %m",
+							XLOGDIR)));
+			exit(1);
+		}
+	}
+
 	WalProposerInit(0, 0);
 
 	process_shared_preload_libraries_in_progress = false;
@@ -246,12 +263,11 @@ WalProposerSync(int argc, char *argv[])
  * called from walsender every time the new WAL is available.
  */
 void
-WalProposerBroadcast(XLogRecPtr startpos, char *data, int len)
+WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos)
 {
-	WalMessage *msg = CreateMessage(startpos, data, len);
-
-	if (msg != NULL)
-		BroadcastMessage(msg);
+	Assert(startpos == availableLsn && endpos >= availableLsn);
+	availableLsn = endpos;
+	BroadcastAppendRequest();
 }
 
 /*
@@ -298,13 +314,34 @@ WalProposerPoll(void)
 		}
 		if (rc == 0) /* timeout expired: poll state */
 		{
+			TimestampTz now;
+
 			/*
 			 * If no WAL was generated during timeout (and we have already
 			 * collected the quorum), then send pool message
 			 */
-			if (lastSentLsn != InvalidXLogRecPtr)
+			if (availableLsn != InvalidXLogRecPtr)
 			{
-				BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+				BroadcastAppendRequest();
+			}
+
+			/*
+			 * Abandon connection attempts which take too long.
+			 */
+			now = GetCurrentTimestamp();
+			for (int i = 0; i < n_safekeepers; i++)
+			{
+				Safekeeper  *sk = &safekeeper[i];
+
+				if ((sk->state == SS_CONNECTING_WRITE ||
+				     sk->state == SS_CONNECTING_READ) &&
+					TimestampDifferenceExceeds(sk->startedConnAt, now,
+										   	   wal_acceptor_connect_timeout))
+				{
+					elog(WARNING, "failed to connect to node '%s:%s': exceeded connection timeout %dms",
+						 sk->host, sk->port, wal_acceptor_connect_timeout);
+					ShutdownConnection(sk);
+				}
 			}
 		}
 	}
@@ -350,7 +387,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-	load_file("zenith", false);
+	load_file("neon", false);
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -378,9 +415,12 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 		 */
 		safekeeper[n_safekeepers].conninfo[0] = '\0';
 		initStringInfo(&safekeeper[n_safekeepers].outbuf);
+		safekeeper[n_safekeepers].xlogreader = XLogReaderAllocate(wal_segment_size, NULL, XL_ROUTINE(.segment_open = wal_segment_open, .segment_close = wal_segment_close), NULL);
+		if (safekeeper[n_safekeepers].xlogreader == NULL)
+			elog(FATAL, "Failed to allocate xlog reader");
 		safekeeper[n_safekeepers].flushWrite = false;
-		safekeeper[n_safekeepers].currMsg = NULL;
 		safekeeper[n_safekeepers].startStreamingAt = InvalidXLogRecPtr;
+		safekeeper[n_safekeepers].streamingAt = InvalidXLogRecPtr;
 		n_safekeepers += 1;
 	}
 	if (n_safekeepers < 1)
@@ -396,15 +436,15 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 	pg_strong_random(&greetRequest.proposerId, sizeof(greetRequest.proposerId));
 	greetRequest.systemId = systemId;
 	if (!zenith_timeline_walproposer)
-		elog(FATAL, "zenith.zenith_timeline is not provided");
+		elog(FATAL, "neon.timeline_id is not provided");
 	if (*zenith_timeline_walproposer != '\0' &&
 		!HexDecodeString(greetRequest.ztimelineid, zenith_timeline_walproposer, 16))
-		elog(FATAL, "Could not parse zenith.zenith_timeline, %s", zenith_timeline_walproposer);
+		elog(FATAL, "Could not parse neon.timeline_id, %s", zenith_timeline_walproposer);
 	if (!zenith_tenant_walproposer)
-		elog(FATAL, "zenith.zenith_tenant is not provided");
+		elog(FATAL, "neon.tenant_id is not provided");
 	if (*zenith_tenant_walproposer != '\0' &&
 		!HexDecodeString(greetRequest.ztenantid, zenith_tenant_walproposer, 16))
-		elog(FATAL, "Could not parse zenith.zenith_tenant, %s", zenith_tenant_walproposer);
+		elog(FATAL, "Could not parse neon.tenant_id, %s", zenith_tenant_walproposer);
 
 	greetRequest.timeline = ThisTimeLineID;
 	greetRequest.walSegSize = wal_segment_size;
@@ -512,7 +552,7 @@ ShutdownConnection(Safekeeper *sk)
 	sk->conn = NULL;
 	sk->state = SS_OFFLINE;
 	sk->flushWrite = false;
-	sk->currMsg = NULL;
+	sk->streamingAt = InvalidXLogRecPtr;
 
 	if (sk->voteResponse.termHistory.entries)
 		pfree(sk->voteResponse.termHistory.entries);
@@ -604,9 +644,10 @@ ResetConnection(Safekeeper *sk)
 	 * (see libpqrcv_connect, defined in
 	 * src/backend/replication/libpqwalreceiver/libpqwalreceiver.c)
 	 */
-	elog(LOG, "Connecting with node %s:%s", sk->host, sk->port);
+	elog(LOG, "connecting with node %s:%s", sk->host, sk->port);
 
 	sk->state = SS_CONNECTING_WRITE;
+	sk->startedConnAt = GetCurrentTimestamp();
 
 	sock = walprop_socket(sk->conn);
 	sk->eventPos = AddWaitEventToSet(waitEvents, WL_SOCKET_WRITEABLE, sock, NULL, sk);
@@ -726,7 +767,7 @@ AdvancePollState(Safekeeper *sk, uint32 events)
 			 */
 			if (!AsyncFlush(sk))
 				return;
-			
+
 			/* flush is done, event set and state will be updated later */
 			StartStreaming(sk);
 			break;
@@ -785,7 +826,7 @@ HandleConnectionEvent(Safekeeper *sk)
 			break;
 
 		case WP_CONN_POLLING_FAILED:
-			elog(WARNING, "Failed to connect to node '%s:%s': %s",
+			elog(WARNING, "failed to connect to node '%s:%s': %s",
 					sk->host, sk->port, walprop_error_message(sk->conn));
 
 			/*
@@ -913,8 +954,6 @@ RecvAcceptorGreeting(Safekeeper *sk)
 
 	/* Protocol is all good, move to voting. */
 	sk->state = SS_VOTING;
-	sk->appendResponse.flushLsn = truncateLsn;
-	sk->appendResponse.hs.ts = 0;
 
 	++n_connected;
 	if (n_connected <= quorum)
@@ -938,7 +977,7 @@ RecvAcceptorGreeting(Safekeeper *sk)
 	}
 	else if (sk->greetResponse.term > propTerm)
 	{
-		/* Another compute with higher term is running. */	
+		/* Another compute with higher term is running. */
 		elog(FATAL, "WAL acceptor %s:%s with term " INT64_FORMAT " rejects our connection request with term " INT64_FORMAT "",
 				sk->host, sk->port,
 				sk->greetResponse.term, propTerm);
@@ -998,10 +1037,11 @@ RecvVoteResponse(Safekeeper *sk)
 		return;
 
 	elog(LOG,
-			"got VoteResponse from acceptor %s:%s, voteGiven=" UINT64_FORMAT ", epoch=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X",
+			"got VoteResponse from acceptor %s:%s, voteGiven=" UINT64_FORMAT ", epoch=" UINT64_FORMAT ", flushLsn=%X/%X, truncateLsn=%X/%X, timelineStartLsn=%X/%X",
 			sk->host, sk->port, sk->voteResponse.voteGiven, GetHighestTerm(&sk->voteResponse.termHistory),
 			LSN_FORMAT_ARGS(sk->voteResponse.flushLsn),
-			LSN_FORMAT_ARGS(sk->voteResponse.truncateLsn));
+			LSN_FORMAT_ARGS(sk->voteResponse.truncateLsn),
+			LSN_FORMAT_ARGS(sk->voteResponse.timelineStartLsn));
 
 	/*
 	 * In case of acceptor rejecting our vote, bail out, but only
@@ -1042,7 +1082,7 @@ RecvVoteResponse(Safekeeper *sk)
 /*
  * Called once a majority of acceptors have voted for us and current proposer
  * has been elected.
- * 
+ *
  * Sends ProposerElected message to all acceptors in SS_IDLE state and starts
  * replication from walsender.
  */
@@ -1079,7 +1119,7 @@ HandleElectedProposer(void)
 			SendProposerElected(&safekeeper[i]);
 	}
 
-	/* 
+	/*
 	 * The proposer has been elected, and there will be no quorum waiting
 	 * after this point. There will be no safekeeper with state SS_IDLE
 	 * also, because that state is used only for quorum waiting.
@@ -1088,13 +1128,13 @@ HandleElectedProposer(void)
 	if (syncSafekeepers)
 	{
 		/*
-			* Queue empty message to enforce receiving feedback
-			* even from nodes who are fully recovered; this is
-			* required to learn they switched epoch which finishes
-			* sync-safeekepers who doesn't generate any real new
-			* records. Will go away once we switch to async acks.
-			*/
-		BroadcastMessage(CreateMessageCommitLsnOnly(propEpochStartLsn));
+		 * Send empty message to enforce receiving feedback
+		 * even from nodes who are fully recovered; this is
+		 * required to learn they switched epoch which finishes
+		 * sync-safeekepers who doesn't generate any real new
+		 * records. Will go away once we switch to async acks.
+		 */
+		BroadcastAppendRequest();
 
 		/* keep polling until all safekeepers are synced */
 		return;
@@ -1118,6 +1158,21 @@ GetEpoch(Safekeeper *sk)
 	return GetHighestTerm(&sk->voteResponse.termHistory);
 }
 
+/* If LSN points to the page header, skip it */
+static XLogRecPtr
+SkipXLogPageHeader(XLogRecPtr lsn)
+{
+	if (XLogSegmentOffset(lsn, wal_segment_size) == 0)
+	{
+		lsn += SizeOfXLogLongPHD;
+	}
+	else if (lsn % XLOG_BLCKSZ == 0)
+	{
+		lsn += SizeOfXLogShortPHD;
+	}
+	return lsn;
+}
+
 /*
  * Called after majority of acceptors gave votes, it calculates the most
  * advanced safekeeper (who will be the donor) and epochStartLsn -- LSN since
@@ -1134,6 +1189,7 @@ DetermineEpochStartLsn(void)
 	propEpochStartLsn = InvalidXLogRecPtr;
 	donorEpoch = 0;
 	truncateLsn = InvalidXLogRecPtr;
+	timelineStartLsn = InvalidXLogRecPtr;
 
 	for (int i = 0; i < n_safekeepers; i++)
 	{
@@ -1148,20 +1204,34 @@ DetermineEpochStartLsn(void)
 				donor = i;
 			}
 			truncateLsn = Max(safekeeper[i].voteResponse.truncateLsn, truncateLsn);
+
+			if (safekeeper[i].voteResponse.timelineStartLsn != InvalidXLogRecPtr)
+			{
+				/* timelineStartLsn should be the same everywhere or unknown */
+				if (timelineStartLsn != InvalidXLogRecPtr &&
+					timelineStartLsn != safekeeper[i].voteResponse.timelineStartLsn)
+				{
+					elog(WARNING,
+						 "inconsistent timelineStartLsn: current %X/%X, received %X/%X",
+						 LSN_FORMAT_ARGS(timelineStartLsn),
+						 LSN_FORMAT_ARGS(safekeeper[i].voteResponse.timelineStartLsn));
+				}
+				timelineStartLsn = safekeeper[i].voteResponse.timelineStartLsn;
+			}
 		}
 	}
 
 	/*
-	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing
-	 * was committed yet. To keep the idea of always starting streaming since
-	 * record boundary (which simplifies decoding on safekeeper), take start
-	 * position of the slot.
+	 * If propEpochStartLsn is 0 everywhere, we are bootstrapping -- nothing was
+	 * committed yet. Start streaming then from the basebackup LSN.
 	 */
 	if (propEpochStartLsn == InvalidXLogRecPtr && !syncSafekeepers)
 	{
-		(void) ReplicationSlotAcquire(WAL_PROPOSER_SLOT_NAME, true);
-		propEpochStartLsn = truncateLsn = MyReplicationSlot->data.restart_lsn;
-		ReplicationSlotRelease();
+		propEpochStartLsn = truncateLsn = GetRedoStartLsn();
+		if (timelineStartLsn == InvalidXLogRecPtr)
+		{
+			timelineStartLsn = GetRedoStartLsn();
+		}
 		elog(LOG, "bumped epochStartLsn to the first record %X/%X", LSN_FORMAT_ARGS(propEpochStartLsn));
 	}
 
@@ -1172,6 +1242,12 @@ DetermineEpochStartLsn(void)
 	 */
 	Assert((truncateLsn != InvalidXLogRecPtr) ||
 		   (syncSafekeepers && truncateLsn == propEpochStartLsn));
+
+	/*
+	 * We will be generating WAL since propEpochStartLsn, so we should set
+	 * availableLsn to mark this LSN as the latest available position.
+	 */
+	availableLsn = propEpochStartLsn;
 
 	/*
 	 * Proposer's term history is the donor's + its own entry.
@@ -1190,6 +1266,38 @@ DetermineEpochStartLsn(void)
 		 safekeeper[donor].host, safekeeper[donor].port,
 		 LSN_FORMAT_ARGS(truncateLsn)
 		);
+
+	/*
+	 * Ensure the basebackup we are running (at RedoStartLsn) matches LSN since
+	 * which we are going to write according to the consensus. If not, we must
+	 * bail out, as clog and other non rel data is inconsistent.
+	 */
+	if (!syncSafekeepers)
+	{
+		/*
+		 *  Basebackup LSN always points to the beginning of the record (not the
+		 *  page), as StartupXLOG most probably wants it this way. Safekeepers
+		 *  don't skip header as they need continious stream of data, so
+		 *  correct LSN for comparison.
+		 */
+		if (SkipXLogPageHeader(propEpochStartLsn) != GetRedoStartLsn())
+		{
+			/*
+			 * However, allow to proceed if previously elected leader was me; plain
+			 * restart of walproposer not intervened by concurrent compute (who could
+			 * generate WAL) is ok.
+			 */
+			if (!((dth->n_entries >= 1) && (dth->entries[dth->n_entries - 1].term ==
+											walprop_shared->mineLastElectedTerm)))
+			{
+				elog(PANIC,
+					 "collected propEpochStartLsn %X/%X, but basebackup LSN %X/%X",
+					 LSN_FORMAT_ARGS(propEpochStartLsn),
+					 LSN_FORMAT_ARGS(GetRedoStartLsn()));
+			}
+		}
+		walprop_shared->mineLastElectedTerm = propTerm;
+	}
 }
 
 /*
@@ -1250,7 +1358,11 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 					   sizeof rec_start_lsn);
 				rec_start_lsn = pg_ntoh64(rec_start_lsn);
 				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
-				(void) CreateMessage(rec_start_lsn, buf, len);
+
+
+				/* write WAL to disk */
+				XLogWalPropWrite(&buf[XLOG_HDR_SIZE], len - XLOG_HDR_SIZE, rec_start_lsn);
+
 				ereport(DEBUG1,
 						(errmsg("Recover message %X/%X length %d",
 								LSN_FORMAT_ARGS(rec_start_lsn), len)));
@@ -1258,10 +1370,14 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 					break;
 			}
 		}
-		ereport(DEBUG1,
+		ereport(LOG,
 				(errmsg("end of replication stream at %X/%X: %m",
 						LSN_FORMAT_ARGS(rec_end_lsn))));
 		walrcv_disconnect(wrconn);
+
+		/* failed to receive all WAL till endpos */
+		if (rec_end_lsn < endpos)
+			return false;
 	}
 	else
 	{
@@ -1280,7 +1396,7 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
  *    safekeeper is synced, being important for sync-safekeepers)
  * 2) Communicating starting streaming point -- safekeeper must truncate its WAL
  *    beyond it -- and history of term switching.
- * 
+ *
  * Sets sk->startStreamingAt.
  */
 static void
@@ -1291,7 +1407,7 @@ SendProposerElected(Safekeeper *sk)
 	term_t lastCommonTerm;
 	int i;
 
-	/* 
+	/*
 	 * Determine start LSN by comparing safekeeper's log term switch history and
 	 * proposer's, searching for the divergence point.
 	 *
@@ -1300,7 +1416,7 @@ SendProposerElected(Safekeeper *sk)
 	 * wrote some WAL on single sk and died; we stream since the beginning then.
 	 */
 	th = &sk->voteResponse.termHistory;
-	/* 
+	/*
 	 * If any WAL is present on the sk, it must be authorized by some term.
 	 * OTOH, without any WAL there are no term swiches in the log.
 	 */
@@ -1330,11 +1446,11 @@ SendProposerElected(Safekeeper *sk)
 			 * that all safekeepers reported that they have persisted WAL up
 			 * to the truncateLsn before, but now current safekeeper tells
 			 * otherwise.
-			 * 
+			 *
 			 * Also we have a special condition here, which is empty safekeeper
 			 * with no history. In combination with a gap, that can happen when
 			 * we introduce a new safekeeper to the cluster. This is a rare case,
-			 * which is triggered manually for now, and should be treated with 
+			 * which is triggered manually for now, and should be treated with
 			 * care.
 			 */
 
@@ -1371,18 +1487,19 @@ SendProposerElected(Safekeeper *sk)
 		}
 	}
 
-	Assert(msgQueueHead == NULL || sk->startStreamingAt >= msgQueueHead->req.beginLsn);
+	Assert(sk->startStreamingAt >= truncateLsn && sk->startStreamingAt <= availableLsn);
 
 	msg.tag = 'e';
 	msg.term = propTerm;
 	msg.startStreamingAt = sk->startStreamingAt;
 	msg.termHistory = &propTermHistory;
+	msg.timelineStartLsn = timelineStartLsn;
 
 	lastCommonTerm = i >= 0 ? propTermHistory.entries[i].term : 0;
 	elog(LOG,
-		 "sending elected msg term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s",
-		 msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt), lastCommonTerm, msg.termHistory->n_entries, sk->host, sk->port);
-	
+		 "sending elected msg to node " UINT64_FORMAT " term=" UINT64_FORMAT ", startStreamingAt=%X/%X (lastCommonTerm=" UINT64_FORMAT "), termHistory.n_entries=%u to %s:%s, timelineStartLsn=%X/%X",
+		 sk->greetResponse.nodeId, msg.term, LSN_FORMAT_ARGS(msg.startStreamingAt), lastCommonTerm, msg.termHistory->n_entries, sk->host, sk->port, LSN_FORMAT_ARGS(msg.timelineStartLsn));
+
 	resetStringInfo(&sk->outbuf);
 	pq_sendint64_le(&sk->outbuf, msg.tag);
 	pq_sendint64_le(&sk->outbuf, msg.term);
@@ -1393,6 +1510,7 @@ SendProposerElected(Safekeeper *sk)
 		pq_sendint64_le(&sk->outbuf, msg.termHistory->entries[i].term);
 		pq_sendint64_le(&sk->outbuf, msg.termHistory->entries[i].lsn);
 	}
+	pq_sendint64_le(&sk->outbuf, msg.timelineStartLsn);
 
 	if (!AsyncWrite(sk, sk->outbuf.data, sk->outbuf.len, SS_SEND_ELECTED_FLUSH))
 		return;
@@ -1423,26 +1541,20 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 static void
 StartStreaming(Safekeeper *sk)
 {
-	WalMessage *startMsg = msgQueueHead;
-
-	/* 
+	/*
 	 * This is the only entrypoint to state SS_ACTIVE. It's executed
 	 * exactly once for a connection.
 	 */
 	sk->state = SS_ACTIVE;
-
-	while (startMsg != NULL && startMsg->req.endLsn <= sk->startStreamingAt)
-		startMsg = startMsg->next;
-
-	/* We should always have WAL to start from sk->startStreamingAt */
-	Assert(startMsg == NULL || startMsg->req.beginLsn <= sk->startStreamingAt);
+	sk->streamingAt = sk->startStreamingAt;
 
 	/* event set will be updated inside SendMessageToNode */
-	SendMessageToNode(sk, startMsg);
+	SendMessageToNode(sk);
 }
 
 /*
- * Start sending message to the particular node. Always updates event set.
+ * Try to send message to the particular node. Always updates event set. Will
+ * send at least one message, if socket is ready.
  *
  * Can be used only for safekeepers in SS_ACTIVE state. State can be changed
  * in case of errors.
@@ -1464,95 +1576,25 @@ SendMessageToNode(Safekeeper *sk, WalMessage *msg)
  * Broadcast new message to all caught-up safekeepers
  */
 static void
-BroadcastMessage(WalMessage *msg)
+BroadcastAppendRequest()
 {
 	for (int i = 0; i < n_safekeepers; i++)
-	{
-		if (safekeeper[i].state == SS_ACTIVE && safekeeper[i].currMsg == NULL)
-		{
-			SendMessageToNode(&safekeeper[i], msg);
-		}
-	}
+		if (safekeeper[i].state == SS_ACTIVE)
+			SendMessageToNode(&safekeeper[i]);
 }
 
-static WalMessage *
-CreateMessage(XLogRecPtr startpos, char *data, int len)
+static void
+PrepareAppendRequest(AppendRequestHeader *req, XLogRecPtr beginLsn, XLogRecPtr endLsn)
 {
-	/* Create new message and append it to message queue */
-	WalMessage *msg;
-	XLogRecPtr	endpos;
-
-	len -= XLOG_HDR_SIZE;
-	endpos = startpos + len;
-	if (msgQueueTail && msgQueueTail->req.endLsn >= endpos)
-	{
-		/* Message already queued */
-		return NULL;
-	}
-	Assert(len >= 0);
-	msg = (WalMessage *) malloc(sizeof(WalMessage) + len);
-	if (msgQueueTail != NULL)
-		msgQueueTail->next = msg;
-	else
-		msgQueueHead = msg;
-	msgQueueTail = msg;
-
-	msg->size = sizeof(AppendRequestHeader) + len;
-	msg->next = NULL;
-	msg->req.tag = 'a';
-	msg->req.term = propTerm;
-	msg->req.epochStartLsn = propEpochStartLsn;
-	msg->req.beginLsn = startpos;
-	msg->req.endLsn = endpos;
-	msg->req.proposerId = greetRequest.proposerId;
-	memcpy(&msg->req + 1, data + XLOG_HDR_SIZE, len);
-
-	Assert(msg->req.endLsn >= lastSentLsn);
-	lastSentLsn = msg->req.endLsn;
-	return msg;
-}
-
-/*
- * Create WAL message with no data, just to let the safekeepers
- * know that commit lsn has advanced.
- */
-static WalMessage *
-CreateMessageCommitLsnOnly(XLogRecPtr lsn)
-{
-	/* Create new message and append it to message queue */
-	WalMessage *msg;
-
-	msg = (WalMessage *) malloc(sizeof(WalMessage));
-	if (msgQueueTail != NULL)
-		msgQueueTail->next = msg;
-	else
-		msgQueueHead = msg;
-	msgQueueTail = msg;
-
-	msg->size = sizeof(AppendRequestHeader);
-	msg->next = NULL;
-	msg->req.tag = 'a';
-	msg->req.term = propTerm;
-	msg->req.epochStartLsn = propEpochStartLsn;
-
-	/*
-	 * This serves two purposes: 1) After all msgs from previous epochs are
-	 * pushed we queue empty WalMessage with lsn set to epochStartLsn which
-	 * commands to switch the epoch, which allows to do the switch without
-	 * creating new epoch records (we especially want to avoid such in --sync
-	 * mode). Walproposer can advance commit_lsn only after the switch, so
-	 * this lsn (reported back) also is the first possible advancement point.
-	 * 2) Maintain common invariant of queue entries sorted by LSN.
-	 */
-	msg->req.beginLsn = lsn;
-	msg->req.endLsn = lsn;
-	msg->req.proposerId = greetRequest.proposerId;
-
-	/*
-	 * truncateLsn and commitLsn are set just before the message sent, in
-	 * SendAppendRequests()
-	 */
-	return msg;
+	Assert(endLsn >= beginLsn);
+	req->tag = 'a';
+	req->term = propTerm;
+	req->epochStartLsn = propEpochStartLsn;
+	req->beginLsn = beginLsn;
+	req->endLsn = endLsn;
+	req->commitLsn = GetAcknowledgedByQuorumWALPosition();
+	req->truncateLsn = truncateLsn;
+	req->proposerId = greetRequest.proposerId;
 }
 
 /*
@@ -1574,36 +1616,40 @@ HandleActiveState(Safekeeper *sk, uint32 events)
 	/*
 	 * We should wait for WL_SOCKET_WRITEABLE event if we have unflushed data
 	 * in the buffer.
-	 * 
-	 * sk->currMsg checks if we have pending unsent messages. This check isn't
-	 * necessary now, because we always send queue messages immediately after
-	 * creation. But it's good to have it here in case we change this behavior
+	 *
+	 * LSN comparison checks if we have pending unsent messages. This check isn't
+	 * necessary now, because we always send append messages immediately after
+	 * arrival. But it's good to have it here in case we change this behavior
 	 * in the future.
 	 */
-	if (sk->currMsg != NULL || sk->flushWrite)
+	if (sk->streamingAt != availableLsn || sk->flushWrite)
 		newEvents |= WL_SOCKET_WRITEABLE;
 
 	UpdateEventSet(sk, newEvents);
 }
 
 /*
- * Send queue messages starting from sk->currMsg until the end or non-writable
+ * Send WAL messages starting from sk->streamingAt until the end or non-writable
  * socket, whichever comes first. Caller should take care of updating event set.
- * 
+ * Even if no unsent WAL is available, at least one empty message will be sent
+ * as a heartbeat, if socket is ready.
+ *
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
  */
 static bool
 SendAppendRequests(Safekeeper *sk)
 {
-	WalMessage *msg;
+	XLogRecPtr endLsn;
 	AppendRequestHeader *req;
 	PGAsyncWriteResult writeResult;
+	WALReadError errinfo;
+	bool sentAnything = false;
 
 	if (sk->flushWrite)
 	{
 		if (!AsyncFlush(sk))
-			/* 
+			/*
 			 * AsyncFlush failed, that could happen if the socket is closed or
 			 * we have nothing to write and should wait for writeable socket.
 			 */
@@ -1613,36 +1659,20 @@ SendAppendRequests(Safekeeper *sk)
 		sk->flushWrite = false;
 	}
 
-	while (sk->currMsg)
+	while (sk->streamingAt != availableLsn || !sentAnything)
 	{
-		msg = sk->currMsg;
-		req = &msg->req;
+		sentAnything = true;
 
-		req->commitLsn = GetAcknowledgedByQuorumWALPosition();
-		req->truncateLsn = truncateLsn;
+		endLsn = sk->streamingAt;
+		endLsn += MAX_SEND_SIZE;
 
-		/*
-		 * If we need to send this message not from the beginning,
-		 * form the cut version. Only happens for the first
-		 * message.
-		 */
-		if (sk->startStreamingAt > msg->req.beginLsn)
-		{
-			uint32		len;
-			uint32		size;
-
-			Assert(sk->startStreamingAt < req->endLsn);
-
-			len = msg->req.endLsn - sk->startStreamingAt;
-			size = sizeof(AppendRequestHeader) + len;
-			req = malloc(size);
-			*req = msg->req;
-			req->beginLsn = sk->startStreamingAt;
-			memcpy(req + 1,
-					(char *) (&msg->req + 1) + sk->startStreamingAt -
-					msg->req.beginLsn,
-					len);
+		/* if we went beyond available WAL, back off */
+		if (endLsn > availableLsn) {
+			endLsn = availableLsn;
 		}
+
+		req = &sk->appendRequest;
+		PrepareAppendRequest(&sk->appendRequest, sk->streamingAt, endLsn);
 
 		ereport(DEBUG2,
 				(errmsg("sending message len %ld beginLsn=%X/%X endLsn=%X/%X commitLsn=%X/%X truncateLsn=%X/%X to %s:%s",
@@ -1652,19 +1682,28 @@ SendAppendRequests(Safekeeper *sk)
 						LSN_FORMAT_ARGS(req->commitLsn),
 						LSN_FORMAT_ARGS(truncateLsn), sk->host, sk->port)));
 
-		/*
-		 * We write with msg->size here because the body of the
-		 * message is stored after the end of the WalMessage
-		 * struct, in the allocation for each msg
-		 */
-		writeResult = walprop_async_write(sk->conn, req, sizeof(AppendRequestHeader) + req->endLsn - req->beginLsn);
-		
-		/* Free up resources */
-		if (req != &msg->req)
-			free(req);
+		resetStringInfo(&sk->outbuf);
+
+		/* write AppendRequest header */
+		appendBinaryStringInfo(&sk->outbuf, (char*) req, sizeof(AppendRequestHeader));
+
+		/* write the WAL itself */
+		enlargeStringInfo(&sk->outbuf, req->endLsn - req->beginLsn);
+		if (!WALRead(sk->xlogreader,
+				 &sk->outbuf.data[sk->outbuf.len],
+				 req->beginLsn,
+				 req->endLsn - req->beginLsn,
+				 ThisTimeLineID,
+				 &errinfo))
+		{
+			WALReadRaiseError(&errinfo);
+		}
+		sk->outbuf.len += req->endLsn - req->beginLsn;
+
+		writeResult = walprop_async_write(sk->conn, sk->outbuf.data, sk->outbuf.len);
 
 		/* Mark current message as sent, whatever the result is */
-		sk->currMsg = sk->currMsg->next;
+		sk->streamingAt = endLsn;
 
 		switch (writeResult)
 		{
@@ -1700,7 +1739,7 @@ SendAppendRequests(Safekeeper *sk)
  *
  * Can change state if Async* functions encounter errors and reset connection.
  * Returns false in this case, true otherwise.
- * 
+ *
  * NB: This function can call SendMessageToNode and produce new messages.
  */
 static bool
@@ -1720,6 +1759,21 @@ RecvAppendResponses(Safekeeper *sk)
 		if (!AsyncReadMessage(sk, (AcceptorProposerMessage *) &sk->appendResponse))
 			break;
 
+		ereport(DEBUG2,
+				(errmsg("received message term=" INT64_FORMAT " flushLsn=%X/%X commitLsn=%X/%X from %s:%s",
+						sk->appendResponse.term,
+						LSN_FORMAT_ARGS(sk->appendResponse.flushLsn),
+						LSN_FORMAT_ARGS(sk->appendResponse.commitLsn),
+						sk->host, sk->port)));
+
+		if (sk->appendResponse.term > propTerm)
+		{
+			/* Another compute with higher term is running. */
+			elog(PANIC, "WAL acceptor %s:%s with term " INT64_FORMAT " rejected our request, our term " INT64_FORMAT "",
+					sk->host, sk->port,
+					sk->appendResponse.term, propTerm);
+		}
+
 		readAnything = true;
 	}
 
@@ -1730,23 +1784,20 @@ RecvAppendResponses(Safekeeper *sk)
 
 	/*
 	 * Also send the new commit lsn to all the safekeepers.
-	 *
-	 * FIXME: This is redundant for safekeepers that have other
-	 * outbound messages pending.
 	 */
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
 	if (minQuorumLsn > lastSentCommitLsn)
 	{
-		BroadcastMessage(CreateMessageCommitLsnOnly(lastSentLsn));
+		BroadcastAppendRequest();
 		lastSentCommitLsn = minQuorumLsn;
 	}
 
 	return sk->state == SS_ACTIVE;
 }
 
-/* Parse a ZenithFeedback message, or the ZenithFeedback part of an AppendResponse */
+/* Parse a ReplicationFeedback message, or the ReplicationFeedback part of an AppendResponse */
 void
-ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
+ParseReplicationFeedbackMessage(StringInfo reply_message, ReplicationFeedback *rf)
 {
 	uint8 nkeys;
 	int i;
@@ -1761,42 +1812,42 @@ ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 		if (strcmp(key, "current_timeline_size") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->currentClusterSize = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: current_timeline_size %lu",
-					zf->currentClusterSize);
+				rf->currentClusterSize = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: current_timeline_size %lu",
+					rf->currentClusterSize);
 		}
 		else if (strcmp(key, "ps_writelsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_writelsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_writelsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_writelsn));
+				rf->ps_writelsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_writelsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_writelsn));
 		}
 		else if (strcmp(key, "ps_flushlsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_flushlsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_flushlsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_flushlsn));
+				rf->ps_flushlsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_flushlsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_flushlsn));
 		}
 		else if (strcmp(key, "ps_applylsn") == 0)
 		{
 				pq_getmsgint(reply_message, sizeof(int32)); // read value length
-				zf->ps_applylsn = pq_getmsgint64(reply_message);
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_applylsn %X/%X",
-					LSN_FORMAT_ARGS(zf->ps_applylsn));
+				rf->ps_applylsn = pq_getmsgint64(reply_message);
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_applylsn %X/%X",
+					LSN_FORMAT_ARGS(rf->ps_applylsn));
 		}
 		else if (strcmp(key, "ps_replytime") == 0)
 		{
 			pq_getmsgint(reply_message, sizeof(int32)); // read value length
-			zf->ps_replytime = pq_getmsgint64(reply_message);
+			rf->ps_replytime = pq_getmsgint64(reply_message);
 			{
 				char	   *replyTimeStr;
 
 				/* Copy because timestamptz_to_str returns a static buffer */
-				replyTimeStr = pstrdup(timestamptz_to_str(zf->ps_replytime));
-				elog(DEBUG2, "ParseZenithFeedbackMessage: ps_replytime %lu reply_time: %s",
-					zf->ps_replytime, replyTimeStr);
+				replyTimeStr = pstrdup(timestamptz_to_str(rf->ps_replytime));
+				elog(DEBUG2, "ParseReplicationFeedbackMessage: ps_replytime %lu reply_time: %s",
+					rf->ps_replytime, replyTimeStr);
 
 				pfree(replyTimeStr);
 			}
@@ -1805,7 +1856,7 @@ ParseZenithFeedbackMessage(StringInfo reply_message, ZenithFeedback *zf)
 		{
 			len = pq_getmsgint(reply_message, sizeof(int32)); // read value length
 			// Skip unknown keys to support backward compatibile protocol changes
-			elog(LOG, "ParseZenithFeedbackMessage: unknown key: %s len %d", key, len);
+			elog(LOG, "ParseReplicationFeedbackMessage: unknown key: %s len %d", key, len);
 			pq_getmsgbytes(reply_message, len);
 		};
 	}
@@ -1885,27 +1936,86 @@ GetAcknowledgedByQuorumWALPosition(void)
 }
 
 /*
- * Get ZenithFeedback fields from the most advanced safekeeper
+ * ReplicationFeedbackShmemSize --- report amount of shared memory space needed
+ */
+Size
+WalproposerShmemSize(void)
+{
+	return sizeof(WalproposerShmemState);
+}
+
+bool
+WalproposerShmemInit(void)
+{
+	bool		found;
+
+	LWLockAcquire(AddinShmemInitLock, LW_EXCLUSIVE);
+	walprop_shared = ShmemInitStruct("Walproposer shared state",
+								sizeof(WalproposerShmemState),
+								&found);
+
+	if (!found)
+	{
+		memset(walprop_shared, 0, WalproposerShmemSize());
+		SpinLockInit(&walprop_shared->mutex);
+	}
+	LWLockRelease(AddinShmemInitLock);
+
+	return found;
+}
+
+void
+replication_feedback_set(ReplicationFeedback *rf)
+{
+	SpinLockAcquire(&walprop_shared->mutex);
+	memcpy(&walprop_shared->feedback, rf, sizeof(ReplicationFeedback));
+	SpinLockRelease(&walprop_shared->mutex);
+}
+
+
+void
+replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn)
+{
+	SpinLockAcquire(&walprop_shared->mutex);
+	*writeLsn = walprop_shared->feedback.ps_writelsn;
+	*flushLsn = walprop_shared->feedback.ps_flushlsn;
+	*applyLsn = walprop_shared->feedback.ps_applylsn;
+	SpinLockRelease(&walprop_shared->mutex);
+}
+
+
+/*
+ * Get ReplicationFeedback fields from the most advanced safekeeper
  */
 static void
-GetLatestZentihFeedback(ZenithFeedback *zf)
+GetLatestZentihFeedback(ReplicationFeedback *rf)
 {
 	int latest_safekeeper = 0;
-	uint64 replyTime = 0;
+	XLogRecPtr ps_writelsn = InvalidXLogRecPtr;
 	for (int i = 0; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].appendResponse.zf.ps_replytime > replyTime)
+		if (safekeeper[i].appendResponse.rf.ps_writelsn > ps_writelsn)
 		{
 			latest_safekeeper = i;
-			replyTime = safekeeper[i].appendResponse.zf.ps_replytime;
+			ps_writelsn = safekeeper[i].appendResponse.rf.ps_writelsn;
 		}
 	}
 
-	zf->currentClusterSize = safekeeper[latest_safekeeper].appendResponse.zf.currentClusterSize;
-	zf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_writelsn;
-	zf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_flushlsn;
-	zf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.zf.ps_applylsn;
-	zf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.zf.ps_replytime;
+	rf->currentClusterSize = safekeeper[latest_safekeeper].appendResponse.rf.currentClusterSize;
+	rf->ps_writelsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_writelsn;
+	rf->ps_flushlsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_flushlsn;
+	rf->ps_applylsn = safekeeper[latest_safekeeper].appendResponse.rf.ps_applylsn;
+	rf->ps_replytime = safekeeper[latest_safekeeper].appendResponse.rf.ps_replytime;
+
+	elog(DEBUG2, "GetLatestZentihFeedback: currentClusterSize %lu,"
+			  " ps_writelsn %X/%X, ps_flushlsn %X/%X, ps_applylsn %X/%X, ps_replytime %lu",
+		rf->currentClusterSize,
+		LSN_FORMAT_ARGS(rf->ps_writelsn),
+		LSN_FORMAT_ARGS(rf->ps_flushlsn),
+		LSN_FORMAT_ARGS(rf->ps_applylsn),
+		rf->ps_replytime);
+
+	replication_feedback_set(rf);
 }
 
 static void
@@ -1918,16 +2028,16 @@ HandleSafekeeperResponse(void)
 
 
 	minQuorumLsn = GetAcknowledgedByQuorumWALPosition();
-	diskConsistentLsn = quorumFeedback.zf.ps_flushlsn;
-	// Get ZenithFeedback fields from the most advanced safekeeper
-	GetLatestZentihFeedback(&quorumFeedback.zf);
+	diskConsistentLsn = quorumFeedback.rf.ps_flushlsn;
 
 	if (!syncSafekeepers)
 	{
-		SetZenithCurrentClusterSize(quorumFeedback.zf.currentClusterSize);
+		// Get ReplicationFeedback fields from the most advanced safekeeper
+		GetLatestZentihFeedback(&quorumFeedback.rf);
+		SetZenithCurrentClusterSize(quorumFeedback.rf.currentClusterSize);
 	}
 
-	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.zf.ps_flushlsn)
+	if (minQuorumLsn > quorumFeedback.flushLsn || diskConsistentLsn != quorumFeedback.rf.ps_flushlsn)
 	{
 
 		if (minQuorumLsn > quorumFeedback.flushLsn)
@@ -1941,7 +2051,7 @@ HandleSafekeeperResponse(void)
 								//flush_lsn - This is what durably stored in WAL service.
 								quorumFeedback.flushLsn,
 								//apply_lsn - This is what processed and durably saved at pageserver.
-								quorumFeedback.zf.ps_flushlsn,
+								quorumFeedback.rf.ps_flushlsn,
 								GetCurrentTimestamp(), false);
 	}
 
@@ -1959,7 +2069,7 @@ HandleSafekeeperResponse(void)
 
 	/*
 	 * Try to advance truncateLsn to minFlushLsn, which is the last record
-	 * flushed to all safekeepers. We must always start streaming from the 
+	 * flushed to all safekeepers. We must always start streaming from the
 	 * beginning of the record, which simplifies decoding on the far end.
 	 *
 	 * Advanced truncateLsn should be not further than nearest commitLsn.
@@ -1974,25 +2084,16 @@ HandleSafekeeperResponse(void)
 	 */
 	minFlushLsn = CalculateMinFlushLsn();
 	if (minFlushLsn > truncateLsn)
+	{
 		truncateLsn = minFlushLsn;
 
-	/*
-	 * Cleanup message queue up to truncateLsn. These messages were processed
-	 * by all safekeepers because they all reported flushLsn greater than endLsn.
-	 */
-	while (msgQueueHead != NULL && msgQueueHead->req.endLsn < truncateLsn)
-	{
-		WalMessage *msg = msgQueueHead;
-		msgQueueHead = msg->next;
-
-		memset(msg, 0xDF, sizeof(WalMessage) + msg->size - sizeof(AppendRequestHeader));
-		free(msg);
+		/*
+		 * Advance the replication slot to free up old WAL files. Note
+		 * that slot doesn't exist if we are in syncSafekeepers mode.
+		 */
+		if (MyReplicationSlot)
+			PhysicalConfirmReceivedLocation(truncateLsn);
 	}
-	if (!msgQueueHead)			/* queue is empty */
-		msgQueueTail = NULL;
-
-	/* truncateLsn always points to the first chunk in the queue */
-	Assert(msgQueueHead == NULL || (truncateLsn >= msgQueueHead->req.beginLsn && truncateLsn <= msgQueueHead->req.endLsn));
 
 	/*
 	 * Generally sync is done when majority switched the epoch so we committed
@@ -2031,7 +2132,7 @@ HandleSafekeeperResponse(void)
 	}
 }
 
-/* 
+/*
  * Try to read CopyData message from i'th safekeeper, resetting connection on
  * failure.
  */
@@ -2062,7 +2163,7 @@ AsyncRead(Safekeeper *sk, char **buf, int *buf_size)
  * Read next message with known type into provided struct, by reading a CopyData
  * block from the safekeeper's postgres connection, returning whether the read
  * was successful.
- * 
+ *
  * If the read needs more polling, we return 'false' and keep the state
  * unmodified, waiting until it becomes read-ready to try again. If it fully
  * failed, a warning is emitted and the connection is reset.
@@ -2098,6 +2199,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 		{
 			AcceptorGreeting *msg = (AcceptorGreeting *) anymsg;
 			msg->term = pq_getmsgint64_le(&s);
+			msg->nodeId = pq_getmsgint64_le(&s);
 			pq_getmsgend(&s);
 			return true;
 		}
@@ -2117,6 +2219,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 				msg->termHistory.entries[i].term = pq_getmsgint64_le(&s);
 				msg->termHistory.entries[i].lsn = pq_getmsgint64_le(&s);
 			}
+			msg->timelineStartLsn = pq_getmsgint64_le(&s);
 			pq_getmsgend(&s);
 			return true;
 		}
@@ -2131,7 +2234,7 @@ AsyncReadMessage(Safekeeper *sk, AcceptorProposerMessage *anymsg)
 			msg->hs.xmin.value = pq_getmsgint64_le(&s);
 			msg->hs.catalog_xmin.value = pq_getmsgint64_le(&s);
 			if (buf_size > APPENDRESPONSE_FIXEDPART_SIZE)
-				ParseZenithFeedbackMessage(&s, &msg->zf);
+				ParseReplicationFeedbackMessage(&s, &msg->rf);
 			pq_getmsgend(&s);
 			return true;
 		}

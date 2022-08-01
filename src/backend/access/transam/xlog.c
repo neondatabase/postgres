@@ -111,6 +111,7 @@ int			CommitSiblings = 5; /* # concurrent xacts needed to sleep */
 int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
+uint64      predefined_sysidentifier;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -749,6 +750,9 @@ typedef struct XLogCtlData
 	XLogRecPtr	lastFpwDisableRecPtr;
 	XLogRecPtr  lastWrittenPageLSN;
 
+	/* neon: copy of startup's RedoStartLSN for walproposer's use */
+	XLogRecPtr	RedoStartLSN;
+
 	/*
 	 * size of a timeline in zenith pageserver.
 	 * used to enforce timeline size limit.
@@ -975,7 +979,6 @@ static bool CheckForStandbyTrigger(void);
 static void xlog_outrec(StringInfo buf, XLogReaderState *record);
 #endif
 static void xlog_block_info(StringInfo buf, XLogReaderState *record);
-static void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 static void pg_start_backup_callback(int code, Datum arg);
 static void pg_stop_backup_callback(int code, Datum arg);
 static bool read_backup_label(XLogRecPtr *checkPointLoc,
@@ -5311,10 +5314,16 @@ BootStrapXLOG(void)
 	 * perhaps be useful sometimes.
 	 */
 	gettimeofday(&tv, NULL);
-	sysidentifier = ((uint64) tv.tv_sec) << 32;
-	sysidentifier |= ((uint64) tv.tv_usec) << 12;
-	sysidentifier |= getpid() & 0xFFF;
-
+	if (predefined_sysidentifier != 0)
+	{
+		sysidentifier = predefined_sysidentifier;
+	}
+	else
+	{
+		sysidentifier = ((uint64) tv.tv_sec) << 32;
+		sysidentifier |= ((uint64) tv.tv_usec) << 12;
+		sysidentifier |= getpid() & 0xFFF;
+	}
 	/* First timeline ID is always 1 */
 	ThisTimeLineID = 1;
 
@@ -6890,6 +6899,9 @@ StartupXLOG(void)
 
 		checkPointLoc = zenithLastRec;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+
+		/* make basebackup LSN available for walproposer */
+		XLogCtl->RedoStartLSN = RedoStartLSN;
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
@@ -6960,6 +6972,7 @@ StartupXLOG(void)
 		/* Get the last valid checkpoint record. */
 		checkPointLoc = ControlFile->checkPoint;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		XLogCtl->RedoStartLSN = RedoStartLSN;
 		record = ReadCheckpointRecord(xlogreader, checkPointLoc, 1, true);
 		if (record != NULL)
 		{
@@ -8824,6 +8837,16 @@ SetLastWrittenPageLSN(XLogRecPtr lsn)
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 
+/*
+ * RedoStartLsn is set only once by startup process, locking is not required
+ * after its exit.
+ */
+XLogRecPtr
+GetRedoStartLsn(void)
+{
+	return XLogCtl->RedoStartLSN;
+}
+
 
 uint64
 GetZenithCurrentClusterSize(void)
@@ -9230,6 +9253,14 @@ CreateCheckPoint(int flags)
 	CheckpointStats.ckpt_start_t = GetCurrentTimestamp();
 
 	/*
+	 * Let smgr prepare for checkpoint; this has to happen outside the
+	 * critical section and before we determine the REDO pointer.  Note that
+	 * smgr must not do anything that'd have to be undone if we decide no
+	 * checkpoint is needed.
+	 */
+	SyncPreCheckpoint();
+
+	/*
 	 * Use a critical section to force system panic if we have trouble.
 	 */
 	START_CRIT_SECTION();
@@ -9242,13 +9273,6 @@ CreateCheckPoint(int flags)
 		UpdateControlFile();
 		LWLockRelease(ControlFileLock);
 	}
-
-	/*
-	 * Let smgr prepare for checkpoint; this has to happen before we determine
-	 * the REDO pointer.  Note that smgr must not do anything that'd have to
-	 * be undone if we decide no checkpoint is needed.
-	 */
-	SyncPreCheckpoint();
 
 	/* Begin filling in the checkpoint WAL record */
 	MemSet(&checkPoint, 0, sizeof(checkPoint));
@@ -9447,6 +9471,16 @@ CreateCheckPoint(int flags)
 	pfree(vxids);
 
 	CheckPointGuts(checkPoint.redo, flags);
+
+	vxids = GetVirtualXIDsDelayingChkptEnd(&nvxids);
+	if (nvxids > 0)
+	{
+		do
+		{
+			pg_usleep(10000L);	/* wait for 10 msec */
+		} while (HaveVirtualXIDsDelayingChkptEnd(vxids, nvxids));
+	}
+	pfree(vxids);
 
 	/*
 	 * Take a snapshot of running transactions and write this to WAL. This
@@ -9890,21 +9924,26 @@ CreateRestartPoint(int flags)
 	PriorRedoPtr = ControlFile->checkPointCopy.redo;
 
 	/*
-	 * Update pg_control, using current time.  Check that it still shows
-	 * DB_IN_ARCHIVE_RECOVERY state and an older checkpoint, else do nothing;
-	 * this is a quick hack to make sure nothing really bad happens if somehow
-	 * we get here after the end-of-recovery checkpoint.
+	 * Update pg_control, using current time.  Check that it still shows an
+	 * older checkpoint, else do nothing; this is a quick hack to make sure
+	 * nothing really bad happens if somehow we get here after the
+	 * end-of-recovery checkpoint.
 	 */
 	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY &&
-		ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
+	if (ControlFile->checkPointCopy.redo < lastCheckPoint.redo)
 	{
+		/*
+		 * Update the checkpoint information.  We do this even if the cluster
+		 * does not show DB_IN_ARCHIVE_RECOVERY to match with the set of WAL
+		 * segments recycled below.
+		 */
 		ControlFile->checkPoint = lastCheckPointRecPtr;
 		ControlFile->checkPointCopy = lastCheckPoint;
 		ControlFile->time = (pg_time_t) time(NULL);
 
 		/*
-		 * Ensure minRecoveryPoint is past the checkpoint record.  Normally,
+		 * Ensure minRecoveryPoint is past the checkpoint record and update it
+		 * if the control file still shows DB_IN_ARCHIVE_RECOVERY.  Normally,
 		 * this will have happened already while writing out dirty buffers,
 		 * but not necessarily - e.g. because no buffers were dirtied.  We do
 		 * this because a non-exclusive base backup uses minRecoveryPoint to
@@ -9913,18 +9952,27 @@ CreateRestartPoint(int flags)
 		 * at a minimum. Note that for an ordinary restart of recovery there's
 		 * no value in having the minimum recovery point any earlier than this
 		 * anyway, because redo will begin just after the checkpoint record.
+		 * this because a non-exclusive base backup uses minRecoveryPoint to
+		 * determine which WAL files must be included in the backup, and the
+		 * file (or files) containing the checkpoint record must be included,
+		 * at a minimum. Note that for an ordinary restart of recovery there's
+		 * no value in having the minimum recovery point any earlier than this
+		 * anyway, because redo will begin just after the checkpoint record.
 		 */
-		if (ControlFile->minRecoveryPoint < lastCheckPointEndPtr)
+		if (ControlFile->state == DB_IN_ARCHIVE_RECOVERY)
 		{
-			ControlFile->minRecoveryPoint = lastCheckPointEndPtr;
-			ControlFile->minRecoveryPointTLI = lastCheckPoint.ThisTimeLineID;
+			if (ControlFile->minRecoveryPoint < lastCheckPointEndPtr)
+			{
+				ControlFile->minRecoveryPoint = lastCheckPointEndPtr;
+				ControlFile->minRecoveryPointTLI = lastCheckPoint.ThisTimeLineID;
 
-			/* update local copy */
-			minRecoveryPoint = ControlFile->minRecoveryPoint;
-			minRecoveryPointTLI = ControlFile->minRecoveryPointTLI;
+				/* update local copy */
+				minRecoveryPoint = ControlFile->minRecoveryPoint;
+				minRecoveryPointTLI = ControlFile->minRecoveryPointTLI;
+			}
+			if (flags & CHECKPOINT_IS_SHUTDOWN)
+				ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 		}
-		if (flags & CHECKPOINT_IS_SHUTDOWN)
-			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 		UpdateControlFile();
 	}
 	LWLockRelease(ControlFileLock);
@@ -10810,6 +10858,10 @@ VerifyOverwriteContrecord(xl_overwrite_contrecord *xlrec, XLogReaderState *state
 			 LSN_FORMAT_ARGS(xlrec->overwritten_lsn),
 			 LSN_FORMAT_ARGS(state->overwrittenRecPtr));
 
+	/* We have safely skipped the aborted record */
+	abortedRecPtr = InvalidXLogRecPtr;
+	missingContrecPtr = InvalidXLogRecPtr;
+
 	ereport(LOG,
 			(errmsg("successfully skipped missing contrecord at %X/%X, overwritten at %s",
 					LSN_FORMAT_ARGS(xlrec->overwritten_lsn),
@@ -10875,7 +10927,7 @@ xlog_block_info(StringInfo buf, XLogReaderState *record)
  * Returns a string describing an XLogRecord, consisting of its identity
  * optionally followed by a colon, a space, and a further description.
  */
-static void
+void
 xlog_outdesc(StringInfo buf, XLogReaderState *record)
 {
 	RmgrId		rmid = XLogRecGetRmid(record);

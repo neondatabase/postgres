@@ -10,8 +10,6 @@
  * processes. Instead, we wait for command from 'stdin', and respond to
  * 'stdout'.
  *
- * There's a TAP test for this in contrib/zenith_store/t/002_wal_redo_helper.pl
- *
  * The protocol through stdin/stdout is loosely based on the libpq protocol.
  * The process accepts messages through stdin, and each message has the format:
  *
@@ -93,11 +91,17 @@ static int	ReadRedoCommand(StringInfo inBuf);
 static void BeginRedoForBlock(StringInfo input_message);
 static void PushPage(StringInfo input_message);
 static void ApplyRecord(StringInfo input_message);
+static void apply_error_callback(void *arg);
 static bool redo_block_filter(XLogReaderState *record, uint8 block_id);
 static void GetPage(StringInfo input_message);
 static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
+
+Buffer		wal_redo_buffer;
+bool		am_wal_redo_postgres;
+
+static XLogReaderState *reader_state;
 
 #define TRACE DEBUG5
 
@@ -121,6 +125,13 @@ enter_seccomp_mode(void)
 		PG_SCMP_ALLOW(mmap),
 		PG_SCMP_ALLOW(munmap),
 #endif
+		/*
+		 * getpid() is called on assertion failure, in ExceptionalCondition.
+		 * It's not really needed, but seems pointless to hide it either. The
+		 * system call unlikely to expose a kernel vulnerability, and the PID
+		 * is stored in MyProcPid anyway.
+		 */
+		PG_SCMP_ALLOW(getpid),
 
 		/* Enable those for a proper shutdown.
 		PG_SCMP_ALLOW(munmap),
@@ -166,11 +177,19 @@ WalRedoMain(int argc, char *argv[],
 	InitStandaloneProcess(argv[0]);
 
 	SetProcessingMode(InitProcessing);
+	am_wal_redo_postgres = true;
 
 	/*
 	 * Set default values for command-line options.
 	 */
 	InitializeGUCOptions();
+
+	/*
+	 * WAL redo does not need a large number of buffers. And speed of
+	 * DropRelFileNodeAllLocalBuffers() is proportional to the number of
+	 * buffers. So let's keep it small (default value is 1024)
+	 */
+	num_temp_buffers = 4;
 
 	/*
 	 * Parse command-line options.
@@ -293,6 +312,7 @@ WalRedoMain(int argc, char *argv[],
 		if (RmgrTable[rmid].rm_startup != NULL)
 			RmgrTable[rmid].rm_startup();
 	}
+	reader_state = XLogReaderAllocate(wal_segment_size, NULL, XL_ROUTINE(), NULL);
 
 #ifdef HAVE_LIBSECCOMP
 	/* We prefer opt-out to opt-in for greater security */
@@ -313,16 +333,13 @@ WalRedoMain(int argc, char *argv[],
 	/*
 	 * Main processing loop
 	 */
+	MemoryContextSwitchTo(MessageContext);
+	initStringInfo(&input_message);
+
 	for (;;)
 	{
-		/*
-		 * Release storage left over from prior query cycle, and create a new
-		 * query input buffer in the cleared MessageContext.
-		 */
-		MemoryContextSwitchTo(MessageContext);
-		MemoryContextResetAndDeleteChildren(MessageContext);
-
-		initStringInfo(&input_message);
+		/* Release memory left over from prior query cycle. */
+		resetStringInfo(&input_message);
 
 		set_ps_display("idle");
 
@@ -406,23 +423,6 @@ pprint_buffer(char *data, int len)
 	return s.data;
 }
 
-static char *
-pprint_tag(BufferTag *tag)
-{
-	StringInfoData s;
-
-	initStringInfo(&s);
-
-	appendStringInfo(&s, "%u/%u/%u.%d blk %u",
-		tag->rnode.spcNode,
-		tag->rnode.dbNode,
-		tag->rnode.relNode,
-		tag->forkNum,
-		tag->blockNum
-	);
-
-	return s.data;
-}
 /* ----------------------------------------------------------------
  *		routines to obtain user input
  * ----------------------------------------------------------------
@@ -492,7 +492,6 @@ ReadRedoCommand(StringInfo inBuf)
 	return qtype;
 }
 
-
 /*
  * Prepare for WAL replay on given block
  */
@@ -502,7 +501,6 @@ BeginRedoForBlock(StringInfo input_message)
 	RelFileNode rnode;
 	ForkNumber forknum;
 	BlockNumber blknum;
-	MemoryContext oldcxt;
 	SMgrRelation reln;
 
 	/*
@@ -520,6 +518,7 @@ BeginRedoForBlock(StringInfo input_message)
 	rnode.relNode = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
 
+<<<<<<< HEAD
 	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
 	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
 
@@ -530,6 +529,16 @@ BeginRedoForBlock(StringInfo input_message)
 	}
 
 	MemoryContextSwitchTo(oldcxt);
+=======
+	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
+
+	elog(TRACE, "BeginRedoForBlock %u/%u/%u.%d blk %u",
+		 target_redo_tag.rnode.spcNode,
+		 target_redo_tag.rnode.dbNode,
+		 target_redo_tag.rnode.relNode,
+		 target_redo_tag.forkNum,
+		 target_redo_tag.blockNum);
+>>>>>>> main
 
 	reln = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
@@ -570,6 +579,10 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
+<<<<<<< HEAD
+=======
+	wal_redo_buffer = buf;
+>>>>>>> main
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
 	MarkBufferDirty(buf); /* pro forma */
@@ -584,12 +597,19 @@ PushPage(StringInfo input_message)
 static void
 ApplyRecord(StringInfo input_message)
 {
+<<<<<<< HEAD
 	/* recovery here */
+=======
+>>>>>>> main
 	char	   *errormsg;
 	XLogRecPtr	lsn;
 	XLogRecord *record;
 	int			nleft;
+<<<<<<< HEAD
 	XLogReaderState reader_state;
+=======
+	ErrorContextCallback errcallback;
+>>>>>>> main
 
 	/*
 	 * message format:
@@ -599,6 +619,11 @@ ApplyRecord(StringInfo input_message)
 	 */
 	lsn = pq_getmsgint64(input_message);
 
+<<<<<<< HEAD
+=======
+	smgrinit();					/* reset inmem smgr state */
+
+>>>>>>> main
 	/* note: the input must be aligned here */
 	record = (XLogRecord *) pq_getmsgbytes(input_message, sizeof(XLogRecord));
 
@@ -607,6 +632,7 @@ ApplyRecord(StringInfo input_message)
 		elog(ERROR, "mismatch between record (%d) and message size (%d)",
 			 record->xl_tot_len, (int) sizeof(XLogRecord) + nleft);
 
+<<<<<<< HEAD
 	/* FIXME: use XLogReaderAllocate() */
 	memset(&reader_state, 0, sizeof(XLogReaderState));
 	reader_state.ReadRecPtr = 0; /* no 'prev' record */
@@ -615,19 +641,68 @@ ApplyRecord(StringInfo input_message)
 	reader_state.errormsg_buf = palloc(1000 + 1); /* MAX_ERRORMSG_LEN */
 
 	if (!DecodeXLogRecord(&reader_state, record, &errormsg))
+=======
+	/* Setup error traceback support for ereport() */
+	errcallback.callback = apply_error_callback;
+	errcallback.arg = (void *) reader_state;
+	errcallback.previous = error_context_stack;
+	error_context_stack = &errcallback;
+
+	XLogBeginRead(reader_state, lsn);
+	/*
+	 * In lieu of calling XLogReadRecord, store the record 'decoded_record'
+	 * buffer directly.
+	 */
+	reader_state->ReadRecPtr = lsn;
+	reader_state->decoded_record = record;
+	if (!DecodeXLogRecord(reader_state, record, &errormsg))
+>>>>>>> main
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
 
 	/* Ignore any other blocks than the ones the caller is interested in */
 	redo_read_buffer_filter = redo_block_filter;
 
+<<<<<<< HEAD
 	RmgrTable[record->xl_rmid].rm_redo(&reader_state);
 
 	redo_read_buffer_filter = NULL;
 
+=======
+	RmgrTable[record->xl_rmid].rm_redo(reader_state);
+
+	redo_read_buffer_filter = NULL;
+
+	/* Pop the error context stack */
+	error_context_stack = errcallback.previous;
+
+>>>>>>> main
 	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
 }
 
+<<<<<<< HEAD
+=======
+/*
+ * Error context callback for errors occurring during ApplyRecord
+ */
+static void
+apply_error_callback(void *arg)
+{
+	XLogReaderState *record = (XLogReaderState *) arg;
+	StringInfoData buf;
+
+	initStringInfo(&buf);
+	xlog_outdesc(&buf, record);
+
+	/* translator: %s is a WAL record description */
+	errcontext("WAL redo at %X/%X for %s",
+			   LSN_FORMAT_ARGS(record->ReadRecPtr),
+			   buf.data);
+
+	pfree(buf.data);
+}
+
+>>>>>>> main
 static bool
 redo_block_filter(XLogReaderState *record, uint8 block_id)
 {
@@ -641,6 +716,17 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 	}
 
 	/*
+<<<<<<< HEAD
+=======
+	 * Can a WAL redo function ever access a relation other than the one that
+	 * it modifies? I don't see why it would.
+	 */
+	if (!RelFileNodeEquals(target_tag.rnode, target_redo_tag.rnode))
+		elog(WARNING, "REDO accessing unexpected page: %u/%u/%u.%u blk %u",
+			 target_tag.rnode.spcNode, target_tag.rnode.dbNode, target_tag.rnode.relNode, target_tag.forkNum, target_tag.blockNum);
+
+	/*
+>>>>>>> main
 	 * If this block isn't one we are currently restoring, then return 'true'
 	 * so that this gets ignored
 	 */
@@ -701,8 +787,12 @@ GetPage(StringInfo input_message)
 	} while (tot_written < BLCKSZ);
 
 	ReleaseBuffer(buf);
+<<<<<<< HEAD
 	DropDatabaseBuffers(rnode.dbNode);
 	smgrinit(); //reset inmem smgr state
+=======
+	DropRelFileNodeAllLocalBuffers(rnode);
+>>>>>>> main
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }

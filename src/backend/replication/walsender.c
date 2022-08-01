@@ -239,9 +239,10 @@ void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
-static void ProcessZenithFeedbackMessage(void);
+static void ProcessReplicationFeedbackMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
+static void ProcessPendingWrites(void);
 static void WalSndKeepalive(bool requestReply);
 static void WalSndKeepaliveIfNecessary(void);
 static void WalSndCheckTimeOut(void);
@@ -1293,6 +1294,16 @@ WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 	}
 
 	/* If we have pending write here, go to slow path */
+	ProcessPendingWrites();
+}
+
+/*
+ * Wait until there is no pending write. Also process replies from the other
+ * side and check timeouts during that.
+ */
+static void
+ProcessPendingWrites(void)
+{
 	for (;;)
 	{
 		long		sleeptime;
@@ -1347,18 +1358,35 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
 {
 	static TimestampTz sendTime = 0;
 	TimestampTz now = GetCurrentTimestamp();
+	bool		end_xact = ctx->end_xact;
 
 	/*
 	 * Track lag no more than once per WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS to
 	 * avoid flooding the lag tracker when we commit frequently.
+	 *
+	 * We don't have a mechanism to get the ack for any LSN other than end
+	 * xact LSN from the downstream. So, we track lag only for end of
+	 * transaction LSN.
 	 */
 #define WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS	1000
-	if (!TimestampDifferenceExceeds(sendTime, now,
-									WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS))
-		return;
+	if (end_xact && TimestampDifferenceExceeds(sendTime, now,
+											   WALSND_LOGICAL_LAG_TRACK_INTERVAL_MS))
+	{
+		LagTrackerWrite(lsn, now);
+		sendTime = now;
+	}
 
-	LagTrackerWrite(lsn, now);
-	sendTime = now;
+	/*
+	 * Try to send a keepalive if required. We don't need to try sending keep
+	 * alive messages at the transaction end as that will be done at a later
+	 * point in time. This is required only for large transactions where we
+	 * don't send any changes to the downstream and the receiver can timeout
+	 * due to that.
+	 */
+	if (!end_xact &&
+		now >= TimestampTzPlusMilliseconds(last_reply_timestamp,
+										   wal_sender_timeout / 2))
+		ProcessPendingWrites();
 }
 
 /*
@@ -1850,7 +1878,7 @@ ProcessStandbyMessage(void)
 			break;
 
 		case 'z':
-			ProcessZenithFeedbackMessage();
+			ProcessReplicationFeedbackMessage();
 			break;
 
 		default:
@@ -1864,7 +1892,7 @@ ProcessStandbyMessage(void)
 /*
  * Remember that a walreceiver just confirmed receipt of lsn `lsn`.
  */
-static void
+void
 PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
@@ -1925,23 +1953,26 @@ ProcessStandbyReplyMessage(void)
 					LSN_FORMAT_ARGS(applyPtr));
 }
 
-// This message is a zenith extension of postgres replication protocol
+// This message is a neon extension of postgres replication protocol
 static void
-ProcessZenithFeedbackMessage(void)
+ProcessReplicationFeedbackMessage(void)
 {
-	ZenithFeedback zf;
+	ReplicationFeedback rf;
 
 	// consume message length
 	pq_getmsgint64(&reply_message);
 
-	ParseZenithFeedbackMessage(&reply_message, &zf);
 
-	SetZenithCurrentClusterSize(zf.currentClusterSize);
+	ParseReplicationFeedbackMessage(&reply_message, &rf);
 
-	ProcessStandbyReply(zf.ps_writelsn,
-						zf.ps_flushlsn,
-						zf.ps_applylsn,
-						zf.ps_replytime,
+	replication_feedback_set(&rf);
+
+	SetZenithCurrentClusterSize(rf.currentClusterSize);
+
+	ProcessStandbyReply(rf.ps_writelsn,
+						rf.ps_flushlsn,
+						rf.ps_applylsn,
+						rf.ps_replytime,
 						false);
 }
 
@@ -2027,6 +2058,13 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
+
+	/*
+	 * walproposer use trunclateLsn instead of flushPtr for confirmed
+	 * received location, so we shouldn't update restart_lsn here.
+	 */
+	if (am_wal_proposer)
+		return;
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.
@@ -2828,73 +2866,74 @@ XLogSendPhysical(void)
 	nbytes = endptr - startptr;
 	Assert(nbytes <= MAX_SEND_SIZE);
 
-	/*
-	 * OK to read and send the slice.
-	 */
-	if (output_message.data)
-		resetStringInfo(&output_message);
-	else
-		initStringInfo(&output_message);
-
-	pq_sendbyte(&output_message, 'w');
-	pq_sendint64(&output_message, startptr);	/* dataStart */
-	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
-	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
-
-	/*
-	 * Read the log directly into the output buffer to avoid extra memcpy
-	 * calls.
-	 */
-	enlargeStringInfo(&output_message, nbytes);
-
-retry:
-	if (!WALRead(xlogreader,
-				 &output_message.data[output_message.len],
-				 startptr,
-				 nbytes,
-				 xlogreader->seg.ws_tli,	/* Pass the current TLI because
-											 * only WalSndSegmentOpen controls
-											 * whether new TLI is needed. */
-				 &errinfo))
-		WALReadRaiseError(&errinfo);
-
-	/* See logical_read_xlog_page(). */
-	XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
-	CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
-
-	/*
-	 * During recovery, the currently-open WAL file might be replaced with the
-	 * file of the same name retrieved from archive. So we always need to
-	 * check what we read was valid after reading into the buffer. If it's
-	 * invalid, we try to open and read the file again.
-	 */
-	if (am_cascading_walsender)
-	{
-		WalSnd	   *walsnd = MyWalSnd;
-		bool		reload;
-
-		SpinLockAcquire(&walsnd->mutex);
-		reload = walsnd->needreload;
-		walsnd->needreload = false;
-		SpinLockRelease(&walsnd->mutex);
-
-		if (reload && xlogreader->seg.ws_file >= 0)
-		{
-			wal_segment_close(xlogreader);
-
-			goto retry;
-		}
-	}
-
-	output_message.len += nbytes;
-	output_message.data[output_message.len] = '\0';
-
 	if (am_wal_proposer)
 	{
-		WalProposerBroadcast(startptr, output_message.data, output_message.len);
+		WalProposerBroadcast(startptr, endptr);
 	}
 	else
 	{
+		/*
+		* OK to read and send the slice.
+		*/
+		if (output_message.data)
+			resetStringInfo(&output_message);
+		else
+			initStringInfo(&output_message);
+
+		pq_sendbyte(&output_message, 'w');
+		pq_sendint64(&output_message, startptr);	/* dataStart */
+		pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
+		pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
+
+
+		/*
+		* Read the log directly into the output buffer to avoid extra memcpy
+		* calls.
+		*/
+		enlargeStringInfo(&output_message, nbytes);
+
+	retry:
+		if (!WALRead(xlogreader,
+					&output_message.data[output_message.len],
+					startptr,
+					nbytes,
+					xlogreader->seg.ws_tli,	/* Pass the current TLI because
+												* only WalSndSegmentOpen controls
+												* whether new TLI is needed. */
+					&errinfo))
+			WALReadRaiseError(&errinfo);
+
+		/* See logical_read_xlog_page(). */
+		XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
+		CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
+
+		/*
+		* During recovery, the currently-open WAL file might be replaced with the
+		* file of the same name retrieved from archive. So we always need to
+		* check what we read was valid after reading into the buffer. If it's
+		* invalid, we try to open and read the file again.
+		*/
+		if (am_cascading_walsender)
+		{
+			WalSnd	   *walsnd = MyWalSnd;
+			bool		reload;
+
+			SpinLockAcquire(&walsnd->mutex);
+			reload = walsnd->needreload;
+			walsnd->needreload = false;
+			SpinLockRelease(&walsnd->mutex);
+
+			if (reload && xlogreader->seg.ws_file >= 0)
+			{
+				wal_segment_close(xlogreader);
+
+				goto retry;
+			}
+		}
+
+		output_message.len += nbytes;
+		output_message.data[output_message.len] = '\0';
+
 		/*
 		 * Fill the send timestamp last, so that it is taken as late as possible.
 		 */
@@ -3826,10 +3865,10 @@ backpressure_lag(void)
 		XLogRecPtr applyPtr;
 		XLogRecPtr myFlushLsn = GetFlushRecPtr();
 
-		GetMinReplicaLsn(&writePtr, &flushPtr, &applyPtr);
+		replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
 		#define MB ((XLogRecPtr)1024*1024)
 
-		elog(DEBUG2, "current flushLsn %X/%X StandbyReply: write %X/%X flush %X/%X apply %X/%X",
+		elog(DEBUG2, "current flushLsn %X/%X ReplicationFeedback: write %X/%X flush %X/%X apply %X/%X",
 			LSN_FORMAT_ARGS(myFlushLsn),
 			LSN_FORMAT_ARGS(writePtr),
 			LSN_FORMAT_ARGS(flushPtr),
