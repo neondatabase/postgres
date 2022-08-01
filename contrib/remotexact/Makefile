@@ -5,7 +5,7 @@ OBJS = \
 	$(WIN32RES)\
 	remotexact.o \
 	rwset.o \
-	worker.o 
+	funcs.o 
 
 PG_CPPFLAGS = -I$(libpq_srcdir)
 SHLIB_LINK_INTERNAL = $(libpq)
