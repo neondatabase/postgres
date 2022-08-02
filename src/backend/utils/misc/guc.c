@@ -967,16 +967,6 @@ static struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
-		{"enable_indexscan_prefetch", PGC_USERSET, QUERY_TUNING_METHOD,
-			gettext_noop("Enables the index scan prefetching of referenced heap pages."),
-			NULL,
-			GUC_EXPLAIN
-		},
-		&enable_indexscan_prefetch,
-		true,
-		NULL, NULL, NULL
-	},
-	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),
 			NULL,

@@ -6899,7 +6899,6 @@ StartupXLOG(void)
 
 		checkPointLoc = zenithLastRec;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
-
 		/* make basebackup LSN available for walproposer */
 		XLogCtl->RedoStartLSN = RedoStartLSN;
 		EndRecPtr = ControlFile->checkPointCopy.redo;

@@ -68,7 +68,6 @@ extern PGDLLIMPORT bool enable_parallel_hash;
 extern PGDLLIMPORT bool enable_partition_pruning;
 extern PGDLLIMPORT bool enable_async_append;
 extern PGDLLIMPORT bool enable_seqscan_prefetch;
-extern PGDLLIMPORT bool enable_indexscan_prefetch;
 extern PGDLLIMPORT int seqscan_prefetch_buffers;
 extern PGDLLIMPORT int constraint_exclusion;
 

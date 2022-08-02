@@ -1962,7 +1962,6 @@ ProcessReplicationFeedbackMessage(void)
 	// consume message length
 	pq_getmsgint64(&reply_message);
 
-
 	ParseReplicationFeedbackMessage(&reply_message, &rf);
 
 	replication_feedback_set(&rf);
@@ -2884,7 +2883,6 @@ XLogSendPhysical(void)
 		pq_sendint64(&output_message, startptr);	/* dataStart */
 		pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
 		pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
-
 
 		/*
 		* Read the log directly into the output buffer to avoid extra memcpy

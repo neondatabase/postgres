@@ -11,7 +11,6 @@
 #include "replication/walreceiver.h"
 
 #define SK_MAGIC              0xCafeCeefu
-
 #define SK_PROTOCOL_VERSION   2
 
 #define MAX_SAFEKEEPERS        32
@@ -28,10 +27,7 @@
 
 extern char* wal_acceptors_list;
 extern int   wal_acceptor_reconnect_timeout;
-<<<<<<< HEAD
-=======
 extern int   wal_acceptor_connect_timeout;
->>>>>>> main
 extern bool  am_wal_proposer;
 
 struct WalProposerConn; /* Defined in libpqwalproposer */
@@ -151,12 +147,9 @@ typedef enum
 /* Consensus logical timestamp. */
 typedef uint64 term_t;
 
-<<<<<<< HEAD
-=======
 /* neon storage node id */
 typedef uint64 NNodeId;
 
->>>>>>> main
 /*
  * Proposer <-> Acceptor messaging.
  */
@@ -187,10 +180,7 @@ typedef struct AcceptorGreeting
 {
 	AcceptorProposerMessage apm;
 	term_t		term;
-<<<<<<< HEAD
-=======
 	NNodeId		nodeId;
->>>>>>> main
 } AcceptorGreeting;
 
 /*
@@ -228,10 +218,7 @@ typedef struct VoteResponse {
 	XLogRecPtr flushLsn;
 	XLogRecPtr truncateLsn;  /* minimal LSN which may be needed for recovery of some safekeeper */
 	TermHistory termHistory;
-<<<<<<< HEAD
-=======
 	XLogRecPtr timelineStartLsn; /* timeline globally starts at this LSN */
->>>>>>> main
 } VoteResponse;
 
 /*
@@ -246,11 +233,8 @@ typedef struct ProposerElected
 	XLogRecPtr startStreamingAt;
 	/* history of term switches up to this proposer */
 	TermHistory *termHistory;
-<<<<<<< HEAD
-=======
 	/* timeline globally starts at this LSN */
 	XLogRecPtr timelineStartLsn;
->>>>>>> main
 } ProposerElected;
 
 /*
@@ -277,26 +261,6 @@ typedef struct AppendRequestHeader
 } AppendRequestHeader;
 
 /*
-<<<<<<< HEAD
- * All copy data message ('w') are linked in L1 send list and asynchronously sent to receivers.
- * When message is sent to all receivers, it is removed from send list.
- */
-struct WalMessage
-{
-	WalMessage* next;      /* L1 list of messages */
-	uint32 size;           /* message size */
-	AppendRequestHeader req; /* request to safekeeper (message header) */
-
-	/* PHANTOM FIELD:
-	 *
-	 * All WalMessages are allocated with exactly (size - sizeof(AppendRequestHeader)) additional bytes
-	 * after them, containing the body of the message. This allocation is done in `CreateMessage`
-	 * (for body len > 0) and `CreateMessageVCLOnly` (for body len == 0). */
-};
-
-/*
-=======
->>>>>>> main
  * Hot standby feedback received from replica
  */
 typedef struct HotStandbyFeedback
@@ -307,11 +271,7 @@ typedef struct HotStandbyFeedback
 } HotStandbyFeedback;
 
 
-<<<<<<< HEAD
-typedef	struct ZenithFeedback
-=======
 typedef	struct ReplicationFeedback
->>>>>>> main
 {
 	// current size of the timeline on pageserver
 	uint64 currentClusterSize;
@@ -320,9 +280,6 @@ typedef	struct ReplicationFeedback
 	XLogRecPtr ps_flushlsn;
 	XLogRecPtr ps_applylsn;
 	TimestampTz ps_replytime;
-<<<<<<< HEAD
-} ZenithFeedback;
-=======
 } ReplicationFeedback;
 
 
@@ -332,7 +289,6 @@ typedef struct WalproposerShmemState
 	ReplicationFeedback feedback;
 	term_t		mineLastElectedTerm;
 } WalproposerShmemState;
->>>>>>> main
 
 /*
  * Report safekeeper state to proposer
@@ -354,21 +310,12 @@ typedef struct AppendResponse
 	// Feedback recieved from pageserver includes standby_status_update fields
 	// and custom zenith feedback.
 	// This part of the message is extensible.
-<<<<<<< HEAD
-	ZenithFeedback zf;
-} AppendResponse;
-
-// ZenithFeedback is extensible part of the message that is parsed separately
-// Other fields are fixed part
-#define APPENDRESPONSE_FIXEDPART_SIZE offsetof(AppendResponse, zf)
-=======
 	ReplicationFeedback rf;
 } AppendResponse;
 
 // ReplicationFeedback is extensible part of the message that is parsed separately
 // Other fields are fixed part
 #define APPENDRESPONSE_FIXEDPART_SIZE offsetof(AppendResponse, rf)
->>>>>>> main
 
 
 /*
@@ -387,18 +334,6 @@ typedef struct Safekeeper
 	 * reach SS_ACTIVE; not before.
 	 */
 	WalProposerConn*   conn;
-<<<<<<< HEAD
-	StringInfoData outbuf;
-
-	bool               flushWrite;    /* set to true if we need to call AsyncFlush, to flush pending messages */
-	WalMessage*        currMsg;       /* message that wasn't sent yet or NULL, if we have nothing to send */
-
-	int                eventPos;      /* position in wait event set. Equal to -1 if no event */
-	SafekeeperState     state;         /* safekeeper state machine state */
-	AcceptorGreeting   greetResponse;         /* acceptor greeting  */
-	VoteResponse	   voteResponse;  /* the vote */
-	AppendResponse appendResponse;		  /* feedback to master */
-=======
 	/*
 	 * Temporary buffer for the message being sent to the safekeeper.
 	 */
@@ -408,13 +343,10 @@ typedef struct Safekeeper
 	 */
 	XLogReaderState* xlogreader;
 
->>>>>>> main
 	/*
 	 * Streaming will start here; must be record boundary.
 	 */
 	XLogRecPtr startStreamingAt;
-<<<<<<< HEAD
-=======
 
 	bool                flushWrite;     /* set to true if we need to call AsyncFlush, to flush pending messages */
 	XLogRecPtr          streamingAt;    /* current streaming position */
@@ -426,7 +358,6 @@ typedef struct Safekeeper
 	AcceptorGreeting    greetResponse;  /* acceptor greeting */
 	VoteResponse        voteResponse;   /* the vote */
 	AppendResponse      appendResponse; /* feedback for master */
->>>>>>> main
 } Safekeeper;
 
 
@@ -436,16 +367,6 @@ void       AssertEventsOkForState(uint32 events, Safekeeper* sk);
 uint32     SafekeeperStateDesiredEvents(SafekeeperState state);
 char*      FormatEvents(uint32 events);
 void       WalProposerMain(Datum main_arg);
-<<<<<<< HEAD
-void       WalProposerBroadcast(XLogRecPtr startpos, char* data, int len);
-bool       HexDecodeString(uint8 *result, char *input, int nbytes);
-uint32     pq_getmsgint32_le(StringInfo msg);
-uint64     pq_getmsgint64_le(StringInfo msg);
-void	   pq_sendint32_le(StringInfo buf, uint32 i);
-void	   pq_sendint64_le(StringInfo buf, uint64 i);
-void       WalProposerPoll(void);
-void       WalProposerRegister(void);
-=======
 void       WalProposerBroadcast(XLogRecPtr startpos, XLogRecPtr endpos);
 bool       HexDecodeString(uint8 *result, char *input, int nbytes);
 uint32     pq_getmsgint32_le(StringInfo msg);
@@ -456,28 +377,17 @@ void       WalProposerPoll(void);
 void       WalProposerRegister(void);
 void       XLogWalPropWrite(char *buf, Size nbytes, XLogRecPtr recptr);
 void       XLogWalPropClose(XLogRecPtr recptr);
->>>>>>> main
 void       ProcessStandbyReply(XLogRecPtr	writePtr,
 							   XLogRecPtr	flushPtr,
 							   XLogRecPtr	applyPtr,
 							   TimestampTz replyTime,
 							   bool		replyRequested);
-<<<<<<< HEAD
-=======
 void       PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
->>>>>>> main
 void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									TransactionId feedbackXmin,
 									uint32		feedbackEpoch,
 									TransactionId feedbackCatalogXmin,
 									uint32		feedbackCatalogEpoch);
-<<<<<<< HEAD
-void ParseZenithFeedbackMessage(StringInfo reply_message,
-								ZenithFeedback *zf);
-void       StartReplication(StartReplicationCmd *cmd);
-void       WalProposerSync(int argc, char *argv[]);
-
-=======
 void ParseReplicationFeedbackMessage(StringInfo reply_message,
 								ReplicationFeedback *rf);
 void       StartReplication(StartReplicationCmd *cmd);
@@ -487,7 +397,6 @@ Size WalproposerShmemSize(void);
 bool WalproposerShmemInit(void);
 void replication_feedback_set(ReplicationFeedback *rf);
 void replication_feedback_get_lsns(XLogRecPtr *writeLsn, XLogRecPtr *flushLsn, XLogRecPtr *applyLsn);
->>>>>>> main
 
 /* libpqwalproposer hooks & helper type */
 

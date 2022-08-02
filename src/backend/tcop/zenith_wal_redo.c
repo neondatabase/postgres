@@ -347,7 +347,6 @@ WalRedoMain(int argc, char *argv[],
 		 * (3) read a command (loop blocks here)
 		 */
 		firstchar = ReadRedoCommand(&input_message);
-
 		switch (firstchar)
 		{
 			case 'B':			/* BeginRedoForBlock */
@@ -518,18 +517,6 @@ BeginRedoForBlock(StringInfo input_message)
 	rnode.relNode = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
 
-<<<<<<< HEAD
-	oldcxt = MemoryContextSwitchTo(TopMemoryContext);
-	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
-
-	{
-		char* buf = pprint_tag(&target_redo_tag);
-		elog(TRACE, "BeginRedoForBlock %s", buf);
-		pfree(buf);
-	}
-
-	MemoryContextSwitchTo(oldcxt);
-=======
 	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
 
 	elog(TRACE, "BeginRedoForBlock %u/%u/%u.%d blk %u",
@@ -538,7 +525,6 @@ BeginRedoForBlock(StringInfo input_message)
 		 target_redo_tag.rnode.relNode,
 		 target_redo_tag.forkNum,
 		 target_redo_tag.blockNum);
->>>>>>> main
 
 	reln = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 	if (reln->smgr_cached_nblocks[forknum] == InvalidBlockNumber ||
@@ -579,10 +565,7 @@ PushPage(StringInfo input_message)
 	content = pq_getmsgbytes(input_message, BLCKSZ);
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_ZERO_AND_LOCK, NULL);
-<<<<<<< HEAD
-=======
 	wal_redo_buffer = buf;
->>>>>>> main
 	page = BufferGetPage(buf);
 	memcpy(page, content, BLCKSZ);
 	MarkBufferDirty(buf); /* pro forma */
@@ -597,19 +580,11 @@ PushPage(StringInfo input_message)
 static void
 ApplyRecord(StringInfo input_message)
 {
-<<<<<<< HEAD
-	/* recovery here */
-=======
->>>>>>> main
 	char	   *errormsg;
 	XLogRecPtr	lsn;
 	XLogRecord *record;
 	int			nleft;
-<<<<<<< HEAD
-	XLogReaderState reader_state;
-=======
 	ErrorContextCallback errcallback;
->>>>>>> main
 
 	/*
 	 * message format:
@@ -619,11 +594,8 @@ ApplyRecord(StringInfo input_message)
 	 */
 	lsn = pq_getmsgint64(input_message);
 
-<<<<<<< HEAD
-=======
 	smgrinit();					/* reset inmem smgr state */
 
->>>>>>> main
 	/* note: the input must be aligned here */
 	record = (XLogRecord *) pq_getmsgbytes(input_message, sizeof(XLogRecord));
 
@@ -632,16 +604,6 @@ ApplyRecord(StringInfo input_message)
 		elog(ERROR, "mismatch between record (%d) and message size (%d)",
 			 record->xl_tot_len, (int) sizeof(XLogRecord) + nleft);
 
-<<<<<<< HEAD
-	/* FIXME: use XLogReaderAllocate() */
-	memset(&reader_state, 0, sizeof(XLogReaderState));
-	reader_state.ReadRecPtr = 0; /* no 'prev' record */
-	reader_state.EndRecPtr = lsn; /* this record */
-	reader_state.decoded_record = record;
-	reader_state.errormsg_buf = palloc(1000 + 1); /* MAX_ERRORMSG_LEN */
-
-	if (!DecodeXLogRecord(&reader_state, record, &errormsg))
-=======
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = apply_error_callback;
 	errcallback.arg = (void *) reader_state;
@@ -656,18 +618,11 @@ ApplyRecord(StringInfo input_message)
 	reader_state->ReadRecPtr = lsn;
 	reader_state->decoded_record = record;
 	if (!DecodeXLogRecord(reader_state, record, &errormsg))
->>>>>>> main
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
 
 	/* Ignore any other blocks than the ones the caller is interested in */
 	redo_read_buffer_filter = redo_block_filter;
 
-<<<<<<< HEAD
-	RmgrTable[record->xl_rmid].rm_redo(&reader_state);
-
-	redo_read_buffer_filter = NULL;
-
-=======
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
 
 	redo_read_buffer_filter = NULL;
@@ -675,13 +630,10 @@ ApplyRecord(StringInfo input_message)
 	/* Pop the error context stack */
 	error_context_stack = errcallback.previous;
 
->>>>>>> main
 	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
 }
 
-<<<<<<< HEAD
-=======
 /*
  * Error context callback for errors occurring during ApplyRecord
  */
@@ -702,7 +654,6 @@ apply_error_callback(void *arg)
 	pfree(buf.data);
 }
 
->>>>>>> main
 static bool
 redo_block_filter(XLogReaderState *record, uint8 block_id)
 {
@@ -716,8 +667,6 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 	}
 
 	/*
-<<<<<<< HEAD
-=======
 	 * Can a WAL redo function ever access a relation other than the one that
 	 * it modifies? I don't see why it would.
 	 */
@@ -726,7 +675,6 @@ redo_block_filter(XLogReaderState *record, uint8 block_id)
 			 target_tag.rnode.spcNode, target_tag.rnode.dbNode, target_tag.rnode.relNode, target_tag.forkNum, target_tag.blockNum);
 
 	/*
->>>>>>> main
 	 * If this block isn't one we are currently restoring, then return 'true'
 	 * so that this gets ignored
 	 */
@@ -787,12 +735,7 @@ GetPage(StringInfo input_message)
 	} while (tot_written < BLCKSZ);
 
 	ReleaseBuffer(buf);
-<<<<<<< HEAD
-	DropDatabaseBuffers(rnode.dbNode);
-	smgrinit(); //reset inmem smgr state
-=======
 	DropRelFileNodeAllLocalBuffers(rnode);
->>>>>>> main
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }

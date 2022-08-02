@@ -149,6 +149,7 @@ static bool BlockingWrite(Safekeeper *sk, void *msg, size_t msg_size, Safekeeper
 static bool AsyncWrite(Safekeeper *sk, void *msg, size_t msg_size, SafekeeperState flush_state);
 static bool AsyncFlush(Safekeeper *sk);
 
+
 /*
  * WAL proposer bgworker entry point.
  */
@@ -1359,7 +1360,6 @@ WalProposerRecovery(int donor, TimeLineID timeline, XLogRecPtr startpos, XLogRec
 				rec_start_lsn = pg_ntoh64(rec_start_lsn);
 				rec_end_lsn = rec_start_lsn + len - XLOG_HDR_SIZE;
 
-
 				/* write WAL to disk */
 				XLogWalPropWrite(&buf[XLOG_HDR_SIZE], len - XLOG_HDR_SIZE, rec_start_lsn);
 
@@ -1560,13 +1560,9 @@ StartStreaming(Safekeeper *sk)
  * in case of errors.
  */
 static void
-SendMessageToNode(Safekeeper *sk, WalMessage *msg)
+SendMessageToNode(Safekeeper *sk)
 {
-	/* we shouldn't be already sending something */
-	Assert(sk->currMsg == NULL);
 	Assert(sk->state == SS_ACTIVE);
-
-	sk->currMsg = msg;
 
 	/* Note: we always send everything to the safekeeper until WOULDBLOCK or nothing left to send */
 	HandleActiveState(sk, WL_SOCKET_WRITEABLE);
