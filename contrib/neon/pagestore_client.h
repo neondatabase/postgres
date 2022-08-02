@@ -174,6 +174,7 @@ extern void zenith_extend(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, char *buffer, bool skipFsync);
 extern bool zenith_prefetch(SMgrRelation reln, ForkNumber forknum,
 							BlockNumber blocknum);
+extern void zenith_reset_prefetch(SMgrRelation reln);
 extern void zenith_read(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 						char *buffer);
 

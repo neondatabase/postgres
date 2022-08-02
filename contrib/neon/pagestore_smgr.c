@@ -982,6 +982,16 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 	mdclose(reln, forknum);
 }
 
+
+/*
+ *	zenith_reset_prefetch() -- reoe all previously rgistered prefeth requests
+ */
+void
+zenith_reset_prefetch(SMgrRelation reln)
+{
+	n_prefetch_requests = 0;
+}
+
 /*
  *	zenith_prefetch() -- Initiate asynchronous read of the specified block of a relation
  */
@@ -1103,7 +1113,6 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 	n_prefetched_buffers = 0;
 	n_prefetch_responses = 0;
 	n_prefetch_misses += 1;
-
 	{
 		ZenithGetPageRequest request = {
 			.req.tag = T_ZenithGetPageRequest,
@@ -1773,6 +1782,7 @@ static const struct f_smgr zenith_smgr =
 	.smgr_unlink = zenith_unlink,
 	.smgr_extend = zenith_extend,
 	.smgr_prefetch = zenith_prefetch,
+	.smgr_reset_prefetch = zenith_reset_prefetch,
 	.smgr_read = zenith_read,
 	.smgr_write = zenith_write,
 	.smgr_writeback = zenith_writeback,

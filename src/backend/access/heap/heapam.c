@@ -408,6 +408,9 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 			prefetch_limit = pbscanwork->phsw_chunk_remaining;
 		if (page + prefetch_limit >= scan->rs_nblocks)
 			prefetch_limit = scan->rs_nblocks - page - 1;
+
+		RelationOpenSmgr(scan->rs_base.rs_rd);
+		smgr_reset_prefetch(scan->rs_base.rs_rd->rd_smgr);
 		for (int i = 1; i <= prefetch_limit; i++)
 			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
 	}
