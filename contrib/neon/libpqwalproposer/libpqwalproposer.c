@@ -1,6 +1,6 @@
 #include "postgres.h"
 
-#include "replication/walproposer.h"
+#include "../walproposer.h"
 #include "libpq-fe.h"
 
 /* Required for anything that's dynamically loaded */

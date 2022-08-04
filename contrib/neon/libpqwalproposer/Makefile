@@ -8,8 +8,8 @@
 #
 #-------------------------------------------------------------------------
 
-subdir = src/backend/replication/libpqwalproposer
-top_builddir = ../../../..
+subdir = contrib/neon/libpqwalproposer
+top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
 override CPPFLAGS := -I$(srcdir) -I$(libpq_srcdir) $(CPPFLAGS)
