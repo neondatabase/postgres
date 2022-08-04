@@ -3872,6 +3872,15 @@ backpressure_lag(void)
 			LSN_FORMAT_ARGS(flushPtr),
 			LSN_FORMAT_ARGS(applyPtr));
 
+		if (writePtr == InvalidXLogRecPtr ||
+			flushPtr == InvalidXLogRecPtr ||
+			applyPtr == InvalidXLogRecPtr)
+		{
+			elog(FATAL, "Repication feedback contains invalid LSNs: write %X/%X flush %X/%X apply %X/%X",
+			LSN_FORMAT_ARGS(writePtr),
+			LSN_FORMAT_ARGS(flushPtr),
+			LSN_FORMAT_ARGS(applyPtr));
+		}
 		if ((writePtr != UnknownXLogRecPtr
 			&& max_replication_write_lag > 0
 			&& myFlushLsn > writePtr + max_replication_write_lag*MB))

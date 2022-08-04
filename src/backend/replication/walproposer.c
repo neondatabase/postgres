@@ -1953,6 +1953,9 @@ WalproposerShmemInit(void)
 	if (!found)
 	{
 		memset(walprop_shared, 0, WalproposerShmemSize());
+		walprop_shared->feedback.ps_writelsn = UnknownXLogRecPtr;
+		walprop_shared->feedback.ps_flushlsn = UnknownXLogRecPtr;
+		walprop_shared->feedback.ps_applylsn = UnknownXLogRecPtr;
 		SpinLockInit(&walprop_shared->mutex);
 	}
 	LWLockRelease(AddinShmemInitLock);
