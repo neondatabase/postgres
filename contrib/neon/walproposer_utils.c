@@ -876,7 +876,7 @@ XLogSendPhysical(void)
 	XLogRecPtr	SendRqstPtr;
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
-	Size		nbytes;
+	Size		nbytes PG_USED_FOR_ASSERTS_ONLY;
 
 	/* If requested switch the WAL sender to the stopping state. */
 	if (got_STOPPING)
