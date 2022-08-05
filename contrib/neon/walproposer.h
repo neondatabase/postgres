@@ -368,7 +368,6 @@ void       WalProposerRegister(void);
 void ParseReplicationFeedbackMessage(StringInfo reply_message,
 								ReplicationFeedback *rf);
 extern void StartProposerReplication(StartReplicationCmd *cmd);
-void       WalProposerSync(int argc, char *argv[]);
 
 Size WalproposerShmemSize(void);
 bool WalproposerShmemInit(void);
