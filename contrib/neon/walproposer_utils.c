@@ -489,7 +489,6 @@ XLogWalPropClose(XLogRecPtr recptr)
 void
 StartProposerReplication(StartReplicationCmd *cmd)
 {
-	StringInfoData buf;
 	XLogRecPtr	FlushPtr;
 
 	if (ThisTimeLineID == 0)
@@ -878,8 +877,6 @@ XLogSendPhysical(void)
 	XLogRecPtr	startptr;
 	XLogRecPtr	endptr;
 	Size		nbytes;
-	XLogSegNo	segno;
-	WALReadError errinfo;
 
 	/* If requested switch the WAL sender to the stopping state. */
 	if (got_STOPPING)
