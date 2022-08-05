@@ -19,8 +19,6 @@ EXTENSION = neon
 DATA = neon--1.0.sql
 PGFILEDESC = "neon - cloud storage for PostgreSQL"
 
-SUBDIRS = \
-	libpqwalproposer
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

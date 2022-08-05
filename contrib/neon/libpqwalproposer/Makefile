@@ -1,37 +1,30 @@
 #-------------------------------------------------------------------------
 #
 # Makefile--
-#    Makefile for src/backend/replication/libpqwalproposer
+#    Makefile for contrib/neon/libpqwalproposer
 #
 # IDENTIFICATION
-#    src/backend/replication/libpqwalproposer/Makefile
+#    contrib/neon/libpqwalproposer/Makefile
 #
 #-------------------------------------------------------------------------
 
-subdir = contrib/neon/libpqwalproposer
-top_builddir = ../../..
-include $(top_builddir)/src/Makefile.global
-
-override CPPFLAGS := -I$(srcdir) -I$(libpq_srcdir) $(CPPFLAGS)
-
+MODULE_big = libpqwalproposer
 OBJS = \
 	$(WIN32RES) \
 	libpqwalproposer.o
-SHLIB_LINK_INTERNAL = $(libpq)
-SHLIB_LINK = $(filter -lintl, $(LIBS))
-SHLIB_PREREQS = submake-libpq
 PGFILEDESC = "libpqwalproposer - libpq interface for WAL proposer"
-NAME = libpqwalproposer
 
-all: all-shared-lib
+PG_CPPFLAGS = -I$(libpq_srcdir)
+SHLIB_LINK_INTERNAL = $(libpq)
 
-include $(top_srcdir)/src/Makefile.shlib
-
-install: all installdirs install-lib
-
-installdirs: installdirs-lib
-
-uninstall: uninstall-lib
-
-clean distclean maintainer-clean: clean-lib
-	rm -f $(OBJS)
+ifdef USE_PGXS
+PG_CONFIG = pg_config
+PGXS := $(shell $(PG_CONFIG) --pgxs)
+include $(PGXS)
+else
+SHLIB_PREREQS = submake-libpq
+subdir = contrib/neon/libpqwalproposer
+top_builddir = ../../..
+include $(top_builddir)/src/Makefile.global
+include $(top_srcdir)/contrib/contrib-global.mk
+endif
