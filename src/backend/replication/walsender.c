@@ -241,7 +241,7 @@ static XLogRecPtr GetStandbyFlushRecPtr(void);
 static void IdentifySystem(void);
 static void CreateReplicationSlot(CreateReplicationSlotCmd *cmd);
 static void DropReplicationSlot(DropReplicationSlotCmd *cmd);
-void StartReplication(StartReplicationCmd *cmd);
+static void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
@@ -573,7 +573,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
  * At the moment, this never returns, but an ereport(ERROR) will take us back
  * to the main loop.
  */
-void
+static void
 StartReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;

@@ -536,6 +536,9 @@ StartProposerReplication(StartReplicationCmd *cmd)
 	 * Select the timeline. If it was given explicitly by the client, use
 	 * that. Otherwise use the timeline of the last replayed record, which is
 	 * kept in ThisTimeLineID.
+	 * 
+	 * Neon doesn't currently use PG Timelines, but it may in the future, so
+	 * we keep this code around to lighten the load for when we need it.
 	 */
 	if (am_cascading_walsender)
 	{
