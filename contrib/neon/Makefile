@@ -6,6 +6,7 @@ OBJS = \
 	$(WIN32RES) \
 	inmem_smgr.o \
 	libpagestore.o \
+	libpqwalproposer.o \
 	pagestore_smgr.o \
 	relsize_cache.o \
 	neon.o \

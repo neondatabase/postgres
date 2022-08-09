@@ -31,6 +31,7 @@ void		_PG_init(void);
 void		_PG_init(void)
 {
 	pg_init_libpagestore();
+	pg_init_libpqwalproposer();
 	pg_init_walproposer();
 }
 

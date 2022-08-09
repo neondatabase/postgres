@@ -27,7 +27,7 @@ SUBDIRS = \
 		lo		\
 		ltree		\
 		neon	\
-		neon/libpqwalproposer	\
+#		neon/libpqwalproposer
 		neon_test_utils	\
 		oid2name	\
 		old_snapshot	\
