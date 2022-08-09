@@ -11,7 +11,6 @@
 #include "postmaster/interrupt.h"
 #include "replication/slot.h"
 #include "walproposer_utils.h"
-/* WARNING - this may be broken */
 #include "replication/walsender_private.h"
 
 #include "storage/ipc.h"
