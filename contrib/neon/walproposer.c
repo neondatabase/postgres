@@ -400,8 +400,6 @@ WalProposerInitImpl(XLogRecPtr flushRecPtr, uint64 systemId)
 	char	   *port;
 
 	/* Load the libpq-specific functions */
-	pg_init_libpqwalproposer();
-
 	if (WalProposerFunctions == NULL)
 		elog(ERROR, "libpqwalproposer didn't initialize correctly");
 
