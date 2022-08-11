@@ -3826,9 +3826,10 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 void
 GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply_lsn)
 {
-	XLogRecPtr min_write_lsn = UnknownXLogRecPtr;
-	XLogRecPtr min_flush_lsn = UnknownXLogRecPtr;
-	XLogRecPtr min_apply_lsn = UnknownXLogRecPtr;
+	XLogRecPtr min_write_lsn = InvalidXLogRecPtr;
+	XLogRecPtr min_flush_lsn = InvalidXLogRecPtr;
+	XLogRecPtr min_apply_lsn = InvalidXLogRecPtr;
+	bool has_min = false;
 	for (int i = 0; i < max_wal_senders; i++)
 	{
 		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
@@ -3842,9 +3843,19 @@ GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply
 			XLogRecPtr written = walsnd->write;
 			XLogRecPtr flushed = walsnd->flush;
 			XLogRecPtr applied = walsnd->apply;
-			min_write_lsn = Min(written, min_write_lsn);
-			min_flush_lsn = Min(flushed, min_flush_lsn);
-			min_apply_lsn = Min(applied, min_apply_lsn);
+			if (!has_min)
+			{
+				min_write_lsn = written;
+				min_flush_lsn = flushed;
+				min_apply_lsn = applied;
+				has_min = true;
+			}
+			else
+			{
+				min_write_lsn = Min(min_write_lsn, written);
+				min_flush_lsn = Min(min_flush_lsn, flushed);
+				min_apply_lsn = Min(min_apply_lsn, applied);
+			}
 		}
 	}
 	*write_lsn = min_write_lsn;
@@ -3872,21 +3883,21 @@ backpressure_lag(void)
 			LSN_FORMAT_ARGS(flushPtr),
 			LSN_FORMAT_ARGS(applyPtr));
 
-		if ((writePtr != UnknownXLogRecPtr
+		if ((writePtr != InvalidXLogRecPtr
 			&& max_replication_write_lag > 0
 			&& myFlushLsn > writePtr + max_replication_write_lag*MB))
 		{
 			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
 		}
 
-		if ((flushPtr != UnknownXLogRecPtr
+		if ((flushPtr != InvalidXLogRecPtr
 			&& max_replication_flush_lag > 0
 			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
 		{
 			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
 		}
 
-		if ((applyPtr != UnknownXLogRecPtr
+		if ((applyPtr != InvalidXLogRecPtr
 			&& max_replication_apply_lag > 0
 			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
 		{
