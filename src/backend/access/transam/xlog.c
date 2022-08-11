@@ -61,6 +61,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
@@ -184,22 +185,10 @@ const struct config_enum_entry recovery_target_action_options[] = {
 };
 
 
-/*
- * We are not taken in account dbnode, spcnode, forknum fields of
- * relation tag, because possibility of collision is assumed to be small
- * and should not affect performance. And reducing cache key size speed-up
- * hash calculation and comparison.
- */
-typedef struct LastWrittenLsnCacheKey
-{
-	Oid         relid;
-	BlockNumber bucket;
-} LastWrittenLsnCacheKey;
-
 typedef struct LastWrittenLsnCacheEntry
 {
-	LastWrittenLsnCacheKey key;
-	XLogRecPtr             lsn;
+	BufferTag	key;
+	XLogRecPtr	lsn;
 	/* L2-List for LRU replacement algorithm */
 	struct LastWrittenLsnCacheEntry* next;
 	struct LastWrittenLsnCacheEntry* prev;
@@ -5265,7 +5254,7 @@ XLOGShmemInit(void)
 
 	{
 		static HASHCTL info;
-		info.keysize = sizeof(LastWrittenLsnCacheKey);
+		info.keysize = sizeof(BufferTag);
 		info.entrysize = sizeof(LastWrittenLsnCacheEntry);
 		lastWrittenLsnCache = ShmemInitHash("last_written_lsn_cache",
 											lastWrittenLsnCacheSize, lastWrittenLsnCacheSize,
@@ -8943,7 +8932,7 @@ GetInsertRecPtr(void)
  * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
  */
 XLogRecPtr
-GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
+GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
 	XLogRecPtr lsn;
 	LastWrittenLsnCacheEntry* entry;
@@ -8953,11 +8942,12 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
 	/* Maximal last written LSN among all non-cached pages */
 	lsn = XLogCtl->maxLastWrittenLsn;
 
-	if (rnode != InvalidOid)
+	if (rnode.relNode != InvalidOid)
 	{
-		LastWrittenLsnCacheKey key;
-		key.relid = rnode;
-		key.bucket = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		BufferTag key;
+		key.rnode = rnode;
+		key.forkNum = forknum;
+		key.blockNum = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
@@ -8985,18 +8975,17 @@ GetLastWrittenLSN(Oid rnode, BlockNumber blkno)
  * bucket (1024 blocks). This cache allows to use old LSN when
  * requesting pages of unchanged or appended relations.
  *
- * rnode can be InvalidOid, in this case maxLastWrittenLsn is updated. 
- * SetLastWrittenLsn with InvalidOid
- * is used by createdb and dbase_redo functions.
+ * rnode.relNode can be InvalidOid, in this case maxLastWrittenLsn is updated.
+ * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
  */
 void
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid rnode, BlockNumber from, BlockNumber till)
+SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber till)
 {
 	if (lsn == InvalidXLogRecPtr)
 		return;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
-	if (rnode == InvalidOid)
+	if (rnode.relNode == InvalidOid)
 	{
 		if (lsn > XLogCtl->maxLastWrittenLsn)
 			XLogCtl->maxLastWrittenLsn = lsn;
@@ -9004,16 +8993,17 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid rnode, BlockNumber from, Bloc
 	else
 	{
 		LastWrittenLsnCacheEntry* entry;
-		LastWrittenLsnCacheKey key;
+		BufferTag key;
 		bool found;
 		BlockNumber bucket;
 
-		key.relid = rnode;
+		key.rnode = rnode;
+		key.forkNum = forknum;
 		for (bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
 			 bucket <= till / LAST_WRITTEN_LSN_CACHE_BUCKET;
 			 bucket++)
 		{
-			key.bucket = bucket;
+			key.blockNum = bucket;
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
 			if (found)
 			{
@@ -9052,18 +9042,18 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, Oid rnode, BlockNumber from, Bloc
  * SetLastWrittenLSNForBlock -- Set maximal LSN for block
  */
 void
-SetLastWrittenLSNForBlock(XLogRecPtr lsn, Oid rnode, BlockNumber blkno)
+SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
-	SetLastWrittenLSNForBlockRange(lsn, rnode, blkno, blkno);
+	SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, blkno);
 }
 
 /*
  * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
  */
 void
-SetLastWrittenLSNForRelation(XLogRecPtr lsn, Oid rnode)
+SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum)
 {
-	SetLastWrittenLSNForBlock(lsn, rnode, REL_METADATA_PSEUDO_BLOCKNO);
+	SetLastWrittenLSNForBlock(lsn, rnode, forknum, REL_METADATA_PSEUDO_BLOCKNO);
 }
 
 /*
@@ -9072,7 +9062,8 @@ SetLastWrittenLSNForRelation(XLogRecPtr lsn, Oid rnode)
 void
 SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 {
-	SetLastWrittenLSNForBlock(lsn, InvalidOid, 0);
+	RelFileNode dummyNode = {InvalidOid, InvalidOid, InvalidOid};
+	SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
 /*
