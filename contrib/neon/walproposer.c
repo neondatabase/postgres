@@ -73,6 +73,7 @@ bool		am_wal_proposer;
 
 char	   *zenith_timeline_walproposer = NULL;
 char	   *zenith_tenant_walproposer = NULL;
+char	   *zenith_safekeeper_token_walproposer = NULL;
 
 /* Declared in walproposer.h, defined here, initialized in libpqwalproposer.c */
 WalProposerFunctionsType *WalProposerFunctions = NULL;
@@ -428,9 +429,15 @@ WalProposerInitImpl(XLogRecPtr flushRecPtr, uint64 systemId)
 
 		{
 			int written = 0;
-			written = snprintf((char *) &safekeeper[n_safekeepers].conninfo, MAXCONNINFO,
-							   "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
-							   host, port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+			if (zenith_safekeeper_token_walproposer != NULL) {
+				written = snprintf((char *) &safekeeper[n_safekeepers].conninfo, MAXCONNINFO,
+								   "host=%s port=%s password=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+								   host, port, zenith_safekeeper_token_walproposer, zenith_timeline_walproposer, zenith_tenant_walproposer);
+			} else {
+				written = snprintf((char *) &safekeeper[n_safekeepers].conninfo, MAXCONNINFO,
+								   "host=%s port=%s dbname=replication options='-c ztimelineid=%s ztenantid=%s'",
+								   host, port, zenith_timeline_walproposer, zenith_tenant_walproposer);
+			}
 			if (written > MAXCONNINFO || written < 0)
 				elog(FATAL, "could not create connection string for safekeeper %s:%s", host, port);
 		}
@@ -621,12 +628,13 @@ ResetConnection(Safekeeper *sk)
 		 * According to libpq docs:
 		 *   "If the result is CONNECTION_BAD, the connection attempt has already failed,
 		 *    typically because of invalid connection parameters."
-		 * We should report this failure.
+		 * We should report this failure. Do not print the exact `conninfo` as it may
+		 * contain e.g. password. The error message should already provide enough information.
 		 *
 		 * https://www.postgresql.org/docs/devel/libpq-connect.html#LIBPQ-PQCONNECTSTARTPARAMS
 		 */
-		elog(WARNING, "Immediate failure to connect with node:\n\t%s\n\terror: %s",
-			 sk->conninfo, walprop_error_message(sk->conn));
+		elog(WARNING, "Immediate failure to connect with node '%s:%s':\n\terror: %s",
+			 sk->host, sk->port, walprop_error_message(sk->conn));
 
 		/*
 		 * Even though the connection failed, we still need to clean up the

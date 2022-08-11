@@ -38,6 +38,7 @@ typedef struct WalMessage WalMessage;
 
 extern char *zenith_timeline_walproposer;
 extern char *zenith_tenant_walproposer;
+extern char *zenith_safekeeper_token_walproposer;
 
 /* Possible return values from ReadPGAsync */
 typedef enum
@@ -324,7 +325,13 @@ typedef struct Safekeeper
 {
 	char const*        host;
 	char const*        port;
-	char               conninfo[MAXCONNINFO]; /* connection info for connecting/reconnecting */
+
+	/*
+	 * connection string for connecting/reconnecting.
+	 *
+	 * May contain private information like password and should not be logged.
+	 */
+	char               conninfo[MAXCONNINFO];
 
 	/*
 	 * postgres protocol connection to the WAL acceptor
