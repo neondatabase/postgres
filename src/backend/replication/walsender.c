@@ -3820,49 +3820,6 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	return now - time;
 }
 
-/*
- * Get minimal write and flush LSN among all live replicas
- */
-void
-GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply_lsn)
-{
-	XLogRecPtr min_write_lsn = InvalidXLogRecPtr;
-	XLogRecPtr min_flush_lsn = InvalidXLogRecPtr;
-	XLogRecPtr min_apply_lsn = InvalidXLogRecPtr;
-	bool has_min = false;
-	for (int i = 0; i < max_wal_senders; i++)
-	{
-		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
-		if (walsnd->state == WALSNDSTATE_STREAMING)
-		{
-			/*
-			 * We assume that reads from walsnd->write/flush are atomic
-			 * on all modern x64 systems, as these fields are uint64 and
-			 * should be 8-bytes aligned.
-			 */
-			XLogRecPtr written = walsnd->write;
-			XLogRecPtr flushed = walsnd->flush;
-			XLogRecPtr applied = walsnd->apply;
-			if (!has_min)
-			{
-				min_write_lsn = written;
-				min_flush_lsn = flushed;
-				min_apply_lsn = applied;
-				has_min = true;
-			}
-			else
-			{
-				min_write_lsn = Min(min_write_lsn, written);
-				min_flush_lsn = Min(min_flush_lsn, flushed);
-				min_apply_lsn = Min(min_apply_lsn, applied);
-			}
-		}
-	}
-	*write_lsn = min_write_lsn;
-	*flush_lsn = min_flush_lsn;
-	*apply_lsn = min_apply_lsn;
-}
-
 // Check if we need to suspend inserts because of lagging replication.
 uint64
 backpressure_lag(void)
