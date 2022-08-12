@@ -1894,11 +1894,12 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback * hs)
 static XLogRecPtr
 CalculateMinFlushLsn(void)
 {
-	XLogRecPtr lsn = UnknownXLogRecPtr;
-	for (int i = 0; i < n_safekeepers; i++)
+	XLogRecPtr lsn = n_safekeepers > 0
+		? safekeeper[0].appendResponse.flushLsn
+		: InvalidXLogRecPtr;
+	for (int i = 1; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].appendResponse.flushLsn < lsn)
-			lsn = safekeeper[i].appendResponse.flushLsn;
+		lsn = Min(lsn, safekeeper[i].appendResponse.flushLsn);
 	}
 	return lsn;
 }
