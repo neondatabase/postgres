@@ -7874,14 +7874,20 @@ StartupXLOG(void)
 		{
 			int			offs = (EndRecPtr % XLOG_BLCKSZ);
 			XLogRecPtr	lastPage = EndRecPtr - offs;
+			int lastPageSize = ((lastPage % wal_segment_size) == 0) ? SizeOfXLogLongPHD : SizeOfXLogShortPHD;
 			int			idx = XLogRecPtrToBufIdx(lastPage);
 			XLogPageHeader xlogPageHdr = (XLogPageHeader) (XLogCtl->pages + idx * XLOG_BLCKSZ);
 
 			xlogPageHdr->xlp_pageaddr = lastPage;
 			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
 			xlogPageHdr->xlp_tli = ThisTimeLineID;
-			xlogPageHdr->xlp_info = XLP_FIRST_IS_CONTRECORD; // FIXME
-			xlogPageHdr->xlp_rem_len = offs - SizeOfXLogShortPHD;
+			/*
+			 * If we start writing with offset from page beginning, pretend in
+			 * page header there is a record ending where actual data will
+			 * start.
+			 */
+			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
 			readOff = XLogSegmentOffset(lastPage, wal_segment_size);
 
 			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
