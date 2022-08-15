@@ -98,6 +98,12 @@ static ssize_t buffered_read(void *buf, size_t count);
 
 static BufferTag target_redo_tag;
 
+/*
+ * Buffer with target WAL redo page.
+ * We must not evict this page from the buffer pool, but we cannot just keep it pinned because
+ * some WAL redo functions expect the page to not be pinned. So we have a special check in
+ * localbuf.c to prevent this buffer from being evicted.
+ */
 Buffer		wal_redo_buffer;
 bool		am_wal_redo_postgres;
 
@@ -516,6 +522,7 @@ BeginRedoForBlock(StringInfo input_message)
 	rnode.dbNode = pq_getmsgint(input_message, 4);
 	rnode.relNode = pq_getmsgint(input_message, 4);
 	blknum = pq_getmsgint(input_message, 4);
+	wal_redo_buffer = InvalidBuffer;
 
 	INIT_BUFFERTAG(target_redo_tag, rnode, forknum, blknum);
 
@@ -624,7 +631,16 @@ ApplyRecord(StringInfo input_message)
 	redo_read_buffer_filter = redo_block_filter;
 
 	RmgrTable[record->xl_rmid].rm_redo(reader_state);
-
+	/*
+	 * If no base image of the page was provided by PushPage, initialize wal_redo_buffer here.
+	 * The first WAL record must initialize the page in that case.
+	 */
+	if (BufferIsInvalid(wal_redo_buffer))
+	{
+		wal_redo_buffer = ReadBufferWithoutRelcache(target_redo_tag.rnode, target_redo_tag.forkNum, target_redo_tag.blockNum, RBM_NORMAL, NULL);
+		Assert(!BufferIsInvalid(wal_redo_buffer));
+		ReleaseBuffer(wal_redo_buffer);
+	}
 	redo_read_buffer_filter = NULL;
 
 	/* Pop the error context stack */
@@ -714,6 +730,7 @@ GetPage(StringInfo input_message)
 	/* FIXME: check that we got a BeginRedoForBlock message or this earlier */
 
 	buf = ReadBufferWithoutRelcache(rnode, forknum, blknum, RBM_NORMAL, NULL);
+	Assert(buf == wal_redo_buffer);
 	page = BufferGetPage(buf);
 	/* single thread, so don't bother locking the page */
 
@@ -736,6 +753,7 @@ GetPage(StringInfo input_message)
 
 	ReleaseBuffer(buf);
 	DropRelFileNodeAllLocalBuffers(rnode);
+	wal_redo_buffer = InvalidBuffer;
 
 	elog(TRACE, "Page sent back for block %u", blknum);
 }
