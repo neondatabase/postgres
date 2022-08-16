@@ -805,7 +805,9 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 {
 	bool		hit;
 
-	SMgrRelation smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
+	SMgrRelation smgr = smgropen(rnode, InvalidBackendId,
+							 permanent ? RELPERSISTENCE_PERMANENT :
+							 RELPERSISTENCE_UNLOGGED);
 
 	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
 							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
@@ -827,7 +829,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	bool		found;
 	bool		isExtend;
 	/*
-	 * wal_redo postgres is working in single user mode, we do not need to synchronize access to shared buffer, 
+	 * wal_redo postgres is working in single user mode, we do not need to synchronize access to shared buffer,
 	 * so let's use local buffers instead
 	 */
 	bool		isLocalBuf = SmgrIsTemp(smgr) || am_wal_redo_postgres;
@@ -3760,7 +3762,9 @@ RelationCopyStorageUsingBuffer(RelFileNode srcnode,
 	use_wal = XLogIsNeeded() && (permanent || forkNum == INIT_FORKNUM);
 
 	/* Get number of blocks in the source relation. */
-	nblocks = smgrnblocks(smgropen(srcnode, InvalidBackendId),
+	nblocks = smgrnblocks(smgropen(srcnode, InvalidBackendId,
+						  permanent ? RELPERSISTENCE_PERMANENT
+						  :RELPERSISTENCE_UNLOGGED),
 						  forkNum);
 
 	/* Nothing to copy; just return. */
@@ -3854,9 +3858,9 @@ CreateAndCopyRelationData(RelFileNode src_rnode, RelFileNode dst_rnode,
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 		 forkNum <= MAX_FORKNUM; forkNum++)
 	{
-		if (smgrexists(smgropen(src_rnode, InvalidBackendId), forkNum))
+		if (smgrexists(smgropen(src_rnode, InvalidBackendId, relpersistence), forkNum))
 		{
-			smgrcreate(smgropen(dst_rnode, InvalidBackendId), forkNum, false);
+			smgrcreate(smgropen(dst_rnode, InvalidBackendId, relpersistence), forkNum, false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
