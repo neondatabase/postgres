@@ -7990,7 +7990,7 @@ xlog_redo(XLogReaderState *record)
 				 * return BLK_DONE. Accept that.
 				 */
 			}
-			else if (XLogReadBufferForRedo(record, block_id, &buffer) != BLK_RESTORED)
+			else if (result != BLK_RESTORED)
 				elog(ERROR, "unexpected XLogReadBufferForRedo result when restoring backup block");
 
 			if (buffer != InvalidBuffer)
