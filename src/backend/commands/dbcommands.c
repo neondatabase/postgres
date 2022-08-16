@@ -275,7 +275,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	rnode.dbNode = dbid;
 	rnode.relNode = relfilenode;
 
-	smgr = smgropen(rnode, InvalidBackendId);
+	smgr = smgropen(rnode, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 	nblocks = smgrnblocks(smgr, MAIN_FORKNUM);
 	smgrclose(smgr);
 
