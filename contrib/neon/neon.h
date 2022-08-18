@@ -1,6 +1,13 @@
-//
-// Created by Matthias on 2022-08-04.
-//
+/*-------------------------------------------------------------------------
+ *
+ * neon.h
+ *	  Functions used in the initialization of this extension.
+ *
+ * IDENTIFICATION
+ *	 contrib/neon/neon.h
+ *
+ *-------------------------------------------------------------------------
+ */
 
 #ifndef NEON_H
 #define NEON_H

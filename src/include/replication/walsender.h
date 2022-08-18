@@ -54,7 +54,7 @@ extern void WalSndRqstFileReload(void);
  * Return value in microseconds */
 extern uint64 (*delay_backend_us)(void);
 
-/* newly added functions to support external (re)usage of these features */
+/* expose these so that they can be reused by the neon walproposer extension */
 extern void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
 extern TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 extern void ProcessStandbyReply(XLogRecPtr writePtr, XLogRecPtr flushPtr,
