@@ -785,7 +785,6 @@ typedef struct XLogCtlData
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
-
 static XLogCtlData *XLogCtl = NULL;
 
 /* a private copy of XLogCtl->Insert.WALInsertLocks, for convenience */
