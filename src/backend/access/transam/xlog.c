@@ -189,10 +189,20 @@ typedef struct LastWrittenLsnCacheEntry
 {
 	BufferTag	key;
 	XLogRecPtr	lsn;
-	/* L2-List for LRU replacement algorithm */
-	struct LastWrittenLsnCacheEntry* next;
-	struct LastWrittenLsnCacheEntry* prev;
+	/* double linked list for LRU replacement algorithm */
+	dlist_node	lru_node;
 } LastWrittenLsnCacheEntry;
+
+
+/*
+ * Cache of last written LSN for each relation chunk (hash bucket).
+ * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
+ * relation metadata update.
+ * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
+ * pages are replaced using LRU algorithm, based on L2-list.
+ * Access to this cache is protected by 'LastWrittenLsnLock'.
+ */
+static HTAB *lastWrittenLsnCache;
 
 /*
  * Statistics for current checkpoint are collected in this global struct.
@@ -761,7 +771,6 @@ typedef struct XLogCtlData
 	 * XLOG_FPW_CHANGE record that instructs full_page_writes is disabled.
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
-	XLogRecPtr  lastWrittenPageLSN;
 
 	/*
 	 * Maximal last written LSN for pages not present in lastWrittenLsnCache
@@ -772,7 +781,7 @@ typedef struct XLogCtlData
 	 * Double linked list to implement LRU replacement policy for last written LSN cache.
 	 * Access to this list as well as to last written LSN cache is protected by 'LastWrittenLsnLock'.
 	 */
-	LastWrittenLsnCacheEntry lastWrittenLsnLRU;
+	dlist_head lastWrittenLsnLRU;
 
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
@@ -796,17 +805,6 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
 static ControlFileData *ControlFile = NULL;
 
 #define LAST_WRITTEN_LSN_CACHE_BUCKET 1024 /* blocks = 8Mb */
-
-
-/*
- * Cache of last written LSN for each relation chunk (hash bucket).
- * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
- * relation metadata update.
- * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
- * pages are replaced using LRU algorithm, based on L2-list.
- * Access to this cache is protected by 'LastWrittenLsnLock'.
- */
-static HTAB *lastWrittenLsnCache;
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -8151,7 +8149,7 @@ StartupXLOG(void)
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
 	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	XLogCtl->lastWrittenLsnLRU.next = XLogCtl->lastWrittenLsnLRU.prev = &XLogCtl->lastWrittenLsnLRU;
+	dlist_init(&XLogCtl->lastWrittenLsnLRU);
 
 	LocalSetXLogInsertAllowed();
 
@@ -9009,8 +9007,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 				if (lsn > entry->lsn)
 					entry->lsn = lsn;
 				/* Unlink from LRU list */
-				entry->next->prev = entry->prev;
-				entry->prev->next = entry->next;
+				dlist_delete(&entry->lru_node);
 			}
 			else
 			{
@@ -9018,20 +9015,16 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 				if (hash_get_num_entries(lastWrittenLsnCache) > lastWrittenLsnCacheSize)
 				{
 					/* Replace least recently used entry */
-					LastWrittenLsnCacheEntry* victim = XLogCtl->lastWrittenLsnLRU.prev;
+					LastWrittenLsnCacheEntry* victim = dlist_container(LastWrittenLsnCacheEntry, lru_node, dlist_pop_head_node(&XLogCtl->lastWrittenLsnLRU));
 					/* Adjust max LSN for not cached relations/chunks if needed */
 					if (victim->lsn > XLogCtl->maxLastWrittenLsn)
 						XLogCtl->maxLastWrittenLsn = victim->lsn;
 
-					victim->next->prev = victim->prev;
-					victim->prev->next = victim->next;
 					hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
 				}
 			}
-			/* Link to the head of LRU list */
-			entry->next = XLogCtl->lastWrittenLsnLRU.next;
-			entry->prev = &XLogCtl->lastWrittenLsnLRU;
-			XLogCtl->lastWrittenLsnLRU.next = entry->next->prev = entry;
+			/* Link to the end of LRU list */
+			dlist_push_tail(&XLogCtl->lastWrittenLsnLRU, &entry->lru_node);
 		}
 	}
 	LWLockRelease(LastWrittenLsnLock);
