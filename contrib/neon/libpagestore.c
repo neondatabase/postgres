@@ -26,11 +26,10 @@
 #include "pgstat.h"
 #include "utils/guc.h"
 
-#include "replication/walproposer.h"
+#include "neon.h"
+#include "walproposer.h"
+#include "walproposer_utils.h"
 
-PG_MODULE_MAGIC;
-
-void		_PG_init(void);
 
 #define PageStoreTrace DEBUG5
 
@@ -355,7 +354,7 @@ substitute_pageserver_password(const char *page_server_connstring_raw)
  * Module initialization function
  */
 void
-_PG_init(void)
+pg_init_libpagestore(void)
 {
 	DefineCustomStringVariable("neon.pageserver_connstring",
 							   "connection string to the page server",

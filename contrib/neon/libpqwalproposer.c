@@ -1,11 +1,8 @@
 #include "postgres.h"
 
-#include "replication/walproposer.h"
 #include "libpq-fe.h"
-
-/* Required for anything that's dynamically loaded */
-PG_MODULE_MAGIC;
-void _PG_init(void);
+#include "neon.h"
+#include "walproposer.h"
 
 /* Header in walproposer.h -- Wrapper struct to abstract away the libpq connection */
 struct WalProposerConn
@@ -46,7 +43,7 @@ static WalProposerFunctionsType PQWalProposerFunctions = {
 
 /* Module initialization */
 void
-_PG_init(void)
+pg_init_libpqwalproposer(void)
 {
 	if (WalProposerFunctions != NULL)
 		elog(ERROR, "libpqwalproposer already loaded");
