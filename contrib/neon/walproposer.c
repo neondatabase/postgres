@@ -38,7 +38,6 @@
 #include <sys/stat.h>
 #include "access/xlogdefs.h"
 #include "access/xlogutils.h"
-#include "replication/walproposer.h"
 #include "storage/latch.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -51,10 +50,20 @@
 #include "postmaster/postmaster.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
+#include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/shmem.h"
+#include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
+#include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/timestamp.h"
+
+#include "neon.h"
+#include "walproposer.h"
+#include "walproposer_utils.h"
+#include "replication/walpropshim.h"
 
 
 char	   *wal_acceptors_list;
@@ -102,14 +111,11 @@ static int	n_votes = 0;
 static int	n_connected = 0;
 static TimestampTz last_reconnect_attempt;
 
-/* Set to true only in standalone run of `postgres --sync-safekeepers` (see comment on top) */
-static bool syncSafekeepers;
-
 static WalproposerShmemState *walprop_shared;
 
 /* Prototypes for private functions */
-static void WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId);
-static void WalProposerStart(void);
+static void WalProposerInitImpl(XLogRecPtr flushRecPtr, uint64 systemId);
+static void WalProposerStartImpl(void);
 static void WalProposerLoop(void);
 static void InitEventSet(void);
 static void UpdateEventSet(Safekeeper *sk, uint32 events);
@@ -150,6 +156,88 @@ static bool AsyncWrite(Safekeeper *sk, void *msg, size_t msg_size, SafekeeperSta
 static bool AsyncFlush(Safekeeper *sk);
 
 
+static void nwp_shmem_startup_hook(void);
+static void nwp_register_gucs(void);
+static void nwp_prepare_shmem(void);
+static uint64 backpressure_lag_impl(void);
+
+
+static shmem_startup_hook_type prev_shmem_startup_hook_type;
+
+
+
+void pg_init_walproposer(void)
+{
+	if (!process_shared_preload_libraries_in_progress)
+		return;
+
+	nwp_register_gucs();
+
+	nwp_prepare_shmem();
+
+	delay_backend_us = &backpressure_lag_impl;
+
+	WalProposerRegister();
+	
+	WalProposerInit = &WalProposerInitImpl;
+	WalProposerStart = &WalProposerStartImpl;
+}
+
+static void nwp_register_gucs(void)
+{
+	DefineCustomStringVariable(
+		"neon.safekeepers",
+		"List of Neon WAL acceptors (host:port)",
+		NULL, /* long_desc */
+		&wal_acceptors_list, /* valueAddr */
+		"", /* bootValue */
+		PGC_POSTMASTER,
+		GUC_LIST_INPUT, /* extensions can't use GUC_LIST_QUOTE */
+		NULL, NULL, NULL
+	);
+
+	DefineCustomIntVariable(
+		"neon.safekeeper_reconnect_timeout",
+		"Timeout for reconnecting to offline wal acceptor.",
+		NULL,
+		&wal_acceptor_reconnect_timeout,
+		1000, 0, INT_MAX, /* default, min, max */
+		PGC_SIGHUP, /* context */
+		GUC_UNIT_MS, /* flags */
+		NULL, NULL, NULL
+	);
+
+	DefineCustomIntVariable(
+		"neon.safekeeper_connect_timeout",
+		"Timeout after which give up connection attempt to safekeeper.",
+		NULL,
+		&wal_acceptor_connect_timeout,
+		5000, 0, INT_MAX,
+		PGC_SIGHUP,
+		GUC_UNIT_MS,
+		NULL, NULL, NULL
+	);
+	
+}
+
+/* shmem handling */
+
+static void nwp_prepare_shmem(void)
+{
+	RequestAddinShmemSpace(WalproposerShmemSize());
+
+	prev_shmem_startup_hook_type = shmem_startup_hook;
+	shmem_startup_hook = nwp_shmem_startup_hook;
+}
+
+static void nwp_shmem_startup_hook(void)
+{
+	if (prev_shmem_startup_hook_type)
+		prev_shmem_startup_hook_type();
+
+	WalproposerShmemInit();
+}
+
 /*
  * WAL proposer bgworker entry point.
  */
@@ -186,75 +274,6 @@ WalProposerMain(Datum main_arg)
 		ReplicationSlotSave();
 		ReplicationSlotRelease();
 	}
-
-	WalProposerStart();
-}
-
-/*
- * Entry point for `postgres --sync-safekeepers`.
- */
-void
-WalProposerSync(int argc, char *argv[])
-{
-	struct stat stat_buf;
-
-	syncSafekeepers = true;
-	ThisTimeLineID = 1;
-
-	InitStandaloneProcess(argv[0]);
-
-	SetProcessingMode(InitProcessing);
-
-	/*
-	 * Set default values for command-line options.
-	 */
-	InitializeGUCOptions();
-
-	/* Acquire configuration parameters */
-	if (!SelectConfigFiles(NULL, progname))
-		exit(1);
-
-	/*
-	 * Imitate we are early in bootstrap loading shared_preload_libraries;
-	 * zenith extension sets PGC_POSTMASTER gucs requiring this.
-	 */
-	process_shared_preload_libraries_in_progress = true;
-
-	/*
-	 * Initialize postmaster_alive_fds as WaitEventSet checks them.
-	 *
-	 * Copied from InitPostmasterDeathWatchHandle()
-	 */
-	if (pipe(postmaster_alive_fds) < 0)
-		ereport(FATAL,
-				(errcode_for_file_access(),
-				 errmsg_internal("could not create pipe to monitor postmaster death: %m")));
-	if (fcntl(postmaster_alive_fds[POSTMASTER_FD_WATCH], F_SETFL, O_NONBLOCK) == -1)
-		ereport(FATAL,
-				(errcode_for_socket_access(),
-				 errmsg_internal("could not set postmaster death monitoring pipe to nonblocking mode: %m")));
-
-	ChangeToDataDir();
-
-	/* Create pg_wal directory, if it doesn't exist */
-	if (stat(XLOGDIR, &stat_buf) != 0)
-	{
-		ereport(LOG, (errmsg("creating missing WAL directory \"%s\"", XLOGDIR)));
-		if (MakePGDirectory(XLOGDIR) < 0)
-		{
-			ereport(ERROR,
-					(errcode_for_file_access(),
-						errmsg("could not create directory \"%s\": %m",
-							XLOGDIR)));
-			exit(1);
-		}
-	}
-
-	WalProposerInit(0, 0);
-
-	process_shared_preload_libraries_in_progress = false;
-
-	BackgroundWorkerUnblockSignals();
 
 	WalProposerStart();
 }
@@ -362,7 +381,7 @@ WalProposerRegister(void)
 	memset(&bgw, 0, sizeof(bgw));
 	bgw.bgw_flags = BGWORKER_SHMEM_ACCESS;
 	bgw.bgw_start_time = BgWorkerStart_RecoveryFinished;
-	snprintf(bgw.bgw_library_name, BGW_MAXLEN, "postgres");
+	snprintf(bgw.bgw_library_name, BGW_MAXLEN, "neon");
 	snprintf(bgw.bgw_function_name, BGW_MAXLEN, "WalProposerMain");
 	snprintf(bgw.bgw_name, BGW_MAXLEN, "WAL proposer");
 	snprintf(bgw.bgw_type, BGW_MAXLEN, "WAL proposer");
@@ -374,21 +393,19 @@ WalProposerRegister(void)
 }
 
 static void
-WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
+WalProposerInitImpl(XLogRecPtr flushRecPtr, uint64 systemId)
 {
 	char	   *host;
 	char	   *sep;
 	char	   *port;
 
 	/* Load the libpq-specific functions */
-	load_file("libpqwalproposer", false);
 	if (WalProposerFunctions == NULL)
 		elog(ERROR, "libpqwalproposer didn't initialize correctly");
 
 	load_file("libpqwalreceiver", false);
 	if (WalReceiverFunctions == NULL)
 		elog(ERROR, "libpqwalreceiver didn't initialize correctly");
-	load_file("neon", false);
 
 	for (host = wal_acceptors_list; host != NULL && *host != '\0'; host = sep)
 	{
@@ -454,7 +471,7 @@ WalProposerInit(XLogRecPtr flushRecPtr, uint64 systemId)
 }
 
 static void
-WalProposerStart(void)
+WalProposerStartImpl(void)
 {
 
 	/* Initiate connections to all safekeeper nodes */
@@ -1531,7 +1548,7 @@ WalProposerStartStreaming(XLogRecPtr startpos)
 	cmd.slotname = WAL_PROPOSER_SLOT_NAME;
 	cmd.timeline = greetRequest.timeline;
 	cmd.startpoint = startpos;
-	StartReplication(&cmd);
+	StartProposerReplication(&cmd);
 }
 
 /*
@@ -2348,4 +2365,48 @@ AsyncFlush(Safekeeper *sk)
 			Assert(false);
 			return false;
 	}
+}
+
+// Check if we need to suspend inserts because of lagging replication.
+static uint64
+backpressure_lag_impl(void)
+{
+	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0 || max_replication_write_lag > 0)
+	{
+		XLogRecPtr writePtr;
+		XLogRecPtr flushPtr;
+		XLogRecPtr applyPtr;
+		XLogRecPtr myFlushLsn = GetFlushRecPtr();
+
+		replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
+#define MB ((XLogRecPtr)1024*1024)
+
+		elog(DEBUG2, "current flushLsn %X/%X ReplicationFeedback: write %X/%X flush %X/%X apply %X/%X",
+			 LSN_FORMAT_ARGS(myFlushLsn),
+			 LSN_FORMAT_ARGS(writePtr),
+			 LSN_FORMAT_ARGS(flushPtr),
+			 LSN_FORMAT_ARGS(applyPtr));
+
+		if ((writePtr != InvalidXLogRecPtr
+			 && max_replication_write_lag > 0
+			 && myFlushLsn > writePtr + max_replication_write_lag*MB))
+		{
+			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
+		}
+
+		if ((flushPtr != InvalidXLogRecPtr
+			 && max_replication_flush_lag > 0
+			 && myFlushLsn > flushPtr + max_replication_flush_lag*MB))
+		{
+			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
+		}
+
+		if ((applyPtr != InvalidXLogRecPtr
+			 && max_replication_apply_lag > 0
+			 && myFlushLsn > applyPtr + max_replication_apply_lag*MB))
+		{
+			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
+		}
+	}
+	return 0;
 }
