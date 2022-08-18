@@ -80,7 +80,7 @@
 #include "replication/syncrep.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
-#include "replication/walproposer.h"
+#include "replication/walpropshim.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm_impl.h"
 #include "storage/fd.h"
@@ -2307,28 +2307,6 @@ static struct config_int ConfigureNamesInt[] =
 		},
 		&wal_receiver_timeout,
 		60 * 1000, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"wal_acceptor_reconnect", PGC_SIGHUP, REPLICATION_STANDBY,
-			gettext_noop("Timeout for reconnecting to offline wal acceptor."),
-			NULL,
-			GUC_UNIT_MS
-		},
-		&wal_acceptor_reconnect_timeout,
-		1000, 0, INT_MAX,
-		NULL, NULL, NULL
-	},
-
-	{
-		{"wal_acceptor_connect_timeout", PGC_SIGHUP, REPLICATION_STANDBY,
-			gettext_noop("Timeout after which give up connection attempt to safekeeper."),
-			NULL,
-			GUC_UNIT_MS
-		},
-		&wal_acceptor_connect_timeout,
-		5000, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 
@@ -4670,17 +4648,6 @@ static struct config_string ConfigureNamesString[] =
 		&backtrace_functions,
 		"",
 		check_backtrace_functions, assign_backtrace_functions, NULL
-	},
-
-	{
-		{"safekeepers", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("List of Neon WAL acceptors (host:port)"),
-			NULL,
-			GUC_LIST_INPUT | GUC_LIST_QUOTE
-		},
-		&wal_acceptors_list,
-		"",
-		NULL, NULL, NULL
 	},
 
 	/* End-of-list marker */

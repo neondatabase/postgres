@@ -17,10 +17,23 @@
 #include "storage/bufmgr.h"
 #include "catalog/pg_type.h"
 #include "replication/walsender.h"
-#include "replication/walproposer.h"
 #include "funcapi.h"
 #include "access/htup_details.h"
 #include "utils/pg_lsn.h"
+
+#include "neon.h"
+#include "walproposer.h"
+
+PG_MODULE_MAGIC;
+void		_PG_init(void);
+
+
+void		_PG_init(void)
+{
+	pg_init_libpagestore();
+	pg_init_libpqwalproposer();
+	pg_init_walproposer();
+}
 
 PG_FUNCTION_INFO_V1(pg_cluster_size);
 PG_FUNCTION_INFO_V1(backpressure_lsns);
