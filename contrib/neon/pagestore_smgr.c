@@ -54,6 +54,7 @@
 #include "pagestore_client.h"
 #include "storage/smgr.h"
 #include "access/xlogdefs.h"
+#include "optimizer/cost.h"
 #include "postmaster/interrupt.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
@@ -118,27 +119,33 @@ static UnloggedBuildPhase unlogged_build_phase = UNLOGGED_BUILD_NOT_IN_PROGRESS;
  * It make it possible to parallelize processing and receiving of prefetched pages.
  * In case of prefetch miss or any other SMGR request other than smgr_read,
  * all prefetch responses has to be consumed.
+ *
+ * As far as after queueing prefetch requests, smgrread may not be called at all
+ * (just because buffer is present in the pool), we need to extend SMGR API by
+ * one more function: smgr_reset_prefetch which just clear prefetch queue.
  */
+#define MAX_PREFETCH_REQUESTS 128 /* better to be power of two */
 
-#define MAX_PREFETCH_REQUESTS 128
+typedef struct {
+	BufferTag  tag;
+	XLogRecPtr lsn;
+} PrefetchResponse;
 
 BufferTag prefetch_requests[MAX_PREFETCH_REQUESTS];
-BufferTag prefetch_responses[MAX_PREFETCH_REQUESTS];
+PrefetchResponse prefetch_responses[MAX_PREFETCH_REQUESTS];
 int n_prefetch_requests;
 int n_prefetch_responses;
-int n_prefetched_buffers;
+int prefetch_response_index; /* index of first expected prefetch response in circular buffer */
 int n_prefetch_hits;
 int n_prefetch_misses;
-XLogRecPtr prefetch_lsn;
 
 static void
 consume_prefetch_responses(void)
 {
-	for (int i = n_prefetched_buffers; i < n_prefetch_responses; i++) {
+	for (int i = 0; i < n_prefetch_responses; i++) {
 		ZenithResponse*	resp = page_server->receive();
 		pfree(resp);
 	}
-	n_prefetched_buffers = 0;
 	n_prefetch_responses = 0;
 }
 
@@ -1017,6 +1024,17 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 
 	if (n_prefetch_requests < MAX_PREFETCH_REQUESTS)
 	{
+		/* Check if his block was already requested for prefetch */
+		for (int i = 0; i < n_prefetch_responses; i++)
+		{
+			int j = (i + prefetch_response_index) % MAX_PREFETCH_REQUESTS;
+			if (RelFileNodeEquals(prefetch_responses[j].tag.rnode, reln->smgr_rnode.node) &&
+				prefetch_responses[j].tag.forkNum == forknum &&
+				prefetch_responses[j].tag.blockNum == blocknum)
+			{
+				return true;
+			}
+		}
 		prefetch_requests[n_prefetch_requests].rnode = reln->smgr_rnode.node;
 		prefetch_requests[n_prefetch_requests].forkNum = forknum;
 		prefetch_requests[n_prefetch_requests].blockNum = blocknum;
@@ -1080,13 +1098,14 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 	 * but some other backend may load page in shared buffers, so some prefetch responses should
 	 * be skipped.
 	 */
-	for (i = n_prefetched_buffers; i < n_prefetch_responses; i++)
+	for (i = 0; i < n_prefetch_responses; i++)
 	{
+		int j = (i + prefetch_response_index) % MAX_PREFETCH_REQUESTS;
 		resp = page_server->receive();
 		if (resp->tag == T_ZenithGetPageResponse &&
-			RelFileNodeEquals(prefetch_responses[i].rnode, rnode) &&
-			prefetch_responses[i].forkNum == forkNum &&
-			prefetch_responses[i].blockNum == blkno)
+			RelFileNodeEquals(prefetch_responses[j].tag.rnode, rnode) &&
+			prefetch_responses[j].tag.forkNum == forkNum &&
+			prefetch_responses[j].tag.blockNum == blkno)
 		{
 			char* page = ((ZenithGetPageResponse *) resp)->page;
 			/*
@@ -1094,24 +1113,51 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			 * If it is updated by some other backend, then it should not
 			 * be requested from smgr unless it is evicted from shared buffers.
 			 * In the last case last_evicted_lsn should be updated and
-			 * request_lsn should be greater than prefetch_lsn.
+			 * request_lsn should be greater than prefetch request lsn.
 			 * Maximum with page LSN is used because page returned by page server
 			 * may have LSN either greater either smaller than requested.
 			 */
-			if (Max(prefetch_lsn, PageGetLSN(page)) >= request_lsn)
+			if (Max(prefetch_responses[j].lsn, PageGetLSN(page)) >= request_lsn)
 			{
-				n_prefetched_buffers = i+1;
+				n_prefetch_responses -= i + 1;
+				prefetch_response_index = (prefetch_response_index + i + 1) % MAX_PREFETCH_REQUESTS;
 				n_prefetch_hits += 1;
-				n_prefetch_requests = 0;
 				memcpy(buffer, page, BLCKSZ);
 				pfree(resp);
+				if (n_prefetch_responses + n_prefetch_requests <= MAX_PREFETCH_REQUESTS &&
+					n_prefetch_requests >= seqscan_prefetch_buffers/2)
+				{
+					/* To prevent backend from waiting first response from pageserver,
+					 * we send next portion of prefeth requests to let pageserver
+					 * load them in parallel with us.
+					 */
+					ZenithGetPageRequest request = {
+						.req.tag = T_ZenithGetPageRequest,
+						.req.latest = request_latest,
+						.req.lsn = request_lsn
+					};
+					int resp_index = prefetch_response_index + n_prefetch_responses;
+					for (i = 0; i < n_prefetch_requests; i++)
+					{
+						int j = (resp_index + i) % MAX_PREFETCH_REQUESTS;
+						request.rnode = prefetch_requests[i].rnode;
+						request.forknum = prefetch_requests[i].forkNum;
+						request.blkno = prefetch_requests[i].blockNum;
+						prefetch_responses[j].tag = prefetch_requests[i];
+						prefetch_responses[j].lsn = request_lsn;
+						page_server->send((ZenithRequest *) &request);
+					}
+					n_prefetch_responses += n_prefetch_requests;
+					page_server->flush();
+				}
+				n_prefetch_requests = 0;
 				return;
 			}
 		}
 		pfree(resp);
 	}
-	n_prefetched_buffers = 0;
 	n_prefetch_responses = 0;
+	prefetch_response_index = 0;
 	n_prefetch_misses += 1;
 	{
 		ZenithGetPageRequest request = {
@@ -1131,13 +1177,13 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 				request.rnode = prefetch_requests[i].rnode;
 				request.forknum = prefetch_requests[i].forkNum;
 				request.blkno = prefetch_requests[i].blockNum;
-				prefetch_responses[i] = prefetch_requests[i];
+				prefetch_responses[i].tag = prefetch_requests[i];
+				prefetch_responses[i].lsn = request_lsn;
 				page_server->send((ZenithRequest *) &request);
 			}
 			page_server->flush();
 			n_prefetch_responses = n_prefetch_requests;
 			n_prefetch_requests = 0;
-			prefetch_lsn = request_lsn;
 			resp = page_server->receive();
 		}
 		else
