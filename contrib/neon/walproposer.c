@@ -1911,11 +1911,12 @@ CombineHotStanbyFeedbacks(HotStandbyFeedback * hs)
 static XLogRecPtr
 CalculateMinFlushLsn(void)
 {
-	XLogRecPtr lsn = UnknownXLogRecPtr;
-	for (int i = 0; i < n_safekeepers; i++)
+	XLogRecPtr lsn = n_safekeepers > 0
+		? safekeeper[0].appendResponse.flushLsn
+		: InvalidXLogRecPtr;
+	for (int i = 1; i < n_safekeepers; i++)
 	{
-		if (safekeeper[i].appendResponse.flushLsn < lsn)
-			lsn = safekeeper[i].appendResponse.flushLsn;
+		lsn = Min(lsn, safekeeper[i].appendResponse.flushLsn);
 	}
 	return lsn;
 }
@@ -2386,21 +2387,21 @@ backpressure_lag_impl(void)
 			 LSN_FORMAT_ARGS(flushPtr),
 			 LSN_FORMAT_ARGS(applyPtr));
 
-		if ((writePtr != UnknownXLogRecPtr
+		if ((writePtr != InvalidXLogRecPtr
 			 && max_replication_write_lag > 0
 			 && myFlushLsn > writePtr + max_replication_write_lag*MB))
 		{
 			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
 		}
 
-		if ((flushPtr != UnknownXLogRecPtr
+		if ((flushPtr != InvalidXLogRecPtr
 			 && max_replication_flush_lag > 0
 			 && myFlushLsn > flushPtr + max_replication_flush_lag*MB))
 		{
 			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
 		}
 
-		if ((applyPtr != UnknownXLogRecPtr
+		if ((applyPtr != InvalidXLogRecPtr
 			 && max_replication_apply_lag > 0
 			 && myFlushLsn > applyPtr + max_replication_apply_lag*MB))
 		{
