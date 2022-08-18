@@ -461,7 +461,7 @@ XLogInsert(RmgrId rmid, uint8 info)
 		return EndPos;
 	}
 
-	if (backpressure_lag() > 0)
+	if (delay_backend_us != NULL && delay_backend_us() > 0)
 	{
 		InterruptPending = true;
 	}
