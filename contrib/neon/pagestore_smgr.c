@@ -66,6 +66,7 @@
 #include "pgstat.h"
 #include "catalog/pg_tablespace_d.h"
 #include "postmaster/autovacuum.h"
+#include "utils/timestamp.h"
 
 /*
  * If DEBUG_COMPARE_LOCAL is defined, we pass through all the SMGR API
@@ -139,11 +140,31 @@ int prefetch_response_index; /* index of first expected prefetch response in cir
 int n_prefetch_hits;
 int n_prefetch_misses;
 
+TimestampTz totalPrefetchWaitTime;
+TimestampTz totalPrefetchConsumeTime;
+TimestampTz maxPrefetchWaitTime;
+TimestampTz maxPrefetchConsumeTime;
+TimestampTz totalGetPageTime;
+TimestampTz maxGetPageTime;
+size_t nGetPages;
+size_t nPrefetches;
+size_t nPrefetchConsumes;
+size_t nWastePrefetches;
+size_t nDeterioratedPrefetches;
+
 static void
 consume_prefetch_responses(void)
 {
+	TimestampTz start, stop;
 	for (int i = 0; i < n_prefetch_responses; i++) {
-		ZenithResponse*	resp = page_server->receive();
+		ZenithResponse*	resp;
+		start = GetCurrentTimestamp();
+		resp = page_server->receive();
+		stop = GetCurrentTimestamp();
+		totalPrefetchConsumeTime += stop - start;
+		if (stop - start > maxPrefetchConsumeTime)
+			maxPrefetchConsumeTime = stop - start;
+		nPrefetchConsumes += 1;
 		pfree(resp);
 	}
 	n_prefetch_responses = 0;
@@ -991,7 +1012,7 @@ zenith_close(SMgrRelation reln, ForkNumber forknum)
 
 
 /*
- *	zenith_reset_prefetch() -- reoe all previously rgistered prefeth requests
+ *	zenith_reset_prefetch() -- reoe all previously rgistered prefetch requests
  */
 void
 zenith_reset_prefetch(SMgrRelation reln)
@@ -1024,17 +1045,6 @@ zenith_prefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 
 	if (n_prefetch_requests < MAX_PREFETCH_REQUESTS)
 	{
-		/* Check if his block was already requested for prefetch */
-		for (int i = 0; i < n_prefetch_responses; i++)
-		{
-			int j = (i + prefetch_response_index) % MAX_PREFETCH_REQUESTS;
-			if (RelFileNodeEquals(prefetch_responses[j].tag.rnode, reln->smgr_rnode.node) &&
-				prefetch_responses[j].tag.forkNum == forknum &&
-				prefetch_responses[j].tag.blockNum == blocknum)
-			{
-				return true;
-			}
-		}
 		prefetch_requests[n_prefetch_requests].rnode = reln->smgr_rnode.node;
 		prefetch_requests[n_prefetch_requests].forkNum = forknum;
 		prefetch_requests[n_prefetch_requests].blockNum = blocknum;
@@ -1082,6 +1092,7 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 #endif
 }
 
+
 /*
  * While function is defined in the zenith extension it's used within neon_test_utils directly.
  * To avoid breaking tests in the runtime please keep function signature in sync.
@@ -1089,6 +1100,7 @@ zenith_writeback(SMgrRelation reln, ForkNumber forknum,
 void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno,
 			XLogRecPtr request_lsn, bool request_latest, char *buffer)
 {
+	TimestampTz start, stop;
 	ZenithResponse *resp;
 	int			    i;
 
@@ -1101,13 +1113,22 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 	for (i = 0; i < n_prefetch_responses; i++)
 	{
 		int j = (i + prefetch_response_index) % MAX_PREFETCH_REQUESTS;
+
+		start = GetCurrentTimestamp();
 		resp = page_server->receive();
+		stop = GetCurrentTimestamp();
+		totalPrefetchWaitTime += stop - start;
+		if (stop - start > maxPrefetchWaitTime)
+			maxPrefetchWaitTime += stop - start;
+		nPrefetches += 1;
+
 		if (resp->tag == T_ZenithGetPageResponse &&
 			RelFileNodeEquals(prefetch_responses[j].tag.rnode, rnode) &&
 			prefetch_responses[j].tag.forkNum == forkNum &&
 			prefetch_responses[j].tag.blockNum == blkno)
 		{
 			char* page = ((ZenithGetPageResponse *) resp)->page;
+
 			/*
 			 * Check if prefetched page is still relevant.
 			 * If it is updated by some other backend, then it should not
@@ -1128,7 +1149,7 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 					n_prefetch_requests >= seqscan_prefetch_buffers/2)
 				{
 					/* To prevent backend from waiting first response from pageserver,
-					 * we send next portion of prefeth requests to let pageserver
+					 * we send next portion of prefetch requests to let pageserver
 					 * load them in parallel with us.
 					 */
 					ZenithGetPageRequest request = {
@@ -1136,23 +1157,43 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 						.req.latest = request_latest,
 						.req.lsn = request_lsn
 					};
-					int resp_index = prefetch_response_index + n_prefetch_responses;
+					int dst = (prefetch_response_index + n_prefetch_responses) % MAX_PREFETCH_REQUESTS;
+					int more_prefetches = 0;
 					for (i = 0; i < n_prefetch_requests; i++)
 					{
-						int j = (resp_index + i) % MAX_PREFETCH_REQUESTS;
-						request.rnode = prefetch_requests[i].rnode;
-						request.forknum = prefetch_requests[i].forkNum;
-						request.blkno = prefetch_requests[i].blockNum;
-						prefetch_responses[j].tag = prefetch_requests[i];
-						prefetch_responses[j].lsn = request_lsn;
-						page_server->send((ZenithRequest *) &request);
+						/* First check if this block was already requested for prefetch */
+						for (j = 0; j < n_prefetch_responses; j++)
+						{
+							int src = (j + prefetch_response_index) % MAX_PREFETCH_REQUESTS;
+							if (BUFFERTAGS_EQUAL(prefetch_responses[src].tag, prefetch_requests[i]))
+								break;
+						}
+						if (j == n_prefetch_responses)
+						{
+							request.rnode = prefetch_requests[i].rnode;
+							request.forknum = prefetch_requests[i].forkNum;
+							request.blkno = prefetch_requests[i].blockNum;
+							prefetch_responses[dst].tag = prefetch_requests[i];
+							prefetch_responses[dst].lsn = request_lsn;
+							page_server->send((ZenithRequest *) &request);
+							dst = (dst + 1) % MAX_PREFETCH_REQUESTS;
+							more_prefetches += 1;
+						}
 					}
-					n_prefetch_responses += n_prefetch_requests;
+					n_prefetch_responses += more_prefetches;
 					page_server->flush();
 				}
 				n_prefetch_requests = 0;
 				return;
 			}
+			else
+			{
+				nDeterioratedPrefetches += 1;
+			}
+		}
+		else
+		{
+			nWastePrefetches += 1;
 		}
 		pfree(resp);
 	}
@@ -1184,12 +1225,19 @@ void zenith_read_at_lsn(RelFileNode rnode, ForkNumber forkNum, BlockNumber blkno
 			page_server->flush();
 			n_prefetch_responses = n_prefetch_requests;
 			n_prefetch_requests = 0;
+			start = GetCurrentTimestamp();
 			resp = page_server->receive();
 		}
 		else
 		{
+			start = GetCurrentTimestamp();
 			resp = page_server->request((ZenithRequest *) &request);
 		}
+		stop = GetCurrentTimestamp();
+		totalGetPageTime += stop - start;
+		if (stop - start > maxGetPageTime)
+			maxGetPageTime += stop - start;
+		nGetPages += 1;
 	}
 	switch (resp->tag)
 	{
