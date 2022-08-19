@@ -1,12 +1,13 @@
 # Allow specifiyng different compute-tools tag and image repo, so we are
 # able to use different images
-ARG COMPUTE_TOOLS_TAG=latest
-ARG IMAGE_REPO=369495373322.dkr.ecr.eu-central-1.amazonaws.com
+ARG REPOSITORY=369495373322.dkr.ecr.eu-central-1.amazonaws.com
+ARG IMAGE=compute-tools
+ARG TAG=latest
 
 #
 # Image with pre-built tools
 #
-FROM $IMAGE_REPO/compute-tools:$COMPUTE_TOOLS_TAG AS compute-deps
+FROM $REPOSITORY/$IMAGE:$TAG AS compute-deps
 # Only to get ready compute_ctl binary as deppendency
 
 #
