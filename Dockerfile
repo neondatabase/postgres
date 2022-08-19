@@ -1,11 +1,13 @@
-# Allow specifiyng the different compute-tools tag, so we were able to always use
-# the locally built image.
-ARG COMPUTE_TOOLS_TAG=latest
+# Allow specifiyng different compute-tools tag and image repo, so we are
+# able to use different images
+ARG REPOSITORY=369495373322.dkr.ecr.eu-central-1.amazonaws.com
+ARG IMAGE=compute-tools
+ARG TAG=latest
 
 #
 # Image with pre-built tools
 #
-FROM neondatabase/compute-tools:$COMPUTE_TOOLS_TAG AS compute-deps
+FROM $REPOSITORY/$IMAGE:$TAG AS compute-deps
 # Only to get ready compute_ctl binary as deppendency
 
 #
