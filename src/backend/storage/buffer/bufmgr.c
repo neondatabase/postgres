@@ -806,8 +806,7 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	bool		hit;
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId,
-							 permanent ? RELPERSISTENCE_PERMANENT :
-							 RELPERSISTENCE_UNLOGGED);
+							 	 RELPERSISTENCE_PERMANENT);
 
 	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
 							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,

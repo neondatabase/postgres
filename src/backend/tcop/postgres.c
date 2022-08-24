@@ -3426,15 +3426,20 @@ ProcessInterrupts(void)
 	{
 		ProcessInterrupts_pg();
 
-		// Suspend writers until replicas catch up
-		lag = backpressure_lag();
-		if (lag <= 0)
+		if (delay_backend_us != NULL)
+		{
+			// Suspend writers until replicas catch up
+			lag = delay_backend_us();
+			if (lag <= 0)
+				break;
+
+			set_ps_display("backpressure throttling");
+
+			elog(DEBUG2, "backpressure throttling: lag %lu", lag);
+			pg_usleep(BACK_PRESSURE_DELAY);
+		}
+		else
 			break;
-
-		set_ps_display("backpressure throttling");
-
-		elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-		pg_usleep(BACK_PRESSURE_DELAY);
 	}
 }
 
