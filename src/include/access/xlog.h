@@ -102,7 +102,6 @@ extern PGDLLIMPORT int wal_level;
 #define XLogArchivingAlways() \
 	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
 
-
 /*
  * Is WAL-logging necessary for archival or log-shipping, or can we skip
  * WAL-logging if we fsync() the data before committing instead?
@@ -217,7 +216,6 @@ extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 extern void xlog_redo(XLogReaderState *record);
 extern void xlog_desc(StringInfo buf, XLogReaderState *record);
 extern const char *xlog_identify(uint8 info);
-extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli);
 

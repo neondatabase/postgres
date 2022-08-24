@@ -72,6 +72,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
+#include "access/xlogrecovery.h"
 #include "catalog/pg_class.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"

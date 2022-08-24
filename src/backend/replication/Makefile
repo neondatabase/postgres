@@ -23,8 +23,7 @@ OBJS = \
 	walreceiver.o \
 	walreceiverfuncs.o \
 	walsender.o \
-	walproposer.o \
-	walproposer_utils.o
+	walpropcompat.o
 
 SUBDIRS = logical
 
