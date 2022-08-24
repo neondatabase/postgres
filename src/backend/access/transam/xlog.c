@@ -3314,13 +3314,16 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 
 	XLogFilePath(path, tli, *segno, wal_segment_size);
 
-	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	if (!XLogCtl->InstallXLogFileSegmentActive)
+	if (XLogCtl)
 	{
-		LWLockRelease(ControlFileLock);
-		return false;
+		/* Neon: in case of sync-safekeepers shared memory is not inialized */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+		if (!XLogCtl->InstallXLogFileSegmentActive)
+		{
+			LWLockRelease(ControlFileLock);
+			return false;
+		}
 	}
-
 	if (!find_free)
 	{
 		/* Force installation: get rid of any pre-existing segment file */
@@ -3334,7 +3337,8 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 			if ((*segno) >= max_segno)
 			{
 				/* Failed to find a free slot within specified range */
-				LWLockRelease(ControlFileLock);
+				if (XLogCtl)
+					LWLockRelease(ControlFileLock);
 				return false;
 			}
 			(*segno)++;
@@ -3348,12 +3352,14 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 	 */
 	if (durable_rename_excl(tmppath, path, LOG) != 0)
 	{
-		LWLockRelease(ControlFileLock);
+		if (XLogCtl)
+			LWLockRelease(ControlFileLock);
 		/* durable_rename_excl already emitted log message */
 		return false;
 	}
 
-	LWLockRelease(ControlFileLock);
+	if (XLogCtl)
+		LWLockRelease(ControlFileLock);
 
 	return true;
 }
