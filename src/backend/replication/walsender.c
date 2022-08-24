@@ -75,7 +75,7 @@
 #include "replication/slot.h"
 #include "replication/snapbuild.h"
 #include "replication/syncrep.h"
-#include "replication/walproposer.h"
+#include "replication/walpropshim.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -131,6 +131,11 @@ bool		log_replication_commands = false;
  * State for WalSndWakeupRequest
  */
 bool		wake_wal_senders = false;
+
+/*
+ * Backpressure hook, detecting how much we should delay.
+ */
+uint64 (*delay_backend_us)(void) = NULL;
 
 /*
  * xlogreader used for replication.  Note that a WAL sender doing physical
@@ -238,11 +243,10 @@ static void IdentifySystem(void);
 static void ReadReplicationSlot(ReadReplicationSlotCmd *cmd);
 static void CreateReplicationSlot(CreateReplicationSlotCmd *cmd);
 static void DropReplicationSlot(DropReplicationSlotCmd *cmd);
-void StartReplication(StartReplicationCmd *cmd);
+static void StartReplication(StartReplicationCmd *cmd);
 static void StartLogicalReplication(StartReplicationCmd *cmd);
 static void ProcessStandbyMessage(void);
 static void ProcessStandbyReplyMessage(void);
-static void ProcessReplicationFeedbackMessage(void);
 static void ProcessStandbyHSFeedbackMessage(void);
 static void ProcessRepliesIfAny(void);
 static void ProcessPendingWrites(void);
@@ -256,8 +260,6 @@ static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, Transac
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 								 bool skipped_xact);
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
-static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
-static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
@@ -684,7 +686,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
  * At the moment, this never returns, but an ereport(ERROR) will take us back
  * to the main loop.
  */
-void
+static void
 StartReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
@@ -819,14 +821,11 @@ StartReplication(StartReplicationCmd *cmd)
 		WalSndSetState(WALSNDSTATE_CATCHUP);
 
 		/* Send a CopyBothResponse message, and start streaming */
-		if (!am_wal_proposer)
-		{
-			pq_beginmessage(&buf, 'W');
-			pq_sendbyte(&buf, 0);
-			pq_sendint16(&buf, 0);
-			pq_endmessage(&buf);
-			pq_flush();
-		}
+		pq_beginmessage(&buf, 'W');
+		pq_sendbyte(&buf, 0);
+		pq_sendint16(&buf, 0);
+		pq_endmessage(&buf);
+		pq_flush();
 
 		/*
 		 * Don't allow a request to stream from a future point in WAL that
@@ -1466,7 +1465,7 @@ ProcessPendingWrites(void)
 		}
 
 		/* Try to flush pending output to the client */
-		if (!am_wal_proposer && pq_flush_if_writable() != 0)
+		if (pq_flush_if_writable() != 0)
 			WalSndShutdown();
 	}
 
@@ -1909,9 +1908,6 @@ ProcessRepliesIfAny(void)
 	int			r;
 	bool		received = false;
 
-	if (am_wal_proposer)
-		return;
-
 	last_processing = GetCurrentTimestamp();
 
 	/*
@@ -2037,10 +2033,6 @@ ProcessStandbyMessage(void)
 			ProcessStandbyHSFeedbackMessage();
 			break;
 
-		case 'z':
-			ProcessReplicationFeedbackMessage();
-			break;
-
 		default:
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -2111,28 +2103,6 @@ ProcessStandbyReplyMessage(void)
 					LSN_FORMAT_ARGS(flushPtr));
 	elog(LOG, "ProcessStandbyReplyMessage: applylsn %X/%X",
 					LSN_FORMAT_ARGS(applyPtr));
-}
-
-// This message is a neon extension of postgres replication protocol
-static void
-ProcessReplicationFeedbackMessage(void)
-{
-	ReplicationFeedback rf;
-
-	// consume message length
-	pq_getmsgint64(&reply_message);
-
-	ParseReplicationFeedbackMessage(&reply_message, &rf);
-
-	replication_feedback_set(&rf);
-
-	SetZenithCurrentClusterSize(rf.currentClusterSize);
-
-	ProcessStandbyReply(rf.ps_writelsn,
-						rf.ps_flushlsn,
-						rf.ps_applylsn,
-						rf.ps_replytime,
-						false);
 }
 
 void
@@ -2217,13 +2187,6 @@ ProcessStandbyReply(XLogRecPtr	writePtr,
 
 	if (!am_cascading_walsender)
 		SyncRepReleaseWaiters();
-
-	/*
-	 * walproposer use trunclateLsn instead of flushPtr for confirmed
-	 * received location, so we shouldn't update restart_lsn here.
-	 */
-	if (am_wal_proposer)
-		return;
 
 	/*
 	 * Advance our local xmin horizon when the client confirmed a flush.
@@ -2553,19 +2516,6 @@ WalSndLoop(WalSndSendDataCallback send_data)
 
 		/* Check for input from the client */
 		ProcessRepliesIfAny();
-
-		if (am_wal_proposer)
-		{
-			send_data();
-			if (WalSndCaughtUp)
-			{
-				if (MyWalSnd->state == WALSNDSTATE_CATCHUP)
-					WalSndSetState(WALSNDSTATE_STREAMING);
-				WalProposerPoll();
-				WalSndCaughtUp = false;
-			}
-			continue;
-		}
 
 		/*
 		 * If we have received CopyDone from the client, sent CopyDone
@@ -3024,83 +2974,77 @@ XLogSendPhysical(void)
 	nbytes = endptr - startptr;
 	Assert(nbytes <= MAX_SEND_SIZE);
 
-	if (am_wal_proposer)
-	{
-		WalProposerBroadcast(startptr, endptr);
-	}
+	/*
+	* OK to read and send the slice.
+	*/
+	if (output_message.data)
+		resetStringInfo(&output_message);
 	else
+		initStringInfo(&output_message);
+
+	pq_sendbyte(&output_message, 'w');
+	pq_sendint64(&output_message, startptr);	/* dataStart */
+	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
+	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
+
+	/*
+	* Read the log directly into the output buffer to avoid extra memcpy
+	* calls.
+	*/
+	enlargeStringInfo(&output_message, nbytes);
+
+retry:
+	if (!WALRead(xlogreader,
+				&output_message.data[output_message.len],
+				startptr,
+				nbytes,
+				xlogreader->seg.ws_tli,	/* Pass the current TLI because
+											* only WalSndSegmentOpen controls
+											* whether new TLI is needed. */
+				&errinfo))
+		WALReadRaiseError(&errinfo);
+
+	/* See logical_read_xlog_page(). */
+	XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
+	CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
+
+	/*
+	* During recovery, the currently-open WAL file might be replaced with the
+	* file of the same name retrieved from archive. So we always need to
+	* check what we read was valid after reading into the buffer. If it's
+	* invalid, we try to open and read the file again.
+	*/
+	if (am_cascading_walsender)
 	{
-		/*
-		* OK to read and send the slice.
-		*/
-		if (output_message.data)
-			resetStringInfo(&output_message);
-		else
-			initStringInfo(&output_message);
+		WalSnd	   *walsnd = MyWalSnd;
+		bool		reload;
 
-		pq_sendbyte(&output_message, 'w');
-		pq_sendint64(&output_message, startptr);	/* dataStart */
-		pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
-		pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
+		SpinLockAcquire(&walsnd->mutex);
+		reload = walsnd->needreload;
+		walsnd->needreload = false;
+		SpinLockRelease(&walsnd->mutex);
 
-		/*
-		* Read the log directly into the output buffer to avoid extra memcpy
-		* calls.
-		*/
-		enlargeStringInfo(&output_message, nbytes);
-
-	retry:
-		if (!WALRead(xlogreader,
-					&output_message.data[output_message.len],
-					startptr,
-					nbytes,
-					xlogreader->seg.ws_tli,	/* Pass the current TLI because
-												* only WalSndSegmentOpen controls
-												* whether new TLI is needed. */
-					&errinfo))
-			WALReadRaiseError(&errinfo);
-
-		/* See logical_read_xlog_page(). */
-		XLByteToSeg(startptr, segno, xlogreader->segcxt.ws_segsize);
-		CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
-
-		/*
-		* During recovery, the currently-open WAL file might be replaced with the
-		* file of the same name retrieved from archive. So we always need to
-		* check what we read was valid after reading into the buffer. If it's
-		* invalid, we try to open and read the file again.
-		*/
-		if (am_cascading_walsender)
+		if (reload && xlogreader->seg.ws_file >= 0)
 		{
-			WalSnd	   *walsnd = MyWalSnd;
-			bool		reload;
+			wal_segment_close(xlogreader);
 
-			SpinLockAcquire(&walsnd->mutex);
-			reload = walsnd->needreload;
-			walsnd->needreload = false;
-			SpinLockRelease(&walsnd->mutex);
-
-			if (reload && xlogreader->seg.ws_file >= 0)
-			{
-				wal_segment_close(xlogreader);
-
-				goto retry;
-			}
+			goto retry;
 		}
-
-		output_message.len += nbytes;
-		output_message.data[output_message.len] = '\0';
-
-		/*
-		 * Fill the send timestamp last, so that it is taken as late as possible.
-		 */
-		resetStringInfo(&tmpbuf);
-		pq_sendint64(&tmpbuf, GetCurrentTimestamp());
-		memcpy(&output_message.data[1 + sizeof(int64) + sizeof(int64)],
-			   tmpbuf.data, sizeof(int64));
-
-		pq_putmessage_noblock('d', output_message.data, output_message.len);
 	}
+
+	output_message.len += nbytes;
+	output_message.data[output_message.len] = '\0';
+
+	/*
+		* Fill the send timestamp last, so that it is taken as late as possible.
+		*/
+	resetStringInfo(&tmpbuf);
+	pq_sendint64(&tmpbuf, GetCurrentTimestamp());
+	memcpy(&output_message.data[1 + sizeof(int64) + sizeof(int64)],
+			tmpbuf.data, sizeof(int64));
+
+	pq_putmessage_noblock('d', output_message.data, output_message.len);
+
 	sentPtr = endptr;
 
 	/* Update shared memory status */
@@ -3793,7 +3737,7 @@ WalSndKeepaliveIfNecessary(void)
  * eventually reported to have been written, flushed and applied by the
  * standby in a reply message.
  */
-static void
+void
 LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
 {
 	bool		buffer_full;
@@ -3858,7 +3802,7 @@ LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
  * Return -1 if no new sample data is available, and otherwise the elapsed
  * time in microseconds.
  */
-static TimeOffset
+TimeOffset
 LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 {
 	TimestampTz time = 0;
@@ -3954,80 +3898,4 @@ LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 	/* Return the elapsed time since local flush time in microseconds. */
 	Assert(time != 0);
 	return now - time;
-}
-
-/*
- * Get minimal write and flush LSN among all live replicas
- */
-void
-GetMinReplicaLsn(XLogRecPtr* write_lsn, XLogRecPtr* flush_lsn, XLogRecPtr* apply_lsn)
-{
-	XLogRecPtr min_write_lsn = UnknownXLogRecPtr;
-	XLogRecPtr min_flush_lsn = UnknownXLogRecPtr;
-	XLogRecPtr min_apply_lsn = UnknownXLogRecPtr;
-	for (int i = 0; i < max_wal_senders; i++)
-	{
-		WalSnd	   *walsnd = &WalSndCtl->walsnds[i];
-		if (walsnd->state == WALSNDSTATE_STREAMING)
-		{
-			/*
-			 * We assume that reads from walsnd->write/flush are atomic
-			 * on all modern x64 systems, as these fields are uint64 and
-			 * should be 8-bytes aligned.
-			 */
-			XLogRecPtr written = walsnd->write;
-			XLogRecPtr flushed = walsnd->flush;
-			XLogRecPtr applied = walsnd->apply;
-			min_write_lsn = Min(written, min_write_lsn);
-			min_flush_lsn = Min(flushed, min_flush_lsn);
-			min_apply_lsn = Min(applied, min_apply_lsn);
-		}
-	}
-	*write_lsn = min_write_lsn;
-	*flush_lsn = min_flush_lsn;
-	*apply_lsn = min_apply_lsn;
-}
-
-// Check if we need to suspend inserts because of lagging replication.
-uint64
-backpressure_lag(void)
-{
-	if (max_replication_apply_lag > 0 || max_replication_flush_lag > 0 || max_replication_write_lag > 0)
-	{
-		XLogRecPtr writePtr;
-		XLogRecPtr flushPtr;
-		XLogRecPtr applyPtr;
-		XLogRecPtr myFlushLsn = GetFlushRecPtr(NULL);
-
-		replication_feedback_get_lsns(&writePtr, &flushPtr, &applyPtr);
-		#define MB ((XLogRecPtr)1024*1024)
-
-		elog(DEBUG2, "current flushLsn %X/%X ReplicationFeedback: write %X/%X flush %X/%X apply %X/%X",
-			LSN_FORMAT_ARGS(myFlushLsn),
-			LSN_FORMAT_ARGS(writePtr),
-			LSN_FORMAT_ARGS(flushPtr),
-			LSN_FORMAT_ARGS(applyPtr));
-
-		if ((writePtr != UnknownXLogRecPtr
-			&& max_replication_write_lag > 0
-			&& myFlushLsn > writePtr + max_replication_write_lag*MB))
-		{
-			return (myFlushLsn - writePtr - max_replication_write_lag*MB);
-		}
-
-		if ((flushPtr != UnknownXLogRecPtr
-			&& max_replication_flush_lag > 0
-			&& myFlushLsn > flushPtr + max_replication_flush_lag*MB))
-		{
-			return (myFlushLsn - flushPtr - max_replication_flush_lag*MB);
-		}
-
-		if ((applyPtr != UnknownXLogRecPtr
-			&& max_replication_apply_lag > 0
-			&& myFlushLsn > applyPtr + max_replication_apply_lag*MB))
-		{
-			return (myFlushLsn - applyPtr - max_replication_apply_lag*MB);
-		}
-	}
-	return 0;
 }
