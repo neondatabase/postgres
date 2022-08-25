@@ -26,8 +26,6 @@ SUBDIRS = \
 		isn		\
 		lo		\
 		ltree		\
-		neon	\
-		neon_test_utils	\
 		oid2name	\
 		old_snapshot	\
 		pageinspect	\
