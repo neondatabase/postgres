@@ -88,6 +88,9 @@ extern uint32 bootstrap_data_checksum_version;
 #define RECOVERY_COMMAND_FILE	"recovery.conf"
 #define RECOVERY_COMMAND_DONE	"recovery.done"
 
+/* Size of last written page LSN cache. Should not be large because sequential search is used. */
+#define LAST_WRITTEN_CACHE_SIZE 4
+
 /* User-settable parameters */
 int			max_wal_size_mb = 1024; /* 1 GB */
 int			min_wal_size_mb = 80;	/* 80 MB */
@@ -749,7 +752,15 @@ typedef struct XLogCtlData
 	 * XLOG_FPW_CHANGE record that instructs full_page_writes is disabled.
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
-	XLogRecPtr  lastWrittenPageLSN;
+
+	/*
+	 * Cache of last written page LSN.
+	 * We store this value for up to LAST_WRITTEN_CACHE_SIZE relations + maximum for all other relations.
+	 */
+	XLogRecPtr	lastWrittenPageNonCacheLsn;
+	XLogRecPtr	lastWrittenPageCacheLsn[LAST_WRITTEN_CACHE_SIZE];
+	Oid			lastWrittenPageCacheOid[LAST_WRITTEN_CACHE_SIZE];
+	size_t		lastWrittenPageCacheClock; /* Pointer of the victim element for clock replacement algorithm */
 
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
@@ -761,6 +772,7 @@ typedef struct XLogCtlData
 	uint64 		zenithCurrentClusterSize;
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
+
 
 static XLogCtlData *XLogCtl = NULL;
 
@@ -8098,8 +8110,13 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->lastWrittenPageLSN = EndOfLog;
-
+	XLogCtl->lastWrittenPageLsn = EndOfLog;
+	for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
+	{
+		XLogCtl->lastWrittenPageCacheLsn[i] = InvalidXLogRecPtr;
+		XLogCtl->lastWrittenPageCacheOid[i] = InvalidOid;
+	}
+	XLogCtl->lastWrittenPageCacheClock = 0;
 	LocalSetXLogInsertAllowed();
 
 	/* If necessary, write overwrite-contrecord before doing anything else */
@@ -8870,28 +8887,84 @@ GetInsertRecPtr(void)
 }
 
 /*
- * GetLastWrittenPageLSN -- Returns maximal LSN of written page
+ * GetLastWrittenPageLSN -- Returns maximal LSN of written page.
+ * It returns either cached last written LSN of particular relation,
+ * either global maximum of last written LSNs among all relations.
  */
 XLogRecPtr
-GetLastWrittenPageLSN(void)
+GetLastWrittenPageLSN(Oid rnode)
 {
 	XLogRecPtr lsn;
 	SpinLockAcquire(&XLogCtl->info_lck);
-	lsn = XLogCtl->lastWrittenPageLSN;
+	lsn = XLogCtl->lastWrittenPageLsn;
+	if (rnode != InvalidOid)
+	{
+		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
+		{
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
+			{
+				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
+				break;
+			}
+		}
+	}
+	else
+	{
+		/* Find maximum of all cached LSNs */
+		for (int i = 0; i < LAST_WRITTEN_CACHE_SIZE; i++)
+		{
+			if (XLogCtl->lastWrittenPageCacheLsn[i] > lsn)
+				lsn = XLogCtl->lastWrittenPageCacheLsn[i];
+		}
+	}
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return lsn;
 }
 
 /*
- * SetLastWrittenPageLSN -- Set maximal LSN of written page
+ * SetLastWrittenPageLSN -- Set maximal LSN of written page.
+ * We maintain small shared cache for last written LSN of least recently updated
+ * pages. This cache allows to keep global lastWrittenPageLsn unchanged and
+ * so avoid long wait for LSN for read requests to other relations.
  */
 void
-SetLastWrittenPageLSN(XLogRecPtr lsn)
+SetLastWrittenPageLSN(XLogRecPtr lsn, Oid rnode)
 {
+	if (lsn == InvalidXLogRecPtr)
+		return;
+
 	SpinLockAcquire(&XLogCtl->info_lck);
-	if (lsn > XLogCtl->lastWrittenPageLSN)
-		XLogCtl->lastWrittenPageLSN = lsn;
+	if (rnode == InvalidOid)
+	{
+		if (lsn > XLogCtl->lastWrittenPageLsn)
+			XLogCtl->lastWrittenPageLsn = lsn;
+	}
+	else
+	{
+		int i = LAST_WRITTEN_CACHE_SIZE;
+		while (--i >= 0)
+		{
+			if (rnode == XLogCtl->lastWrittenPageCacheOid[i])
+			{
+				if (lsn > XLogCtl->lastWrittenPageCacheLsn[i])
+				{
+					XLogCtl->lastWrittenPageCacheLsn[i] = lsn;
+				}
+				break;
+			}
+		}
+		if (i < 0)
+		{
+			int victim = ++XLogCtl->lastWrittenPageCacheClock % LAST_WRITTEN_CACHE_SIZE;
+			if (XLogCtl->lastWrittenPageCacheLsn[victim] > XLogCtl->lastWrittenPageLsn)
+			{
+				XLogCtl->lastWrittenPageLsn = XLogCtl->lastWrittenPageCacheLsn[victim];
+			}
+			XLogCtl->lastWrittenPageCacheOid[victim] = rnode;
+			XLogCtl->lastWrittenPageCacheLsn[victim] = lsn;
+		}
+ 	}
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 

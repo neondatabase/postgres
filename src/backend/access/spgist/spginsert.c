@@ -144,7 +144,7 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 						  0, RelationGetNumberOfBlocks(index),
 						  true);
 	}
-	SetLastWrittenPageLSN(XactLastRecEnd);
+	SetLastWrittenPageLSN(XactLastRecEnd, index->rd_smgr->smgr_rnode.node.relNode);
 
 	smgr_end_unlogged_build(index->rd_smgr);
 

@@ -351,8 +351,8 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
-extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
-extern XLogRecPtr GetLastWrittenPageLSN(void);
+extern void SetLastWrittenPageLSN(XLogRecPtr lsn, Oid relfilenode);
+extern XLogRecPtr GetLastWrittenPageLSN(Oid relfilenode);
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
