@@ -23,14 +23,14 @@ void		_PG_init(void);
 /* GUCs */
 char	   *remotexact_connstring;
 
-typedef struct ReadSetRelationKey
+typedef struct CollectedRelationKey
 {
 	Oid			relid;
-} ReadSetRelationKey;
+} CollectedRelationKey;
 
-typedef struct ReadSetRelation
+typedef struct CollectedRelation
 {
-	ReadSetRelationKey key;
+	CollectedRelationKey key;
 
 	bool		is_index;
 	int			csn;
@@ -38,14 +38,14 @@ typedef struct ReadSetRelation
 
 	StringInfoData pages;
 	StringInfoData tuples;
-} ReadSetRelation;
+} CollectedRelation;
 
 typedef struct RWSetCollectionBuffer
 {
 	MemoryContext context;
 
 	RWSetHeader header;
-	HTAB	   *read_relations;
+	HTAB	   *collected_relations;
 	StringInfoData writes;
 } RWSetCollectionBuffer;
 
@@ -65,7 +65,7 @@ static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
 static void rx_clear_rwset_collection_buffer(void);
 static void rx_send_rwset_and_wait(void);
 
-static ReadSetRelation *get_read_relation(Oid relid);
+static CollectedRelation *get_collected_relation(Oid relid);
 static bool connect_to_txn_server(void);
 
 static void
@@ -80,7 +80,7 @@ init_rwset_collection_buffer(Oid dbid)
 
 		if (old_dbid != dbid)
 			ereport(ERROR,
-					errmsg("Remotexact can access only one database"),
+					errmsg("[remotexact] Remotexact can access only one database"),
 					errdetail("old dbid: %u, new dbid: %u", old_dbid, dbid));
 		return;
 	}
@@ -95,9 +95,9 @@ init_rwset_collection_buffer(Oid dbid)
 	rwset_collection_buffer->header.region_set = 0;
 
 	hash_ctl.hcxt = rwset_collection_buffer->context;
-	hash_ctl.keysize = sizeof(ReadSetRelationKey);
-	hash_ctl.entrysize = sizeof(ReadSetRelation);
-	rwset_collection_buffer->read_relations = hash_create("read relations",
+	hash_ctl.keysize = sizeof(CollectedRelationKey);
+	hash_ctl.entrysize = sizeof(CollectedRelation);
+	rwset_collection_buffer->collected_relations = hash_create("collected relations",
 														  max_predicate_locks_per_xact,
 														  &hash_ctl,
 														  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
@@ -117,7 +117,7 @@ rx_collect_region(Relation relation)
 
 	if (region < 0 || region >= max_nregions)
 		ereport(ERROR,
-				errmsg("Region id is out of bound"),
+				errmsg("[remotexact] Region id is out of bound"),
 				errdetail("region id: %u, min: 0, max: %u", region, max_nregions));
 
 	(*region_set) |= UINT64CONST(1) << relation->rd_smgr->smgr_region;
@@ -126,30 +126,30 @@ rx_collect_region(Relation relation)
 static void
 rx_collect_relation(Oid dbid, Oid relid)
 {
-	ReadSetRelation *read_relation;
+	CollectedRelation *collected_relation;
 
 	init_rwset_collection_buffer(dbid);
 
-	read_relation = get_read_relation(relid);
-	read_relation->is_index = false;
+	collected_relation = get_collected_relation(relid);
+	collected_relation->is_index = false;
 
 	/* TODO(ctring): change this after CSN is introduced */
-	read_relation->csn = 1;
+	collected_relation->csn = 1;
 }
 
 static void
 rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 {
-	ReadSetRelation *read_relation;
+	CollectedRelation *collected_relation;
 	StringInfo	buf = NULL;
 
 	init_rwset_collection_buffer(dbid);
 
-	read_relation = get_read_relation(relid);
-	read_relation->is_index = true;
-	read_relation->nitems++;
+	collected_relation = get_collected_relation(relid);
+	collected_relation->is_index = true;
+	collected_relation->nitems++;
 
-	buf = &read_relation->pages;
+	buf = &collected_relation->pages;
 	pq_sendint32(buf, blkno);
 	pq_sendint32(buf, 1);		/* TODO(ctring): change this after CSN is
 								 * introduced */
@@ -158,16 +158,16 @@ rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 static void
 rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset)
 {
-	ReadSetRelation *read_relation;
+	CollectedRelation *collected_relation;
 	StringInfo	buf = NULL;
 
 	init_rwset_collection_buffer(dbid);
 
-	read_relation = get_read_relation(relid);
-	read_relation->is_index = false;
-	read_relation->nitems++;
+	collected_relation = get_collected_relation(relid);
+	collected_relation->is_index = false;
+	collected_relation->nitems++;
 
-	buf = &read_relation->tuples;
+	buf = &collected_relation->tuples;
 	pq_sendint32(buf, blkno);
 	pq_sendint16(buf, offset);
 }
@@ -244,7 +244,7 @@ rx_send_rwset_and_wait(void)
 {
 	RWSet	   *rwset;
 	RWSetHeader *header;
-	ReadSetRelation *read_relation;
+	CollectedRelation *collected_relation;
 	HASH_SEQ_STATUS status;
 	int			read_len = 0;
 	StringInfoData buf;
@@ -269,28 +269,28 @@ rx_send_rwset_and_wait(void)
 	pq_sendint32(&buf, 0);
 
 	/* Assemble the read set */
-	hash_seq_init(&status, rwset_collection_buffer->read_relations);
-	while ((read_relation = (ReadSetRelation *) hash_seq_search(&status)) != NULL)
+	hash_seq_init(&status, rwset_collection_buffer->collected_relations);
+	while ((collected_relation = (CollectedRelation *) hash_seq_search(&status)) != NULL)
 	{
 		StringInfo	items = NULL;
 
 		/* Accumulate the length of the buffer used by each relation */
 		read_len -= buf.len;
 
-		if (read_relation->is_index)
+		if (collected_relation->is_index)
 		{
 			pq_sendbyte(&buf, 'I');
-			pq_sendint32(&buf, read_relation->key.relid);
-			pq_sendint32(&buf, read_relation->nitems);
-			items = &read_relation->pages;
+			pq_sendint32(&buf, collected_relation->key.relid);
+			pq_sendint32(&buf, collected_relation->nitems);
+			items = &collected_relation->pages;
 		}
 		else
 		{
 			pq_sendbyte(&buf, 'T');
-			pq_sendint32(&buf, read_relation->key.relid);
-			pq_sendint32(&buf, read_relation->nitems);
-			pq_sendint32(&buf, read_relation->csn);
-			items = &read_relation->tuples;
+			pq_sendint32(&buf, collected_relation->key.relid);
+			pq_sendint32(&buf, collected_relation->nitems);
+			pq_sendint32(&buf, collected_relation->csn);
+			items = &collected_relation->tuples;
 		}
 
 		pq_sendbytes(&buf, items->data, items->len);
@@ -318,11 +318,11 @@ rx_send_rwset_and_wait(void)
 	RWSetFree(rwset);
 }
 
-static ReadSetRelation *
-get_read_relation(Oid relid)
+static CollectedRelation *
+get_collected_relation(Oid relid)
 {
-	ReadSetRelationKey key;
-	ReadSetRelation *relation;
+	CollectedRelationKey key;
+	CollectedRelation *relation;
 	bool		found;
 	MemoryContext old_context;
 
@@ -330,7 +330,7 @@ get_read_relation(Oid relid)
 
 	key.relid = relid;
 
-	relation = (ReadSetRelation *) hash_search(rwset_collection_buffer->read_relations,
+	relation = (CollectedRelation *) hash_search(rwset_collection_buffer->collected_relations,
 											   &key, HASH_ENTER, &found);
 	/* Initialize a new relation entry if not found */
 	if (!found)
