@@ -180,6 +180,8 @@ static ProcSignalReason RecoveryConflictReason;
 static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
 
+process_interrupts_callback_t ProcessInterruptsCallback;
+
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
  * ----------------------------------------------------------------
@@ -3152,14 +3154,15 @@ RecoveryConflictInterrupt(ProcSignalReason reason)
  * return; another interrupt could have arrived.  But we promise that
  * any pre-existing one will have been serviced.)
  */
-static void
-ProcessInterrupts_pg(void)
+void
+ProcessInterrupts(void)
 {
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 	InterruptPending = false;
 
+  Retry:
 	if (ProcDiePending)
 	{
 		ProcDiePending = false;
@@ -3404,42 +3407,12 @@ ProcessInterrupts_pg(void)
 
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
-}
 
-void
-ProcessInterrupts(void)
-{
-	uint64 lag;
-
-	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
-		return;
-
-	// Don't throttle read only transactions and wal sender
-	if (am_walsender || !TransactionIdIsValid(GetCurrentTransactionIdIfAny()))
+	/* Call registered callback if any */
+	if (ProcessInterruptsCallback)
 	{
-		ProcessInterrupts_pg();
-		return;
-	}
-
-	#define BACK_PRESSURE_DELAY 10000L // 0.01 sec
-	while(true)
-	{
-		ProcessInterrupts_pg();
-
-		if (delay_backend_us != NULL)
-		{
-			// Suspend writers until replicas catch up
-			lag = delay_backend_us();
-			if (lag <= 0)
-				break;
-
-			set_ps_display("backpressure throttling");
-
-			elog(DEBUG2, "backpressure throttling: lag %lu", lag);
-			pg_usleep(BACK_PRESSURE_DELAY);
-		}
-		else
-			break;
+		if (ProcessInterruptsCallback())
+			goto Retry;
 	}
 }
 
