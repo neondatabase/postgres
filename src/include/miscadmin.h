@@ -106,7 +106,7 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
 
-/* Callback called by ProcessInterrupts in the loop while it is retrnung true. */
+/* Callback called by ProcessInterrupts in the loop while it is returning true. */
 typedef bool (*process_interrupts_callback_t)(void);
 extern process_interrupts_callback_t ProcessInterruptsCallback;
 
