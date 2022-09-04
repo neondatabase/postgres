@@ -522,6 +522,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	if (!isRedo)
 	{
 		xl_dbase_create_wal_log_rec xlrec;
+		XLogRecPtr lsn;
 
 		START_CRIT_SECTION();
 
@@ -532,7 +533,9 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 		XLogRegisterData((char *) (&xlrec),
 						 sizeof(xl_dbase_create_wal_log_rec));
 
-		(void) XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
+		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
+
+		SetLastWrittenLSNForDatabase(lsn);
 
 		END_CRIT_SECTION();
 	}
@@ -613,6 +616,7 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 		/* Record the filesystem change in XLOG */
 		{
 			xl_dbase_create_file_copy_rec xlrec;
+			XLogRecPtr lsn;
 
 			xlrec.db_id = dst_dboid;
 			xlrec.tablespace_id = dsttablespace;
@@ -623,8 +627,10 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			(void) XLogInsert(RM_DBASE_ID,
+			lsn = XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+
+			SetLastWrittenLSNForDatabase(lsn);
 		}
 		pfree(srcpath);
 		pfree(dstpath);
@@ -2038,6 +2044,7 @@ movedb(const char *dbname, const char *tblspcname)
 		 */
 		{
 			xl_dbase_create_file_copy_rec xlrec;
+			XLogRecPtr lsn;
 
 			xlrec.db_id = db_id;
 			xlrec.tablespace_id = dst_tblspcoid;
@@ -2048,8 +2055,10 @@ movedb(const char *dbname, const char *tblspcname)
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			(void) XLogInsert(RM_DBASE_ID,
+			lsn = XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			// TODO: Do we really need to set the LSN here?
+			SetLastWrittenLSNForDatabase(lsn);
 		}
 
 		/*
@@ -3197,6 +3206,15 @@ dbase_redo(XLogReaderState *record)
 		 */
 		copydir(src_path, dst_path, false);
 
+		/*
+		 * Make sure any future requests to the page server see the new
+		 * database.
+		 */
+		{
+			XLogRecPtr	lsn = record->EndRecPtr;
+			SetLastWrittenLSNForDatabase(lsn);
+		}
+
 		pfree(src_path);
 		pfree(dst_path);
 	}
@@ -3218,6 +3236,14 @@ dbase_redo(XLogReaderState *record)
 		CreateDirAndVersionFile(dbpath, xlrec->db_id, xlrec->tablespace_id,
 								true);
 		pfree(dbpath);
+		/*
+		 * Make sure any future requests to the page server see the new
+		 * database.
+		 */
+		{
+			XLogRecPtr	lsn = record->EndRecPtr;
+			SetLastWrittenLSNForDatabase(lsn);
+		}
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
