@@ -26,10 +26,16 @@
 #define SYNC_METHOD_OPEN_DSYNC	4	/* for O_DSYNC */
 extern PGDLLIMPORT int sync_method;
 
+
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
 extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
 
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
+
+/*
+ * Pseudo block number used to associate LSN with relation metadata (relation size)
+ */
+#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
 
 extern bool			ZenithRecoveryRequested;
 extern XLogRecPtr	zenithLastRec;
@@ -58,6 +64,8 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
+extern int  lastWrittenLsnCacheSize;
+
 
 /* Archive modes */
 typedef enum ArchiveMode
@@ -250,8 +258,11 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 
 /* neon specifics */
 
-extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
-extern XLogRecPtr GetLastWrittenPageLSN(void);
+extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber till);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
