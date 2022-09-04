@@ -32,6 +32,11 @@ extern int	sync_method;
 extern PGDLLIMPORT TimeLineID ThisTimeLineID;	/* current TLI */
 
 /*
+ * Pseudo block number used to associate LSN with relation metadata (relation size)
+ */
+#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
+
+/*
  * Prior to 8.4, all activity during recovery was carried out by the startup
  * process. This local variable continues to be used in many parts of the
  * code to indicate actions taken by RecoveryManagers. Other processes that
@@ -132,6 +137,7 @@ extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
+extern int  lastWrittenLsnCacheSize;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -351,8 +357,11 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
-extern void SetLastWrittenPageLSN(XLogRecPtr lsn);
-extern XLogRecPtr GetLastWrittenPageLSN(void);
+extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber till);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
