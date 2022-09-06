@@ -18,7 +18,17 @@
 #define GLOBAL_REGION 0
 
 #define IsMultiRegion() (current_region != GLOBAL_REGION)
-#define RegionIsRemote(r) (r != current_region && r != GLOBAL_REGION && r != UNKNOWN_REGION)
+#define RegionIsValid(r) (r != UNKNOWN_REGION)
+#define RegionIsRemote(r) (RegionIsValid(r) && r != current_region && r != GLOBAL_REGION)
+
+/*
+ * RelationGetRegion
+ *		Fetch relation's region.
+ *
+ * Returns UnknownRegion if there is no smgr
+ */
+#define RelationGetRegion(relation) \
+	( (relation)->rd_smgr != NULL ? (relation)->rd_smgr->smgr_region : UNKNOWN_REGION )
 
 /* GUC variable */
 extern int current_region;

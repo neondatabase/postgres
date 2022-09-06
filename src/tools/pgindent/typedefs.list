@@ -2269,9 +2269,6 @@ RuleLock
 RuleStmt
 RunningTransactions
 RunningTransactionsData
-RxReorderBuffer
-RxReorderBufferRelation
-RxReorderBufferRelationKey
 SC_HANDLE
 SECURITY_ATTRIBUTES
 SECURITY_STATUS

@@ -48,11 +48,11 @@ typedef struct RWSetTuple
 
 /*
  * A relation in the read set
- * If you change this struct, also consider changing RxReorderBufferRelation
  */
 typedef struct RWSetRelation
 {
 	Oid			relid;
+	int8		region;
 	bool		is_index;
 	dlist_head	pages;
 	dlist_head	tuples;

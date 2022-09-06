@@ -34,6 +34,7 @@ typedef struct CollectedRelation
 {
 	CollectedRelationKey key;
 
+	int8		region;
 	bool		is_index;
 	int			nitems;
 
@@ -56,7 +57,9 @@ PGconn	   *XactServerConn;
 bool		Connected = false;
 
 static void init_rwset_collection_buffer(Oid dbid);
+static void rwset_add_region(int region);
 
+static void rx_collect_region(Relation relation);
 static void rx_collect_relation(Oid dbid, Oid relid);
 static void rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno);
 static void rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber tid);
@@ -66,7 +69,7 @@ static void rx_collect_delete(Relation relation, HeapTuple oldtuple);
 static void rx_clear_rwset_collection_buffer(void);
 static void rx_send_rwset_and_wait(void);
 
-static CollectedRelation *get_collected_relation(Oid relid);
+static CollectedRelation *get_collected_relation(Oid relid, bool create_if_not_found);
 static bool connect_to_txn_server(void);
 
 static void
@@ -92,39 +95,60 @@ init_rwset_collection_buffer(Oid dbid)
 	rwset_collection_buffer = (RWSetCollectionBuffer *) palloc(sizeof(RWSetCollectionBuffer));
 	rwset_collection_buffer->context = TopTransactionContext;
 
+	/* Initialize the header */
 	rwset_collection_buffer->header.dbid = dbid;
 	rwset_collection_buffer->header.xid = InvalidTransactionId;
 	snapshot = GetLatestSnapshot();
 	rwset_collection_buffer->header.csn = snapshot->snapshot_csn;
-	rwset_collection_buffer->header.region_set = 0;
+	/* The current region is always a participant of the transaction */
+	rwset_collection_buffer->header.region_set = UINT64CONST(1) << current_region;
 
+	/* Initialize a map from relation oid to the read set of the relation */
 	hash_ctl.hcxt = rwset_collection_buffer->context;
 	hash_ctl.keysize = sizeof(CollectedRelationKey);
 	hash_ctl.entrysize = sizeof(CollectedRelation);
 	rwset_collection_buffer->collected_relations = hash_create("collected relations",
-														  max_predicate_locks_per_xact,
-														  &hash_ctl,
-														  HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+															   max_predicate_locks_per_xact,
+															   &hash_ctl,
+															   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+
+	/* Initialize the buffer for the write set */
 	initStringInfo(&rwset_collection_buffer->writes);
 
 	MemoryContextSwitchTo(old_context);
 }
 
 static void
+rwset_add_region(int region)
+{
+	Assert(RegionIsValid(region));
+	Assert(rwset_collection_buffer != NULL);
+
+	/* Set the corresponding region bit in the header */
+	rwset_collection_buffer->header.region_set |= UINT64CONST(1) << region;
+}
+
+static void
 rx_collect_region(Relation relation)
 {
-	int			region = relation->rd_smgr->smgr_region;
-	uint64	   *region_set = &rwset_collection_buffer->header.region_set;
-	int			max_nregions = BITS_PER_BYTE * sizeof(*region_set);
-
-	init_rwset_collection_buffer(relation->rd_node.dbNode);
+	int	region = RelationGetRegion(relation);
+	int	max_nregions = BITS_PER_BYTE * sizeof(uint64);
+	CollectedRelation *crel;
 
 	if (region < 0 || region >= max_nregions)
 		ereport(ERROR,
 				errmsg("[remotexact] Region id is out of bound"),
 				errdetail("region id: %u, min: 0, max: %u", region, max_nregions));
 
-	(*region_set) |= UINT64CONST(1) << relation->rd_smgr->smgr_region;
+	init_rwset_collection_buffer(relation->rd_node.dbNode);
+
+	crel = get_collected_relation(RelationGetRelid(relation), false);
+	Assert(crel != NULL);
+
+	/* Set the region for the individual relation */
+	crel->region = region;
+
+	rwset_add_region(region);
 }
 
 static void
@@ -133,7 +157,7 @@ rx_collect_relation(Oid dbid, Oid relid)
 	CollectedRelation *collected_relation;
 
 	init_rwset_collection_buffer(dbid);
-	collected_relation = get_collected_relation(relid);
+	collected_relation = get_collected_relation(relid, true);
 	collected_relation->is_index = false;
 }
 
@@ -146,7 +170,7 @@ rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 
 	init_rwset_collection_buffer(dbid);
 
-	collected_relation = get_collected_relation(relid);
+	collected_relation = get_collected_relation(relid, true);
 	collected_relation->is_index = true;
 	collected_relation->nitems++;
 
@@ -165,7 +189,7 @@ rx_collect_tuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber offset)
 
 	init_rwset_collection_buffer(dbid);
 
-	collected_relation = get_collected_relation(relid);
+	collected_relation = get_collected_relation(relid, true);
 	collected_relation->is_index = false;
 	collected_relation->nitems++;
 
@@ -178,13 +202,17 @@ static void
 rx_collect_insert(Relation relation, HeapTuple newtuple)
 {
 	StringInfo	buf = NULL;
+	int region = RelationGetRegion(relation);
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
 	buf = &rwset_collection_buffer->writes;
+	/* Starts with the region of the relation */
+	pq_sendbyte(buf, region);
+	/* Encode the insert using the logical replication protocol */
 	logicalrep_write_insert(buf, InvalidTransactionId, relation, newtuple, true /* binary */);
 
-	rx_collect_region(relation);
+	rwset_add_region(region);
 }
 
 static void
@@ -192,10 +220,11 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 {
 	StringInfo	buf = NULL;
 	char		relreplident = relation->rd_rel->relreplident;
+	int			region = RelationGetRegion(relation);
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
-	// TOOD: We need to set the replica identity to something other than NOTHING
+	// TOOD(ctring): We need to set the replica identity to something other than NOTHING
 	// to collect the write set. Need to figure out a way to get rid of this step
 	// or a check to prevent us from forgetting to do this step.
 	if (relreplident != REPLICA_IDENTITY_DEFAULT &&
@@ -204,9 +233,12 @@ rx_collect_update(Relation relation, HeapTuple oldtuple, HeapTuple newtuple)
 		return;
 
 	buf = &rwset_collection_buffer->writes;
+	/* Starts with the region of the relation */
+	pq_sendbyte(buf, region);
+	/* Encode the update using the logical replication protocol */
 	logicalrep_write_update(buf, InvalidTransactionId, relation, oldtuple, newtuple, true /* binary */);
 
-	rx_collect_region(relation);
+	rwset_add_region(region);
 }
 
 static void
@@ -214,10 +246,11 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 {
 	StringInfo	buf = NULL;
 	char		relreplident = relation->rd_rel->relreplident;
+	int			region = RelationGetRegion(relation);
 
 	init_rwset_collection_buffer(relation->rd_node.dbNode);
 
-	// TOOD: We need to set the replica identity to something other than NOTHING
+	// TOOD(ctring): We need to set the replica identity to something other than NOTHING
 	// to collect the write set. Need to figure out a way to get rid of this step
 	// or a check to prevent us from forgetting to do this step.
 	if (relreplident != REPLICA_IDENTITY_DEFAULT &&
@@ -229,9 +262,12 @@ rx_collect_delete(Relation relation, HeapTuple oldtuple)
 		return;
 
 	buf = &rwset_collection_buffer->writes;
+	/* Starts with the region of the relation */
+	pq_sendbyte(buf, region);
+	/* Encode the delete using the logical replication protocol */
 	logicalrep_write_delete(buf, InvalidTransactionId, relation, oldtuple, true /* binary */);
 
-	rx_collect_region(relation);
+	rwset_add_region(region);
 }
 
 
@@ -284,6 +320,7 @@ rx_send_rwset_and_wait(void)
 		{
 			pq_sendbyte(&buf, 'I');
 			pq_sendint32(&buf, collected_relation->key.relid);
+			pq_sendbyte(&buf, collected_relation->region);
 			pq_sendint32(&buf, collected_relation->nitems);
 			items = &collected_relation->pages;
 		}
@@ -291,6 +328,7 @@ rx_send_rwset_and_wait(void)
 		{
 			pq_sendbyte(&buf, 'T');
 			pq_sendint32(&buf, collected_relation->key.relid);
+			pq_sendbyte(&buf, collected_relation->region);
 			pq_sendint32(&buf, collected_relation->nitems);
 			items = &collected_relation->tuples;
 		}
@@ -321,30 +359,37 @@ rx_send_rwset_and_wait(void)
 }
 
 static CollectedRelation *
-get_collected_relation(Oid relid)
+get_collected_relation(Oid relid, bool create_if_not_found)
 {
 	CollectedRelationKey key;
 	CollectedRelation *relation;
 	bool		found;
-	MemoryContext old_context;
 
 	Assert(rwset_collection_buffer);
 
 	key.relid = relid;
 
+	/* Check if the relation is in the map */
 	relation = (CollectedRelation *) hash_search(rwset_collection_buffer->collected_relations,
-											   &key, HASH_ENTER, &found);
+												 &key, HASH_ENTER, &found);
 	/* Initialize a new relation entry if not found */
-	if (!found)
-	{
-		old_context = MemoryContextSwitchTo(rwset_collection_buffer->context);
+	if (!found) {
+		if (create_if_not_found)
+		{
+			MemoryContext old_context;
 
-		relation->nitems = 0;
-		relation->is_index = false;
-		initStringInfo(&relation->pages);
-		initStringInfo(&relation->tuples);
+			old_context = MemoryContextSwitchTo(rwset_collection_buffer->context);
 
-		MemoryContextSwitchTo(old_context);
+			relation->nitems = 0;
+			relation->region = UNKNOWN_REGION;
+			relation->is_index = false;
+			initStringInfo(&relation->pages);
+			initStringInfo(&relation->tuples);
+
+			MemoryContextSwitchTo(old_context);
+		}
+		else
+			relation = NULL;
 	}
 	return relation;
 }

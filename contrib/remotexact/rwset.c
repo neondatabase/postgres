@@ -121,6 +121,7 @@ decode_relation(RWSet *rwset, StringInfo msg)
 		ereport(ERROR, errmsg("invalid relation type: %c", reltype));
 
 	rel->relid = pq_getmsgint(msg, 4);
+	rel->region = pq_getmsgbyte(msg);
 	nitems = pq_getmsgint(msg, 4);
 
 	if (rel->is_index)
@@ -255,6 +256,7 @@ RWSetToString(RWSet *rwset)
 
 		appendStringInfoString(&s, "\n\t{");
 		appendStringInfo(&s, "\"relid\": %d", rel->relid);
+		appendStringInfo(&s, ", \"region\": %d", rel->region);
 		appendStringInfo(&s, ", \"is_index\": %d", rel->is_index);
 
 		/* Pages */
@@ -312,6 +314,7 @@ RWSetToString(RWSet *rwset)
 	first_group = true;
 	while (writes_cur.cursor < writes_cur.len)
 	{
+		int region;
 		LogicalRepMsgType action;
 		LogicalRepRelId relid;
 		bool hasoldtup;
@@ -323,14 +326,16 @@ RWSetToString(RWSet *rwset)
 		first_group = false;
 		appendStringInfoString(&s, "\n\t{");
 
+		region = pq_getmsgbyte(&writes_cur);
 		action = pq_getmsgbyte(&writes_cur);
 		switch (action)
 		{
 			case LOGICAL_REP_MSG_INSERT:
 				relid = logicalrep_read_insert(&writes_cur, &newtup);
 
-				appendStringInfo(&s, "\"action\": INSERT");
+				appendStringInfo(&s, "\"action\": \"INSERT\"");
 				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ", \"region\": %d", region);
 				appendStringInfo(&s, ",\n\t \"new_tuple\": ");
 				append_tuple_string(&s, &newtup);
 				free_tuple(&newtup);
@@ -339,8 +344,9 @@ RWSetToString(RWSet *rwset)
 			case LOGICAL_REP_MSG_UPDATE:
 				relid = logicalrep_read_update(&writes_cur, &hasoldtup, &oldtup, &newtup);
 
-				appendStringInfo(&s, "\"action\": UPDATE");
+				appendStringInfo(&s, "\"action\": \"UPDATE\"");
 				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ", \"region\": %d", region);
 				appendStringInfo(&s, ", \"has_old_tup\": %d", hasoldtup);
 				appendStringInfo(&s, ",\n\t \"new_tuple\": ");
 				append_tuple_string(&s, &newtup);
@@ -356,8 +362,9 @@ RWSetToString(RWSet *rwset)
 			case LOGICAL_REP_MSG_DELETE:
 				relid = logicalrep_read_delete(&writes_cur, &oldtup);
 
-				appendStringInfo(&s, "\"action\": DELETE");
+				appendStringInfo(&s, "\"action\": \"DELETE\"");
 				appendStringInfo(&s, ", \"relid\": %u", relid);
+				appendStringInfo(&s, ", \"region\": %d", region);
 				appendStringInfo(&s, ",\n\t \"old_tuple\": ");
 				append_tuple_string(&s, &oldtup);
 				free_tuple(&oldtup);
@@ -385,10 +392,10 @@ append_tuple_string(StringInfo s, const LogicalRepTupleData *tuple)
 	int	i;
 	appendStringInfoString(s, "{");
 	appendStringInfo(s, "\"ncols\": %d, ", tuple->ncols);
-	appendStringInfo(s, "\"status\": ");
+	appendStringInfo(s, "\"status\": \"");
 	for (i = 0; i < tuple->ncols; i++)
 		appendStringInfoChar(s, tuple->colstatus[i]);
-	appendStringInfoString(s, ", ");
+	appendStringInfoString(s, "\", ");
 	appendStringInfo(s, "\"colsizes\": [");
 	for (i = 0; i < tuple->ncols; i++)
 	{
