@@ -16,6 +16,8 @@ int			current_region;
 
 get_region_lsn_hook_type get_region_lsn_hook = NULL;
 
+bool		is_surrogate = false;
+
 static const RemoteXactHook *remote_xact_hook = NULL;
 #define CallHook(name) \
 	if (remote_xact_hook) remote_xact_hook->name
@@ -71,7 +73,10 @@ CollectDelete(Relation relation, HeapTuple oldtuple)
 void
 SendRwsetAndWait(void)
 {
-	CallHook(send_rwset_and_wait)();
+	if (!is_surrogate)
+		CallHook(send_rwset_and_wait)();
+
+	is_surrogate = false;
 }
 
 // TODO: probably can use RegisterXactCallback for this

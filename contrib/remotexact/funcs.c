@@ -1,26 +1,39 @@
 #include "postgres.h"
+
+#include "access/remotexact.h"
+#include "apply.h"
 #include "fmgr.h"
 #include "lib/stringinfo.h"
+#include "rwset.h"
 
-PG_FUNCTION_INFO_V1(print_bytes);
+PG_FUNCTION_INFO_V1(validate_and_apply_xact);
 
 Datum
-print_bytes(PG_FUNCTION_ARGS)
+validate_and_apply_xact(PG_FUNCTION_ARGS)
 {
 	bytea	   *bytes = PG_GETARG_BYTEA_P(0);
-	int			size;
-	int			i;
-	StringInfoData out;
+	StringInfoData buf;
+	RWSet	   *rwset;
 
-	initStringInfo(&out);
+	// Signify that this is a surrogate transaction
+	is_surrogate = true;
 
-	size = VARSIZE(bytes) - VARHDRSZ;
-	for (i = 0; i < size; i++)
-	{
-		appendStringInfo(&out, "%x ", VARDATA(bytes)[i]);
-	}
+	// Extract the buffer from the function argument
+	buf.data = VARDATA(bytes);
+	buf.len = VARSIZE(bytes) - VARHDRSZ;
+	buf.maxlen = buf.len;
+	buf.cursor = 0;
 
-	ereport(LOG, errmsg("size = %d, data = %s", size, out.data));
+	// Decode the buffer into a rwset
+	rwset = RWSetAllocate();
+	RWSetDecode(rwset, &buf);
+
+	ereport(LOG, errmsg("%s", RWSetToString(rwset)));
+
+	// Apply the writes
+	apply_writes(rwset);
+
+	RWSetFree(rwset);
 
 	PG_RETURN_BOOL(true);
 }

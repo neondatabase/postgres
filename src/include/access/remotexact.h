@@ -60,6 +60,8 @@ extern void CollectTuple(Oid dbid, Oid relid, BlockNumber blkno, OffsetNumber of
 extern void CollectInsert(Relation relation, HeapTuple newtuple);
 extern void CollectUpdate(Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 extern void CollectDelete(Relation relation, HeapTuple oldtuple);
+
+extern bool is_surrogate;
 extern void SendRwsetAndWait(void);
 
 extern void AtEOXact_RemoteXact(void);

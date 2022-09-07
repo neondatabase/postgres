@@ -3,6 +3,7 @@
 MODULE_big = remotexact
 OBJS = \
 	$(WIN32RES)\
+	apply.o \
 	remotexact.o \
 	rwset.o \
 	funcs.o 

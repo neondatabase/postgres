@@ -2,7 +2,7 @@
  *
  * rwset.h
  *
- * src/include/access/rwset.h
+ * contrib/remotexact/rwset.h
  *
  *-------------------------------------------------------------------------
  */
@@ -10,7 +10,9 @@
 #define RWSET_H
 
 #include "postgres.h"
+
 #include "lib/ilist.h"
+#include "lib/stringinfo.h"
 #include "storage/block.h"
 #include "storage/itemptr.h"
 
