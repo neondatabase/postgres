@@ -285,20 +285,6 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 		memset(&sublist, 0, sizeof(GinMetaPageData));
 		makeSublist(index, collector->tuples, collector->ntuples, &sublist);
 
-		if (metadata->head != InvalidBlockNumber)
-		{
-			/*
-			 * ZENITH: Get buffer before XLogBeginInsert() to avoid recursive call
-			 * of XLogBeginInsert(). Reading a new buffer might evict a dirty page from
-			 * the buffer cache, and if that page happens to be an FSM or VM page, zenith_write()
-			 * will try to WAL-log an image of the page.
-			 */
-			buffer = ReadBuffer(index, metadata->tail);
-		}
-
-		if (needWal)
-			XLogBeginInsert();
-
 		/*
 		 * metapage was unlocked, see above
 		 */
@@ -318,6 +304,9 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 
 			metadata->nPendingPages = sublist.nPendingPages;
 			metadata->nPendingHeapTuples = sublist.nPendingHeapTuples;
+
+			if (needWal)
+				XLogBeginInsert();
 		}
 		else
 		{
@@ -327,6 +316,7 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 			data.prevTail = metadata->tail;
 			data.newRightlink = sublist.head;
 
+			buffer = ReadBuffer(index, metadata->tail);
 			LockBuffer(buffer, GIN_EXCLUSIVE);
 			page = BufferGetPage(buffer);
 
@@ -345,7 +335,10 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 			metadata->nPendingHeapTuples += sublist.nPendingHeapTuples;
 
 			if (needWal)
+			{
+				XLogBeginInsert();
 				XLogRegisterBuffer(1, buffer, REGBUF_STANDARD);
+			}
 		}
 	}
 	else
