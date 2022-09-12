@@ -53,6 +53,7 @@
 #include "access/xlogutils.h"
 #include "catalog/catalog.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "port/pg_bitutils.h"
@@ -397,6 +398,22 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 * pages' worth of consecutive dead tuples.
 	 */
 	CHECK_FOR_INTERRUPTS();
+
+	/* Prefetch next block */
+	if (enable_seqscan_prefetch)
+	{
+		int prefetch_limit = seqscan_prefetch_buffers;
+		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
+		if (pbscanwork != NULL && pbscanwork->phsw_chunk_remaining < prefetch_limit)
+			prefetch_limit = pbscanwork->phsw_chunk_remaining;
+		if (page + prefetch_limit >= scan->rs_nblocks)
+			prefetch_limit = scan->rs_nblocks - page - 1;
+
+		RelationOpenSmgr(scan->rs_base.rs_rd);
+		smgr_reset_prefetch(scan->rs_base.rs_rd->rd_smgr);
+		for (int i = 1; i <= prefetch_limit; i++)
+			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
+	}
 
 	/* read page using selected strategy */
 	scan->rs_cbuf = ReadBufferExtended(scan->rs_base.rs_rd, MAIN_FORKNUM, page,
