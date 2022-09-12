@@ -577,6 +577,15 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 	return true;
 }
 
+
+/*
+ *	mdprefetch() -- Cancel all previous prefetch requests
+ */
+void
+md_reset_prefetch(SMgrRelation reln)
+{
+}
+
 /*
  * mdwriteback() -- Tell the kernel to write pages back to storage.
  *
