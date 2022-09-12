@@ -964,7 +964,8 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_EXPLAIN
 		},
 		&enable_seqscan_prefetch,
-		true,
+		false /* temporary disable to be able to merge in main */
+		/* true, */
 		NULL, NULL, NULL
 	},
 	{
@@ -2162,7 +2163,8 @@ static struct config_int ConfigureNamesInt[] =
 		 GUC_EXPLAIN
 		},
 		&seqscan_prefetch_buffers,
-		8, 0, 1000,
+		/* 8, 0, 1000, */
+		0, 0, 1000, /* temporary disable to be able to merge in main */
 		NULL, NULL, NULL
 	},
 	{
