@@ -964,7 +964,7 @@ static struct config_bool ConfigureNamesBool[] =
 			GUC_EXPLAIN
 		},
 		&enable_seqscan_prefetch,
-		false /* temporary disable to be able to merge in main */
+		false, /* temporary disable to be able to merge in main */
 		/* true, */
 		NULL, NULL, NULL
 	},
