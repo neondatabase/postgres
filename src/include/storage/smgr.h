@@ -119,6 +119,7 @@ typedef struct f_smgr
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 
+	void		(*smgr_reset_prefetch) (SMgrRelation reln);
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
@@ -158,6 +159,7 @@ extern void smgrextend(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum, char *buffer, bool skipFsync);
 extern bool smgrprefetch(SMgrRelation reln, ForkNumber forknum,
 						 BlockNumber blocknum);
+extern void smgr_reset_prefetch(SMgrRelation reln);
 extern void smgrread(SMgrRelation reln, ForkNumber forknum,
 					 BlockNumber blocknum, char *buffer);
 extern void smgrwrite(SMgrRelation reln, ForkNumber forknum,
