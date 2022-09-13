@@ -1,4 +1,12 @@
-/* contrib/remotexact/apply.c */
+/*-------------------------------------------------------------------------
+ * contrib/remotexact/apply.c
+ * 
+ * This file contains function to decode and apply the writes in the rwset
+ * of a remote transaction. Many functions in this file are ported from
+ * backend/replication/logical/worker.c since we use the message format of
+ * logical replication to encode the writes.
+ * -------------------------------------------------------------------------
+ */
 #include "postgres.h"
 
 #include "access/table.h"
@@ -55,7 +63,11 @@ apply_writes(RWSet *rwset)
 		bool skip;
 
 		region = pq_getmsgbyte(&s);
-		// Ignore tuples that do not belong to the current region
+
+		// We ignore tuples that do not belong to the current region
+		// by setting the skip argument to true to the apply functions
+		// below. They will still decode the tuples but will not apply
+		// the changes for them.
 		skip = region != current_region;
 
 		action = pq_getmsgbyte(&s);
@@ -81,6 +93,9 @@ apply_writes(RWSet *rwset)
 	}
 }
 
+/*
+ * Ported from apply_handle_insert in backend/replication/logical/worker.c
+ */
 static void
 apply_handle_insert(StringInfo s, bool skip)
 {
@@ -162,6 +177,9 @@ close_relation(Relation rel, LOCKMODE lockmode)
 	table_close(rel, lockmode);
 }
 
+/*
+ * Ported from create_edata_for_relation in backend/replication/logical/worker.c
+ */
 static ApplyExecutionData *
 create_edata_for_relation(Relation rel)
 {
@@ -212,8 +230,7 @@ create_edata_for_relation(Relation rel)
 }
 
 /*
- * Finish any operations related to the executor state created by
- * create_edata_for_relation().
+ * Ported from finish_edata in backend/replication/logical/worker.c
  */
 static void
 finish_edata(ApplyExecutionData *edata)
@@ -236,8 +253,7 @@ finish_edata(ApplyExecutionData *edata)
 }
 
 /*
- * Error callback to give more context info about data conversion failures
- * while reading data from the remote server.
+ * Ported from slot_store_error_callback in backend/replication/logical/worker.c
  */
 static void
 slot_store_error_callback(void *arg)
@@ -255,10 +271,7 @@ slot_store_error_callback(void *arg)
 }
 
 /*
- * Store tuple data into slot.
- *
- * Incoming data can be either text or binary format.
- * We require that the tuple data has the same attributes as the local relation
+ * Ported from slot_store_data in backend/replication/logical/worker.c
  */
 static void
 slot_store_data(TupleTableSlot *slot, Relation rel,

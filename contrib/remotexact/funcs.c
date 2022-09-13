@@ -15,7 +15,8 @@ validate_and_apply_xact(PG_FUNCTION_ARGS)
 	StringInfoData buf;
 	RWSet	   *rwset;
 
-	// Signify that this is a surrogate transaction
+	// Signify that this is a surrogate transaction. This
+	// variable will be reset on transaction completion.
 	is_surrogate = true;
 
 	// Extract the buffer from the function argument
