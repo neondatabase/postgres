@@ -52,6 +52,7 @@
 #include "commands/vacuum.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "optimizer/paths.h"
 #include "pgstat.h"
 #include "portability/instr_time.h"
@@ -971,6 +972,14 @@ lazy_scan_heap(LVRelState *vacrel)
 		 * already have the correct page pinned anyway.
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
+
+		if (enable_seqscan_prefetch)
+		{
+			int prefetch_limit = Min(rel_pages - blkno - 1, seqscan_prefetch_buffers);
+			smgr_reset_prefetch(RelationGetSmgr(vacrel->rel));
+			for (int i = 1; i <= prefetch_limit; i++)
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
+		}
 
 		/* Finished preparatory checks.  Actually scan the page. */
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
@@ -2429,6 +2438,13 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_items->items[index]);
+		if (enable_seqscan_prefetch)
+		{
+			int prefetch_limit = Min(vacrel->dead_items->num_items - index - 1, seqscan_prefetch_buffers);
+			smgr_reset_prefetch(RelationGetSmgr(vacrel->rel));
+			for (int i = 1; i <= prefetch_limit; i++)
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_items->items[index + i]));
+		}
 		vacrel->blkno = tblk;
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, tblk, RBM_NORMAL,
 								 vacrel->bstrategy);
