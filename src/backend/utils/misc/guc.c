@@ -1017,6 +1017,17 @@ static const unit_conversion time_unit_conversion_table[] =
 static struct config_bool ConfigureNamesBool[] =
 {
 	{
+		{"enable_seqscan_prefetch", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the sequence scan next page prefetching."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_seqscan_prefetch,
+		false, /* temporary disable to be able to merge in main */
+		/* true, */
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),
 			NULL,
@@ -2195,6 +2206,17 @@ static struct config_bool ConfigureNamesBool[] =
 
 static struct config_int ConfigureNamesInt[] =
 {
+	{
+		{"seqscan_prefetch_buffers", PGC_USERSET, QUERY_TUNING_METHOD,
+		 gettext_noop("Number of subsequent buffer to be prefetched during sequential scan."),
+		 NULL,
+		 GUC_EXPLAIN
+		},
+		&seqscan_prefetch_buffers,
+		/* 8, 0, 1000, */
+		0, 0, 1000, /* temporary disable to be able to merge in main */
+		NULL, NULL, NULL
+	},
 	{
 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Sets the amount of time to wait before forcing a "
