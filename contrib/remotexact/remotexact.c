@@ -1,6 +1,7 @@
 /* contrib/remotexact/remotexact.c */
 #include "postgres.h"
 
+#include "access/csn_snapshot.h"
 #include "access/xact.h"
 #include "access/remotexact.h"
 #include "fmgr.h"
@@ -13,6 +14,7 @@
 #include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 #include "utils/rel.h"
 #include "miscadmin.h"
 
@@ -33,7 +35,6 @@ typedef struct CollectedRelation
 	CollectedRelationKey key;
 
 	bool		is_index;
-	int			csn;
 	int			nitems;
 
 	StringInfoData pages;
@@ -73,6 +74,7 @@ init_rwset_collection_buffer(Oid dbid)
 {
 	MemoryContext old_context;
 	HASHCTL		hash_ctl;
+	Snapshot 	snapshot;
 
 	if (rwset_collection_buffer)
 	{
@@ -92,6 +94,8 @@ init_rwset_collection_buffer(Oid dbid)
 
 	rwset_collection_buffer->header.dbid = dbid;
 	rwset_collection_buffer->header.xid = InvalidTransactionId;
+	snapshot = GetLatestSnapshot();
+	rwset_collection_buffer->header.csn = snapshot->snapshot_csn;
 	rwset_collection_buffer->header.region_set = 0;
 
 	hash_ctl.hcxt = rwset_collection_buffer->context;
@@ -129,12 +133,8 @@ rx_collect_relation(Oid dbid, Oid relid)
 	CollectedRelation *collected_relation;
 
 	init_rwset_collection_buffer(dbid);
-
 	collected_relation = get_collected_relation(relid);
 	collected_relation->is_index = false;
-
-	/* TODO(ctring): change this after CSN is introduced */
-	collected_relation->csn = 1;
 }
 
 static void
@@ -261,6 +261,7 @@ rx_send_rwset_and_wait(void)
 	header = &rwset_collection_buffer->header;
 	pq_sendint32(&buf, header->dbid);
 	pq_sendint32(&buf, header->xid);
+	pq_sendint64(&buf, header->csn);
 	pq_sendint64(&buf, header->region_set);
 
 	/* Cursor now points to where the length of the read section is stored */
@@ -289,7 +290,6 @@ rx_send_rwset_and_wait(void)
 			pq_sendbyte(&buf, 'T');
 			pq_sendint32(&buf, collected_relation->key.relid);
 			pq_sendint32(&buf, collected_relation->nitems);
-			pq_sendint32(&buf, collected_relation->csn);
 			items = &collected_relation->tuples;
 		}
 
@@ -338,7 +338,6 @@ get_collected_relation(Oid relid)
 		old_context = MemoryContextSwitchTo(rwset_collection_buffer->context);
 
 		relation->nitems = 0;
-		relation->csn = 0;
 		relation->is_index = false;
 		initStringInfo(&relation->pages);
 		initStringInfo(&relation->tuples);

@@ -1,12 +1,14 @@
 /* contrib/remotexact/rwset.c */
 #include "postgres.h"
 
+#include "access/csn_snapshot.h"
 #include "access/transam.h"
 #include "lib/stringinfo.h"
 #include "libpq/pqformat.h"
 #include "replication/logicalproto.h"
 #include "rwset.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 
 static void decode_header(RWSet *rwset, StringInfo msg);
 static RWSetRelation *decode_relation(RWSet *rwset, StringInfo msg);
@@ -24,6 +26,7 @@ RWSetAllocate(void)
 {
 	RWSet	   *rwset;
 	MemoryContext new_ctx;
+	Snapshot snapshot;
 
 	new_ctx = AllocSetContextCreate(CurrentMemoryContext,
 									"Read/write set",
@@ -34,6 +37,8 @@ RWSetAllocate(void)
 
 	rwset->header.dbid = 0;
 	rwset->header.xid = InvalidTransactionId;
+	snapshot = GetLatestSnapshot();
+	rwset->header.csn = snapshot->snapshot_csn;
 
 	dlist_init(&rwset->relations);
 
@@ -92,6 +97,7 @@ decode_header(RWSet *rwset, StringInfo msg)
 {
 	rwset->header.dbid = pq_getmsgint(msg, 4);
 	rwset->header.xid = pq_getmsgint(msg, 4);
+	rwset->header.csn = pq_getmsgint64(msg);
 	rwset->header.region_set = pq_getmsgint64(msg);
 }
 
@@ -128,7 +134,6 @@ decode_relation(RWSet *rwset, StringInfo msg)
 	}
 	else
 	{
-		rel->csn = pq_getmsgint(msg, 4);
 
 		for (i = 0; i < nitems; i++)
 		{
@@ -166,7 +171,7 @@ decode_page(RWSet *rwset, StringInfo msg)
 	page = alloc_page(rwset);
 
 	page->blkno = pq_getmsgint(msg, 4);
-	page->csn = pq_getmsgint(msg, 4);
+	page->csn = pq_getmsgint64(msg);
 
 	return page;
 }
@@ -232,8 +237,8 @@ RWSetToString(RWSet *rwset)
 	/* Header */
 	header = &rwset->header;
 	appendStringInfoString(&s, "{\n\"header\": ");
-	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d, \"region_set\": %ld }",
-					 header->dbid, header->xid, header->region_set);
+	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d, \"csn\": %d, \"region_set\": %ld }",
+					 header->dbid, header->xid, header->csn, header->region_set);
 
 	/* Relations */
 	appendStringInfoString(&s, ",\n\"relations\": [");
@@ -250,7 +255,6 @@ RWSetToString(RWSet *rwset)
 		appendStringInfoString(&s, "\n\t{");
 		appendStringInfo(&s, "\"relid\": %d", rel->relid);
 		appendStringInfo(&s, ", \"is_index\": %d", rel->is_index);
-		appendStringInfo(&s, ", \"csn\": %d", rel->csn);
 
 		/* Pages */
 		if (!dlist_is_empty(&rel->pages))

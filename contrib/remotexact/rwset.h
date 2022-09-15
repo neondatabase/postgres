@@ -21,7 +21,8 @@ typedef struct RWSetHeader
 {
 	Oid			dbid;
 	TransactionId xid;
-	uint64		region_set;
+	uint64 		csn;
+	uint64 region_set;
 } RWSetHeader;
 
 /*
@@ -30,7 +31,7 @@ typedef struct RWSetHeader
 typedef struct RWSetPage
 {
 	BlockNumber blkno;
-	int			csn;
+	uint64		csn;
 
 	dlist_node	node;
 } RWSetPage;
@@ -53,7 +54,6 @@ typedef struct RWSetRelation
 {
 	Oid			relid;
 	bool		is_index;
-	int			csn;
 	dlist_head	pages;
 	dlist_head	tuples;
 
