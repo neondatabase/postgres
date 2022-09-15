@@ -667,6 +667,20 @@ typedef struct ViewOptions
 	 (relation)->rd_rel->relkind != RELKIND_FOREIGN_TABLE &&	\
 	 !IsCatalogRelation(relation))
 
+/*
+ * RelationIsUsedInRemoteXact
+ * 		True if we need to collect the changes to this relation in the write set
+ * 		of a transaction.
+ * 
+ * This is similar to RelationIsLogicallyLogged but we only want to generate the
+ * extra information for logical replication without actually WAL-logging it.
+ */
+#define RelationIsUsedInRemoteXact(relation) \
+	(XLogRemoteXactInfoActive() && \
+	 RelationNeedsWAL(relation) && \
+	 (relation)->rd_rel->relkind != RELKIND_FOREIGN_TABLE && \
+	 !IsCatalogRelation(relation))
+
 /* routines in utils/cache/relcache.c */
 extern void RelationIncrementReferenceCount(Relation rel);
 extern void RelationDecrementReferenceCount(Relation rel);

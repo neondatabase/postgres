@@ -78,6 +78,8 @@ wal_level_str(WalLevel wal_level)
 			return "minimal";
 		case WAL_LEVEL_REPLICA:
 			return "replica";
+		case WAL_LEVEL_REMOTE_XACT:
+			return "remote_xact";
 		case WAL_LEVEL_LOGICAL:
 			return "logical";
 	}
