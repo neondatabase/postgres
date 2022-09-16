@@ -22,7 +22,7 @@ typedef struct RWSetHeader
 	Oid			dbid;
 	TransactionId xid;
 	uint64 		csn;
-	uint64 region_set;
+	uint64 		region_set;
 } RWSetHeader;
 
 /*

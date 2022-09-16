@@ -142,6 +142,7 @@ rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 {
 	CollectedRelation *collected_relation;
 	StringInfo	buf = NULL;
+	Snapshot snapshot;
 
 	init_rwset_collection_buffer(dbid);
 
@@ -149,10 +150,11 @@ rx_collect_page(Oid dbid, Oid relid, BlockNumber blkno)
 	collected_relation->is_index = true;
 	collected_relation->nitems++;
 
+	snapshot = GetLatestSnapshot();
+
 	buf = &collected_relation->pages;
 	pq_sendint32(buf, blkno);
-	pq_sendint32(buf, 1);		/* TODO(ctring): change this after CSN is
-								 * introduced */
+	pq_sendint64(buf, snapshot->snapshot_csn);
 }
 
 static void

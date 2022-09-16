@@ -237,8 +237,9 @@ RWSetToString(RWSet *rwset)
 	/* Header */
 	header = &rwset->header;
 	appendStringInfoString(&s, "{\n\"header\": ");
-	appendStringInfo(&s, "{ \"dbid\": %d, \"xid\": %d, \"csn\": %d, \"region_set\": %ld }",
-					 header->dbid, header->xid, header->csn, header->region_set);
+	appendStringInfo(&s, 
+				"{ \"dbid\": %d, \"xid\": %d, \"csn\": %ld, \"region_set\": %ld }",
+				header->dbid, header->xid, header->csn, header->region_set);
 
 	/* Relations */
 	appendStringInfoString(&s, ",\n\"relations\": [");
