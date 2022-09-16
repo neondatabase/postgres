@@ -2158,7 +2158,7 @@ static struct config_int ConfigureNamesInt[] =
 {
 	{
 		{"seqscan_prefetch_buffers", PGC_USERSET, QUERY_TUNING_METHOD,
-		 gettext_noop("Number of subsequent buffer to be prefetched during sequential scan."),
+		 gettext_noop("Number of buffers to be prefetched during sequential scan."),
 		 NULL,
 		 GUC_EXPLAIN
 		},
