@@ -464,8 +464,8 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	 * Note that we don't have to copy version data from the source database;
 	 * there's only one legal value.
 	 */
-	sprintf(buf, "%s\n", PG_MAJORVERSION);
-	nbytes = strlen(PG_MAJORVERSION) + 1;
+	sprintf(buf, "%s", PG_MAJORVERSION);
+	nbytes = strlen(PG_MAJORVERSION);
 
 	/* Create database directory. */
 	if (MakePGDirectory(dbpath) < 0)
