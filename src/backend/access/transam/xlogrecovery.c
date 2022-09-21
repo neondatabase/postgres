@@ -1075,7 +1075,7 @@ readRecoverySignalFile(void)
 	if (standby_signal_file_found)
 	{
 		StandbyModeRequested = true;
-		ArchiveRecoveryRequested = true;
+		ArchiveRecoveryRequested = XLogRecPtrIsInvalid(zenithLastRec); /* no need to perform WAL recovery in Neon */
 	}
 	else if (recovery_signal_file_found)
 	{
