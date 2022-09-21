@@ -444,7 +444,7 @@ XLogReadRecord(XLogReaderState *state, char **errormsg)
  * Return NULL if there is no space in the decode buffer and allow_oversized
  * is false, or if memory allocation fails for an oversized buffer.
  */
-static DecodedXLogRecord *
+DecodedXLogRecord *
 XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversized)
 {
 	size_t		required_space = DecodeXLogRecordRequiredSpace(xl_tot_len);
