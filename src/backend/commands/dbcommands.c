@@ -466,8 +466,8 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	 * Note that we don't have to copy this from the source database; there's
 	 * only one legal value.
 	 */
-	sprintf(buf, "%s\n", PG_MAJORVERSION);
-	nbytes = strlen(PG_MAJORVERSION) + 1;
+	sprintf(buf, "%s", PG_MAJORVERSION);
+	nbytes = strlen(PG_MAJORVERSION);
 
 	/* If we are not in WAL replay then write the WAL. */
 	if (!isRedo)
