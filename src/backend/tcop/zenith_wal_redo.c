@@ -589,9 +589,7 @@ ApplyRecord(StringInfo input_message)
 	XLogBeginRead(reader_state, lsn);
 	reader_state->ReadRecPtr = lsn;
 
-	//FIXME Should we use XLogReadRecordAlloc instead?
-	decoded = (DecodedXLogRecord *)
-			palloc(DecodeXLogRecordRequiredSpace(record->xl_tot_len));
+	decoded = (DecodedXLogRecord *)XLogReadRecordAlloc(reader_state, record->xl_tot_len, true);
 
 	if (!DecodeXLogRecord(reader_state, decoded, record, lsn, &errormsg))
 		elog(ERROR, "failed to decode WAL record: %s", errormsg);
@@ -648,6 +646,8 @@ ApplyRecord(StringInfo input_message)
 
 	elog(TRACE, "applied WAL record with LSN %X/%X",
 		 (uint32) (lsn >> 32), (uint32) lsn);
+	if (decoded && decoded->oversized)
+		pfree(decoded);
 }
 
 /*
