@@ -17,6 +17,8 @@
 #include "storage/backendid.h"
 
 
+#define NUM_CUSTOM_PROCSIGNALS 64
+
 /*
  * Reasons for signaling a Postgres child process (a backend or an auxiliary
  * process, like checkpointer).  We can cope with concurrent signals for different
@@ -29,6 +31,8 @@
  */
 typedef enum
 {
+	INVALID_PROCSIGNAL = -1,	/* Must be first */
+
 	PROCSIG_CATCHUP_INTERRUPT,	/* sinval catchup interrupt */
 	PROCSIG_NOTIFY_INTERRUPT,	/* listen/notify interrupt */
 	PROCSIG_PARALLEL_MESSAGE,	/* message from cooperating parallel backend */
@@ -44,6 +48,14 @@ typedef enum
 	PROCSIG_RECOVERY_CONFLICT_BUFFERPIN,
 	PROCSIG_RECOVERY_CONFLICT_STARTUP_DEADLOCK,
 
+	PROCSIG_CUSTOM_1,
+	/*
+	 * PROCSIG_CUSTOM_2,
+	 * ...,
+	 * PROCSIG_CUSTOM_N-1,
+	 */
+	PROCSIG_CUSTOM_N = PROCSIG_CUSTOM_1 + NUM_CUSTOM_PROCSIGNALS - 1,
+
 	NUM_PROCSIGNALS				/* Must be last! */
 } ProcSignalReason;
 
@@ -56,6 +68,8 @@ typedef enum
 	 */
 	PROCSIGNAL_BARRIER_PLACEHOLDER = 0
 } ProcSignalBarrierType;
+/* Handler of custom process signal */
+typedef void (*ProcSignalHandler_type) (void);
 
 /*
  * prototypes for functions in procsignal.c
@@ -64,12 +78,15 @@ extern Size ProcSignalShmemSize(void);
 extern void ProcSignalShmemInit(void);
 
 extern void ProcSignalInit(int pss_idx);
+extern ProcSignalReason
+	RegisterCustomProcSignalHandler(ProcSignalHandler_type handler);
 extern int	SendProcSignal(pid_t pid, ProcSignalReason reason,
 						   BackendId backendId);
 
 extern uint64 EmitProcSignalBarrier(ProcSignalBarrierType type);
 extern void WaitForProcSignalBarrier(uint64 generation);
 extern void ProcessProcSignalBarrier(void);
+extern void CheckAndHandleCustomSignals(void);
 
 extern void procsignal_sigusr1_handler(SIGNAL_ARGS);
 

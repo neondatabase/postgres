@@ -5,6 +5,7 @@
  *
  * Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
+ * Portions Copyright (c) 2021, Postgres Professional
  *
  *
  * IDENTIFICATION
@@ -74,6 +75,7 @@
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "tcop/utility.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
@@ -3371,6 +3373,8 @@ ProcessInterrupts(void)
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
 
+	CheckAndHandleCustomSignals();
+
 	/* Call registered callback if any */
 	if (ProcessInterruptsCallback)
 	{
@@ -3732,7 +3736,7 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 	 * postmaster/postmaster.c (the option sets should not conflict) and with
 	 * the common help() function in main/main.c.
 	 */
-	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:bc:C:D:d:EeFf:h:ijk:lN:nOPp:r:S:sTt:v:W:Z-:")) != -1)
 	{
 		switch (flag)
 		{
@@ -3862,6 +3866,10 @@ process_postgres_switches(int argc, char *argv[], GucContext ctx,
 
 			case 'W':
 				SetConfigOption("post_auth_delay", optarg, ctx, gucsource);
+				break;
+
+			case 'Z':
+				/* ignored for consistency with the postmaster */
 				break;
 
 			case 'c':
