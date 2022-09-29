@@ -2374,7 +2374,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL,
 			GUC_UNIT_BLOCKS
 		},
-		&NBuffers,
+		&InitNBuffers,
 		1024, 16, INT_MAX / 2,
 		NULL, NULL, NULL
 	},

@@ -23,7 +23,6 @@ ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
 
-
 /*
  * Data Structures:
  *		buffers live in a freelist and a lookup data structure.
@@ -71,20 +70,26 @@ InitBufferPool(void)
 				foundIOCV,
 				foundBufCkpt;
 
+	// ElasticNBuffers = (pg_atomic_uint32 *)
+	// 	ShmemInitStruct("Elastic NBuffers",
+	// 					sizeof(pg_atomic_uint32),
+	// 					&foundElasticNBuffers);
+	// pg_atomic_init_u32(ElasticNBuffers, InitNBuffers);
+
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
 		ShmemInitStruct("Buffer Descriptors",
-						NBuffers * sizeof(BufferDescPadded),
+						MaxNBuffers * sizeof(BufferDescPadded),
 						&foundDescs);
 
 	BufferBlocks = (char *)
 		ShmemInitStruct("Buffer Blocks",
-						NBuffers * (Size) BLCKSZ, &foundBufs);
+						MaxNBuffers * (Size) BLCKSZ, &foundBufs);
 
 	/* Align condition variables to cacheline boundary. */
 	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
 		ShmemInitStruct("Buffer IO Condition Variables",
-						NBuffers * sizeof(ConditionVariableMinimallyPadded),
+						MaxNBuffers * sizeof(ConditionVariableMinimallyPadded),
 						&foundIOCV);
 
 	/*
@@ -96,7 +101,7 @@ InitBufferPool(void)
 	 */
 	CkptBufferIds = (CkptSortItem *)
 		ShmemInitStruct("Checkpoint BufferIds",
-						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
+						MaxNBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
 	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
 	{
@@ -106,36 +111,7 @@ InitBufferPool(void)
 	}
 	else
 	{
-		int			i;
-
-		/*
-		 * Initialize all the buffer headers.
-		 */
-		for (i = 0; i < NBuffers; i++)
-		{
-			BufferDesc *buf = GetBufferDescriptor(i);
-
-			CLEAR_BUFFERTAG(buf->tag);
-
-			pg_atomic_init_u32(&buf->state, 0);
-			buf->wait_backend_pid = 0;
-
-			buf->buf_id = i;
-
-			/*
-			 * Initially link all the buffers together as unused. Subsequent
-			 * management of this list is done by freelist.c.
-			 */
-			buf->freeNext = i + 1;
-
-			LWLockInitialize(BufferDescriptorGetContentLock(buf),
-							 LWTRANCHE_BUFFER_CONTENT);
-
-			ConditionVariableInit(BufferDescriptorGetIOCV(buf));
-		}
-
-		/* Correct last entry of linked list */
-		GetBufferDescriptor(NBuffers - 1)->freeNext = FREENEXT_END_OF_LIST;
+		InitBufferDescs(0, InitNBuffers, true);
 	}
 
 	/* Init other shared buffer-management stuff */
@@ -144,6 +120,52 @@ InitBufferPool(void)
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
 						 &backend_flush_after);
+}
+
+void
+InitBufferDescs(int start_i, int end_i, bool is_init)
+{
+	int			i;
+
+	for (i = start_i; i < end_i; i++)
+	{
+		BufferDesc *buf = GetBufferDescriptor(i);
+
+		CLEAR_BUFFERTAG(buf->tag);
+
+		pg_atomic_init_u32(&buf->state, 0);
+		buf->wait_backend_pid = 0;
+
+		buf->buf_id = i;
+
+		if (is_init)
+		{
+			/*
+			 * Initially link all the buffers together as unused. Subsequent
+			 * management of this list is done by freelist.c.
+			 */
+			buf->freeNext = i + 1;
+		}
+		else
+		{
+			buf->freeNext = FREENEXT_NOT_IN_LIST;
+			// TODO: This will be slow. We can do much better by setting all the `freeNext`s
+			// correctly, taking out a final lock on the free list, and then updating its global
+			// state to match. Change `GetBufferDescriptor(..)->freeNext = ..` to be unconditional,
+			// then perform the locked update.
+			StrategyFreeBuffer(buf);
+		}
+
+		LWLockInitialize(BufferDescriptorGetContentLock(buf),
+						 LWTRANCHE_BUFFER_CONTENT);
+
+		ConditionVariableInit(BufferDescriptorGetIOCV(buf));
+	}
+
+	if (is_init) {
+		/* Correct last entry of linked list */
+		GetBufferDescriptor(InitNBuffers - 1)->freeNext = FREENEXT_END_OF_LIST;
+	}
 }
 
 /*
@@ -158,24 +180,24 @@ BufferShmemSize(void)
 	Size		size = 0;
 
 	/* size of buffer descriptors */
-	size = add_size(size, mul_size(NBuffers, sizeof(BufferDescPadded)));
+	size = add_size(size, mul_size(MaxNBuffers, sizeof(BufferDescPadded)));
 	/* to allow aligning buffer descriptors */
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 
 	/* size of data pages */
-	size = add_size(size, mul_size(NBuffers, BLCKSZ));
+	size = add_size(size, mul_size(MaxNBuffers, BLCKSZ));
 
 	/* size of stuff controlled by freelist.c */
 	size = add_size(size, StrategyShmemSize());
 
 	/* size of I/O condition variables */
-	size = add_size(size, mul_size(NBuffers,
+	size = add_size(size, mul_size(MaxNBuffers,
 								   sizeof(ConditionVariableMinimallyPadded)));
 	/* to allow aligning the above */
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 
 	/* size of checkpoint sort array in bufmgr.c */
-	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+	size = add_size(size, mul_size(MaxNBuffers, sizeof(CkptSortItem)));
 
 	return size;
 }

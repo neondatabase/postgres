@@ -20,6 +20,9 @@
 #include "storage/relfilenode.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
+#ifndef FRONTEND
+#include "port/atomics.h"
+#endif
 
 typedef void *Block;
 
@@ -62,7 +65,14 @@ struct WritebackContext;
 struct SMgrRelationData;
 
 /* in globals.c ... this duplicates miscadmin.h */
-extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int InitNBuffers;
+extern PGDLLIMPORT int MaxNBuffers;
+/* current state for actual size of NBuffers. Bounded by MaxNBuffers, starts at InitNBuffers */
+#ifndef FRONTEND
+extern pg_atomic_uint32 *ElasticNBuffers;
+
+#define NBuffers pg_atomic_read_u32(ElasticNBuffers)
+#endif
 
 /* in bufmgr.c */
 extern bool zero_damaged_pages;

@@ -868,7 +868,7 @@ ReqCheckpointHandler(SIGNAL_ARGS)
  *		Compute space needed for checkpointer-related shared memory
  */
 Size
-CheckpointerShmemSize(void)
+CheckpointerShmemSize(int n_buffers)
 {
 	Size		size;
 
@@ -877,7 +877,7 @@ CheckpointerShmemSize(void)
 	 * NBuffers.  This may prove too large or small ...
 	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(NBuffers, sizeof(CheckpointerRequest)));
+	size = add_size(size, mul_size(n_buffers, sizeof(CheckpointerRequest)));
 
 	return size;
 }
@@ -887,15 +887,19 @@ CheckpointerShmemSize(void)
  *		Allocate and initialize checkpointer-related shared memory
  */
 void
-CheckpointerShmemInit(void)
+CheckpointerShmemInit(int old_n_buffers, int new_n_buffers)
 {
-	Size		size = CheckpointerShmemSize();
-	bool		found;
+	Size		old_size = CheckpointerShmemSize(old_n_buffers);
+	Size		new_size = CheckpointerShmemSize(new_n_buffers);
+	bool		found = false;
 
-	CheckpointerShmem = (CheckpointerShmemStruct *)
-		ShmemInitStruct("Checkpointer Data",
-						size,
-						&found);
+	if (!old_n_buffers)
+	{
+		CheckpointerShmem = (CheckpointerShmemStruct *)
+			ShmemInitStruct("Checkpointer Data",
+							new_size,
+							&found);
+	}
 
 	if (!found)
 	{
@@ -904,11 +908,14 @@ CheckpointerShmemInit(void)
 		 * requests array; this is so that CompactCheckpointerRequestQueue can
 		 * assume that any pad bytes in the request structs are zeroes.
 		 */
-		MemSet(CheckpointerShmem, 0, size);
-		SpinLockInit(&CheckpointerShmem->ckpt_lck);
-		CheckpointerShmem->max_requests = NBuffers;
-		ConditionVariableInit(&CheckpointerShmem->start_cv);
-		ConditionVariableInit(&CheckpointerShmem->done_cv);
+		MemSet(((char *) CheckpointerShmem) + old_size, 0, new_size - old_size);
+		CheckpointerShmem->max_requests = new_n_buffers;
+		if (!old_n_buffers)
+		{
+			SpinLockInit(&CheckpointerShmem->ckpt_lck);
+			ConditionVariableInit(&CheckpointerShmem->start_cv);
+			ConditionVariableInit(&CheckpointerShmem->done_cv);
+		}
 	}
 }
 

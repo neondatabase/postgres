@@ -138,7 +138,7 @@ CreateSharedMemoryAndSemaphores(void)
 		size = add_size(size, SInvalShmemSize());
 		size = add_size(size, PMSignalShmemSize());
 		size = add_size(size, ProcSignalShmemSize());
-		size = add_size(size, CheckpointerShmemSize());
+		size = add_size(size, CheckpointerShmemSize(MaxNBuffers));
 		size = add_size(size, AutoVacuumShmemSize());
 		size = add_size(size, ReplicationSlotsShmemSize());
 		size = add_size(size, ReplicationOriginShmemSize());
@@ -254,7 +254,7 @@ CreateSharedMemoryAndSemaphores(void)
 	 */
 	PMSignalShmemInit();
 	ProcSignalShmemInit();
-	CheckpointerShmemInit();
+	CheckpointerShmemInit(0, InitNBuffers);
 	AutoVacuumShmemInit();
 	ReplicationSlotsShmemInit();
 	ReplicationOriginShmemInit();

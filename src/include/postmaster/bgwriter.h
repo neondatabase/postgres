@@ -37,8 +37,8 @@ extern bool ForwardSyncRequest(const FileTag *ftag, SyncRequestType type);
 
 extern void AbsorbSyncRequests(void);
 
-extern Size CheckpointerShmemSize(void);
-extern void CheckpointerShmemInit(void);
+extern Size CheckpointerShmemSize(int n_buffers);
+extern void CheckpointerShmemInit(int old_n_buffers, int new_n_buffers);
 
 extern bool FirstCallSinceLastCheckpoint(void);
 

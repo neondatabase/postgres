@@ -278,6 +278,8 @@ typedef struct WritebackContext
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
 
+extern void InitBufferDescs(int start_i, int end_i, bool is_init);
+
 /* in localbuf.c */
 extern BufferDesc *LocalBufferDescriptors;
 
@@ -299,6 +301,8 @@ typedef struct CkptSortItem
 } CkptSortItem;
 
 extern CkptSortItem *CkptBufferIds;
+
+extern pg_atomic_uint32 *ElasticNBuffers;
 
 /*
  * Internal buffer management routines
@@ -324,7 +328,7 @@ extern bool have_free_buffer(void);
 
 /* buf_table.c */
 extern Size BufTableShmemSize(int size);
-extern void InitBufTable(int size);
+extern void InitBufTable(int init_size, int max_size);
 extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
 extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);

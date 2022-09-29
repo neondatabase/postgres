@@ -26,6 +26,8 @@
 #include <sys/param.h>
 #endif
 
+#include <sys/mman.h>
+
 #if defined(_M_AMD64) && _MSC_VER == 1800
 #include <math.h>
 #include <versionhelpers.h>
@@ -36,6 +38,7 @@
 #include "port/atomics.h"
 #include "postmaster/postmaster.h"
 #include "replication/walpropshim.h"
+#include "storage/bufmgr.h"
 #include "storage/spin.h"
 #include "tcop/tcopprot.h"
 #include "utils/help_config.h"
@@ -88,6 +91,14 @@ main(int argc, char *argv[])
 	 * result pointer.
 	 */
 	argv = save_ps_display_args(argc, argv);
+
+	ElasticNBuffers = mmap(NULL, 1, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_SHARED, -1, 0);
+    if (ElasticNBuffers == (void *)-1)
+	{
+		write_stderr("ElasticNBuffers mmap failed");
+		exit(23);
+	}
+	pg_atomic_init_u32(ElasticNBuffers, InitNBuffers);
 
 	/*
 	 * Fire up essential subsystems: error and memory management

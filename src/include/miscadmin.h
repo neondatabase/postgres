@@ -175,7 +175,8 @@ extern PGDLLIMPORT bool ExitOnAnyError;
 extern PGDLLIMPORT char *DataDir;
 extern PGDLLIMPORT int data_directory_mode;
 
-extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int InitNBuffers;
+extern PGDLLIMPORT int MaxNBuffers;
 extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;

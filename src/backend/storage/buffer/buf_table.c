@@ -49,7 +49,7 @@ BufTableShmemSize(int size)
  *		size is the desired hash table size (possibly more than NBuffers)
  */
 void
-InitBufTable(int size)
+InitBufTable(int init_size, int max_size)
 {
 	HASHCTL		info;
 
@@ -61,7 +61,7 @@ InitBufTable(int size)
 	info.num_partitions = NUM_BUFFER_PARTITIONS;
 
 	SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
-								  size, size,
+								  init_size, max_size,
 								  &info,
 								  HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
 }

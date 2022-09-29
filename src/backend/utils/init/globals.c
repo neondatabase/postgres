@@ -132,7 +132,8 @@ int			max_parallel_maintenance_workers = 2;
  * MaxBackends is computed by PostmasterMain after modules have had a chance to
  * register background workers.
  */
-int			NBuffers = 1000;
+int			InitNBuffers = 1000;
+int			MaxNBuffers = 1 << 27; // 1 TiB = 1 << 40; 8K page size = 1 << 13. So: 1 TiB / 8K = 1 << 27
 int			MaxConnections = 90;
 int			max_worker_processes = 8;
 int			max_parallel_workers = 8;

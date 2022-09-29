@@ -55,6 +55,9 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 #include "replication/walsender.h"
+#include "utils/builtins.h"
+
+pg_atomic_uint32 *ElasticNBuffers;
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -4924,4 +4927,32 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+Datum
+shmem_inflate(PG_FUNCTION_ARGS)
+{
+	// TODO: worry about concurrent inflates later
+	int64 delta = PG_GETARG_INT64(0);
+	uint32 old_n_buffers = pg_atomic_read_u32(ElasticNBuffers);
+	uint32 new_n_buffers = old_n_buffers + delta;
+
+	// TODO: initialize new stuff
+	InitBufferDescs(old_n_buffers, new_n_buffers, false);
+	CheckpointerShmemInit(old_n_buffers, new_n_buffers);
+
+	pg_atomic_write_u32(ElasticNBuffers, new_n_buffers);
+
+	PG_RETURN_INT64(new_n_buffers);
+}
+
+
+Datum
+shmem_deflate(PG_FUNCTION_ARGS)
+{
+	int64 delta = PG_GETARG_INT64(0);
+
+	uint32 value = pg_atomic_sub_fetch_u32(ElasticNBuffers, delta);
+
+	PG_RETURN_INT64(value);
 }
