@@ -300,6 +300,8 @@ typedef struct CkptSortItem
 
 extern CkptSortItem *CkptBufferIds;
 
+extern pg_atomic_uint32 ElasticNBuffers;
+
 /*
  * Internal buffer management routines
  */

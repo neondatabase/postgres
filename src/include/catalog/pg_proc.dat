@@ -11621,4 +11621,13 @@
   prorettype => 'bytea', proargtypes => 'pg_brin_minmax_multi_summary',
   prosrc => 'brin_minmax_multi_summary_send' },
 
+{ oid => '4642', descr => 'Inflate elastic shmem',
+  proname => 'shmem_inflate', provolatile => 's',
+  prorettype => 'int8', proargtypes => 'int8',
+  prosrc => 'shmem_inflate' },
+{ oid => '4643', descr => 'Inflate elastic shmem',
+  proname => 'shmem_deflate', provolatile => 's',
+  prorettype => 'int8', proargtypes => 'int8',
+  prosrc => 'shmem_deflate' },
+
 ]

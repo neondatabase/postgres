@@ -55,6 +55,7 @@
 #include "utils/resowner_private.h"
 #include "utils/timestamp.h"
 #include "replication/walsender.h"
+#include "utils/builtins.h"
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -4924,4 +4925,25 @@ TestForOldSnapshot_impl(Snapshot snapshot, Relation relation)
 		ereport(ERROR,
 				(errcode(ERRCODE_SNAPSHOT_TOO_OLD),
 				 errmsg("snapshot too old")));
+}
+
+Datum
+shmem_inflate(PG_FUNCTION_ARGS)
+{
+	int64 delta = PG_GETARG_INT64(0);
+
+	uint32 value = pg_atomic_add_fetch_u32(&ElasticNBuffers, delta);
+
+	PG_RETURN_INT64(value);
+}
+
+
+Datum
+shmem_deflate(PG_FUNCTION_ARGS)
+{
+	int64 delta = PG_GETARG_INT64(0);
+
+	uint32 value = pg_atomic_sub_fetch_u32(&ElasticNBuffers, delta);
+
+	PG_RETURN_INT64(value);
 }

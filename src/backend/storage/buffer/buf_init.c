@@ -16,6 +16,7 @@
 
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "port/atomics.h"
 
 BufferDescPadded *BufferDescriptors;
 char	   *BufferBlocks;
@@ -23,6 +24,7 @@ ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
 
+pg_atomic_uint32 ElasticNBuffers;
 
 /*
  * Data Structures:
@@ -144,6 +146,8 @@ InitBufferPool(void)
 	/* Initialize per-backend file flush context */
 	WritebackContextInit(&BackendWritebackContext,
 						 &backend_flush_after);
+
+	pg_atomic_init_u32(&ElasticNBuffers, 0);
 }
 
 /*
