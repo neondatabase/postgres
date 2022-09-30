@@ -19,8 +19,10 @@ get_region_lsn_hook_type get_region_lsn_hook = NULL;
 bool		is_surrogate = false;
 
 static const RemoteXactHook *remote_xact_hook = NULL;
+
+/* Only call if a hook is set and is in multi-region mode */
 #define CallHook(name) \
-	if (remote_xact_hook) remote_xact_hook->name
+	if (remote_xact_hook && IsMultiRegion()) remote_xact_hook->name
 
 void
 SetRemoteXactHook(const RemoteXactHook *hook)
@@ -31,7 +33,7 @@ SetRemoteXactHook(const RemoteXactHook *hook)
 void
 CollectRegion(Relation relation)
 {
-	CallHook(collect_region) (relation);
+	CallHook(collect_region)(relation);
 }
 
 void
@@ -71,17 +73,10 @@ CollectDelete(Relation relation, HeapTuple oldtuple)
 }
 
 void
-SendRwsetAndWait(void)
+PreCommit_ExecuteRemoteXact(void)
 {
 	if (!is_surrogate)
-		CallHook(send_rwset_and_wait)();
+		CallHook(execute_remote_xact)();
 
 	is_surrogate = false;
-}
-
-// TODO: probably can use RegisterXactCallback for this
-void
-AtEOXact_RemoteXact(void)
-{
-	CallHook(clear_rwset)();
 }

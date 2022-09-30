@@ -2115,11 +2115,6 @@ CommitTransaction(void)
 			 TransStateAsString(s->state));
 	Assert(s->parent == NULL);
 
-	SendRwsetAndWait();
-
-	/* Clean up remote xact data */
-	AtEOXact_RemoteXact();
-
 	/*
 	 * Do pre-commit processing that involves calling user-defined code, such
 	 * as triggers.  SECURITY_RESTRICTED_OPERATION contexts must not queue an
@@ -2192,7 +2187,27 @@ CommitTransaction(void)
 	 * the leader's transaction and its serializable state will live on.
 	 */
 	if (!is_parallel_worker)
+	{
 		PreCommit_CheckForSerializationFailure();
+
+		/*
+		* It might be less intrusive to register this function as a callback for the
+		* XACT_EVENT_PRE_COMMIT event. However, if we do that, it is still possible
+		* for the transaction to be aborted (e.g. in PreCommit_CheckForSerializationFailure)
+		* after the callback returns.
+		* 
+		* This is not acceptable because PreCommit_ExecuteRemoteXact will log a vote for
+		* commit in the xact server, and we don't want the transaction to change its decision
+		* after the vote is made.  
+		* 
+		* Putting it here after the check for serialization failure above also allows
+		* SSI to catch serialization error before we do any cross-region communication.
+		* 
+		* This isn't called in PrepareTransaction because we only want to do this
+		* at the coordinator.
+		*/
+		PreCommit_ExecuteRemoteXact();
+	}
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
@@ -2665,9 +2680,6 @@ AbortTransaction(void)
 
 	/* Prevent cancel/die interrupt while cleaning up */
 	HOLD_INTERRUPTS();
-
-	/* Clean up remote xact data */
-	AtEOXact_RemoteXact();
 
 	/* Make sure we have a valid memory context and resource owner */
 	AtAbort_Memory();

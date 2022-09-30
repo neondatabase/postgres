@@ -47,8 +47,7 @@ typedef struct
 	void		(*collect_insert) (Relation relation, HeapTuple newtuple);
 	void		(*collect_update) (Relation relation, HeapTuple oldtuple, HeapTuple newtuple);
 	void		(*collect_delete) (Relation relation, HeapTuple oldtuple);
-	void		(*clear_rwset) (void);
-	void		(*send_rwset_and_wait) (void);
+	void		(*execute_remote_xact) (void);
 } RemoteXactHook;
 
 extern void SetRemoteXactHook(const RemoteXactHook *hook);
@@ -62,8 +61,6 @@ extern void CollectUpdate(Relation relation, HeapTuple oldtuple, HeapTuple newtu
 extern void CollectDelete(Relation relation, HeapTuple oldtuple);
 
 extern bool is_surrogate;
-extern void SendRwsetAndWait(void);
-
-extern void AtEOXact_RemoteXact(void);
+extern void PreCommit_ExecuteRemoteXact(void);
 
 #endif							/* REMOTEXACT_H */

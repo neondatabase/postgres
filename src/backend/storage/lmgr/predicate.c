@@ -2557,8 +2557,10 @@ PredicateLockAcquire(const PREDICATELOCKTARGETTAG *targettag)
 	}
 
 	/*
-	 * Collect the read set of the current transaction. TODO: Make use of the
-	 * promoting mechanism above to reduce the size of the read set.
+	 * Collect the read set of the current transaction.
+	 *
+	 * TODO (ctring): Make use of the promoting mechanism above to reduce the
+	 * size of the read set.
 	 */
 	switch (GET_PREDICATELOCKTARGETTAG_TYPE(*targettag))
 	{
