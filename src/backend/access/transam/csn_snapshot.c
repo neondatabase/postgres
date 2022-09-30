@@ -287,7 +287,7 @@ XidInvisibleInCSNSnapshot(TransactionId xid, Snapshot snapshot)
  */
 void
 CSNSnapshotAbort(PGPROC *proc, TransactionId xid,
-					int nsubxids, TransactionId *subxids)
+				 int nsubxids, TransactionId *subxids)
 {
 	if (!get_csnlog_status())
 		return;
@@ -332,8 +332,7 @@ CSNSnapshotPrecommit(PGPROC *proc, TransactionId xid,
 	if (in_progress)
 	{
 		Assert(XidCSNIsInProgress(oldassignedXidCsn));
-		CSNLogSetCSN(xid, nsubxids,
-						   subxids, InDoubtXidCSN, true);
+		CSNLogSetCSN(xid, nsubxids, subxids, InDoubtXidCSN, true);
 	}
 	else
 	{
@@ -356,7 +355,7 @@ CSNSnapshotPrecommit(PGPROC *proc, TransactionId xid,
  */
 void
 CSNSnapshotCommit(PGPROC *proc, TransactionId xid,
-					int nsubxids, TransactionId *subxids)
+				  int nsubxids, TransactionId *subxids)
 {
 	volatile XidCSN assigned_xid_csn;
 
@@ -373,8 +372,7 @@ CSNSnapshotCommit(PGPROC *proc, TransactionId xid,
 	/* Finally write resulting XidCSN in SLRU */
 	assigned_xid_csn = pg_atomic_read_u64(&proc->assignedXidCsn);
 	Assert(XidCSNIsNormal(assigned_xid_csn));
-	CSNLogSetCSN(xid, nsubxids,
-						   subxids, assigned_xid_csn, true);
+	CSNLogSetCSN(xid, nsubxids, subxids, assigned_xid_csn, true);
 
 	/* Reset for next transaction */
 	pg_atomic_write_u64(&proc->assignedXidCsn, InProgressXidCSN);
