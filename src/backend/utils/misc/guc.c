@@ -7326,6 +7326,10 @@ parse_and_validate_value(struct config_generic *record,
 			break;
 	}
 
+	if (&newval->intval == &InitNBuffers) {
+		pg_atomic_write_u32(ElasticNBuffers, InitNBuffers);
+	}
+
 	return true;
 }
 

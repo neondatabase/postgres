@@ -132,8 +132,17 @@ int			max_parallel_maintenance_workers = 2;
  * MaxBackends is computed by PostmasterMain after modules have had a chance to
  * register background workers.
  */
-int			InitNBuffers = 1000;
-int			MaxNBuffers = 1 << 27; // 1 TiB = 1 << 40; 8K page size = 1 << 13. So: 1 TiB / 8K = 1 << 27
+
+/* XXX Set InitNBuffers == "shared_buffers" in config
+ * so that the demo works (we get crashes during initdb, ...)
+ */
+int			InitNBuffers = (128 << 20) >> 13;
+/* XXX We want to set MaxNBuffers to a 1TiB and that works
+ * on the 5.19 Arch Linux kernel, but on the Fedora 5.15.6-100.fc34.x86_64
+ * kernel, large mmap fails with ENOMEN.
+ *
+ */
+int			MaxNBuffers = (128 << 22) >> 13; // 13 => Page size
 int			MaxConnections = 90;
 int			max_worker_processes = 8;
 int			max_parallel_workers = 8;
