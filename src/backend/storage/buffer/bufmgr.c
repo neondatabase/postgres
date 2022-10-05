@@ -3775,7 +3775,8 @@ RelationCopyStorageUsingBuffer(RelFileNode srcnode,
 	 * relation before starting to copy block by block.
 	 */
 	memset(buf.data, 0, BLCKSZ);
-	smgrextend(smgropen(dstnode, InvalidBackendId), forkNum, nblocks - 1,
+	smgrextend(smgropen(dstnode, InvalidBackendId, permanent ? RELPERSISTENCE_PERMANENT
+						  :RELPERSISTENCE_UNLOGGED), forkNum, nblocks - 1,
 			   buf.data, true);
 
 	/* This is a bulk operation, so use buffer access strategies. */
