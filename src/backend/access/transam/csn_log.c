@@ -24,11 +24,13 @@
 #include "postgres.h"
 
 #include "access/csn_log.h"
+#include "access/remotexact.h"
 #include "access/slru.h"
 #include "access/subtrans.h"
 #include "access/transam.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
+#include "postgres.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/sync.h"
@@ -70,7 +72,11 @@ CSNshapshotShared csnShared = NULL;
 /* We store the commit CSN for each xid */
 #define CSN_LOG_XACTS_PER_PAGE (BLCKSZ / sizeof(XidCSN))
 
-#define TransactionIdToPage(xid)	((xid) / (TransactionId) CSN_LOG_XACTS_PER_PAGE)
+/* Returns the pageno for the given (xid,region) pair.
+ * region = current_region for all writes and relation's region for reads.
+ */
+#define TransactionIdToPage(xid, region) \
+  (((xid / (TransactionId)CSN_LOG_XACTS_PER_PAGE) * MAX_REGIONS) + region)
 #define TransactionIdToPgIndex(xid) ((xid) % (TransactionId) CSN_LOG_XACTS_PER_PAGE)
 
 /*
@@ -118,7 +124,7 @@ CSNLogSetCSN(TransactionId xid, int nsubxids,
 
 	Assert(TransactionIdIsValid(xid));
 
-	pageno = TransactionIdToPage(xid);		/* get page of parent */
+	pageno = TransactionIdToPage(xid, current_region);  /* get page of parent */
 
 	// TODO(pooja): Remove this part entirely?
 	// if(write_xlog)
@@ -126,22 +132,20 @@ CSNLogSetCSN(TransactionId xid, int nsubxids,
 
 	for (;;)
 	{
-		int			num_on_page = 0;
+		int	num_on_page = 0;
 
-		while (i < nsubxids && TransactionIdToPage(subxids[i]) == pageno)
-		{
+        while (i < nsubxids &&
+            TransactionIdToPage(subxids[i], current_region) == pageno) {
 			num_on_page++;
 			i++;
-		}
+        }
 
-		CSNLogSetPageStatus(xid,
-							num_on_page, subxids + offset,
-							csn, pageno);
+        CSNLogSetPageStatus(xid, num_on_page, subxids + offset, csn, pageno);
 		if (i >= nsubxids)
 			break;
 
 		offset = i;
-		pageno = TransactionIdToPage(subxids[offset]);
+		pageno = TransactionIdToPage(subxids[offset], current_region);
 		xid = InvalidTransactionId;
 	}
 }
@@ -167,8 +171,9 @@ CSNLogSetPageStatus(TransactionId xid, int nsubxids,
 	/* Subtransactions first, if needed ... */
 	for (i = 0; i < nsubxids; i++)
 	{
-		Assert(CsnlogCtl->shared->page_number[slotno] == TransactionIdToPage(subxids[i]));
-		CSNLogSetCSNInSlot(subxids[i],	csn, slotno);
+        Assert(CsnlogCtl->shared->page_number[slotno] ==
+            TransactionIdToPage(subxids[i], current_region));
+        CSNLogSetCSNInSlot(subxids[i], csn, slotno);
 	}
 
 	/* ... then the main transaction */
@@ -206,7 +211,8 @@ CSNLogSetCSNInSlot(TransactionId xid, XidCSN csn, int slotno)
 XidCSN
 CSNLogGetCSNByXid(TransactionId xid)
 {
-	int			pageno = TransactionIdToPage(xid);
+	// TODO(pooja): Use region based on relation instead of current_region.
+	int			pageno = TransactionIdToPage(xid, current_region);
 	int			entryno = TransactionIdToPgIndex(xid);
 	int			slotno;
 	XidCSN *ptr;
@@ -306,7 +312,7 @@ ActivateCSNlog(void)
 
 
 	nextXid = XidFromFullTransactionId(ShmemVariableCache->nextXid);
-	startPage = TransactionIdToPage(nextXid);
+	startPage = TransactionIdToPage(nextXid, current_region);
 
 	/* Create the current segment file, if necessary */
 	if (!SimpleLruDoesPhysicalPageExist(CsnlogCtl, startPage))
@@ -422,7 +428,7 @@ ExtendCSNLog(TransactionId newestXact)
 		!TransactionIdEquals(newestXact, FirstNormalTransactionId))
 		return;
 
-	pageno = TransactionIdToPage(newestXact);
+	pageno = TransactionIdToPage(newestXact, current_region);
 
 	LWLockAcquire(CSNLogControlLock, LW_EXCLUSIVE);
 
@@ -456,7 +462,7 @@ TruncateCSNLog(TransactionId oldestXact)
 	 * one, we'd trigger SimpleLruTruncate's wraparound detection.
 	 */
 	TransactionIdRetreat(oldestXact);
-	cutoffPage = TransactionIdToPage(oldestXact);
+	cutoffPage = TransactionIdToPage(oldestXact, current_region);
 	ZeroTruncateCSNLogPage(cutoffPage, true);
 }
 
@@ -476,10 +482,18 @@ CSNLogPagePrecedes(int page1, int page2)
 	TransactionId xid1;
 	TransactionId xid2;
 
-	xid1 = ((TransactionId) page1) * CSN_LOG_XACTS_PER_PAGE;
+    // Either of the pages don't belong to the current region, so return false.
+    if (((page1 - current_region) % MAX_REGIONS != 0) ||
+        	((page2 - current_region) % MAX_REGIONS != 0)) {
+        return false;
+    }
+
+	xid1 = ((TransactionId) ((page1 - current_region)/MAX_REGIONS)) * 
+			CSN_LOG_XACTS_PER_PAGE;
 	xid1 += FirstNormalTransactionId;
-	xid2 = ((TransactionId) page2) * CSN_LOG_XACTS_PER_PAGE;
-	xid2 += FirstNormalTransactionId;
+    xid2 = ((TransactionId)((page2 - current_region) / MAX_REGIONS)) *
+            CSN_LOG_XACTS_PER_PAGE;
+    xid2 += FirstNormalTransactionId;
 
 	return TransactionIdPrecedes(xid1, xid2);
 }

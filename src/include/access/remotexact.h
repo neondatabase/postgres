@@ -16,6 +16,7 @@
 
 #define UNKNOWN_REGION -1
 #define GLOBAL_REGION 0
+#define MAX_REGIONS 256 // 0 reserved for GLOBAL_REGION and 1..255 for user regions.
 
 #define IsMultiRegion() (current_region != GLOBAL_REGION)
 #define RegionIsValid(r) (r != UNKNOWN_REGION)
