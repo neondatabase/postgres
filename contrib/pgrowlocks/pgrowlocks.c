@@ -26,6 +26,7 @@
 
 #include "access/heapam.h"
 #include "access/multixact.h"
+#include "access/remotexact.h"
 #include "access/relscan.h"
 #include "access/tableam.h"
 #include "access/xact.h"
@@ -153,7 +154,8 @@ pgrowlocks(PG_FUNCTION_ARGS)
 		/* must hold a buffer lock to call HeapTupleSatisfiesUpdate */
 		LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-		htsu = HeapTupleSatisfiesUpdate(tuple,
+		htsu = HeapTupleSatisfiesUpdate(RelationGetRegion(rel),
+										tuple,
 										GetCurrentCommandId(false),
 										hscan->rs_cbuf);
 		xmax = HeapTupleHeaderGetRawXmax(tuple->t_data);

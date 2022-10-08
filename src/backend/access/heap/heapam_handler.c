@@ -23,6 +23,7 @@
 #include "access/heapam.h"
 #include "access/heaptoast.h"
 #include "access/multixact.h"
+#include "access/remotexact.h"
 #include "access/rewriteheap.h"
 #include "access/syncscan.h"
 #include "access/tableam.h"
@@ -224,8 +225,8 @@ heapam_tuple_satisfies_snapshot(Relation rel, TupleTableSlot *slot,
 	 * Caller should be holding pin, but not lock.
 	 */
 	LockBuffer(bslot->buffer, BUFFER_LOCK_SHARE);
-	res = HeapTupleSatisfiesVisibility(bslot->base.tuple, snapshot,
-									   bslot->buffer);
+	res = HeapTupleSatisfiesVisibility(RelationGetRegion(rel),
+									   bslot->base.tuple, snapshot, bslot->buffer);
 	LockBuffer(bslot->buffer, BUFFER_LOCK_UNLOCK);
 
 	return res;
@@ -2203,7 +2204,7 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 			loctup.t_len = ItemIdGetLength(lp);
 			loctup.t_tableOid = scan->rs_rd->rd_id;
 			ItemPointerSet(&loctup.t_self, page, offnum);
-			valid = HeapTupleSatisfiesVisibility(&loctup, snapshot, buffer);
+			valid = HeapTupleSatisfiesVisibility(RelationGetRegion(scan->rs_rd), &loctup, snapshot, buffer);
 			if (valid)
 			{
 				hscan->rs_vistuples[ntup++] = offnum;
@@ -2524,8 +2525,8 @@ SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 	else
 	{
 		/* Otherwise, we have to check the tuple individually. */
-		return HeapTupleSatisfiesVisibility(tuple, scan->rs_snapshot,
-											buffer);
+		return HeapTupleSatisfiesVisibility(RelationGetRegion(scan->rs_rd),
+											tuple, scan->rs_snapshot, buffer);
 	}
 }
 

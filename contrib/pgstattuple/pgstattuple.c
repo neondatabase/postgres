@@ -29,6 +29,7 @@
 #include "access/heapam.h"
 #include "access/nbtree.h"
 #include "access/relscan.h"
+#include "access/remotexact.h"
 #include "access/tableam.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_am_d.h"
@@ -349,7 +350,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 		/* must hold a buffer lock to call HeapTupleSatisfiesVisibility */
 		LockBuffer(hscan->rs_cbuf, BUFFER_LOCK_SHARE);
 
-		if (HeapTupleSatisfiesVisibility(tuple, &SnapshotDirty, hscan->rs_cbuf))
+		if (HeapTupleSatisfiesVisibility(RelationGetRegion(rel), tuple, &SnapshotDirty, hscan->rs_cbuf))
 		{
 			stat.tuple_len += tuple->t_len;
 			stat.tuple_count++;

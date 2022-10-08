@@ -454,7 +454,7 @@ HeapTupleSatisfiesToast(HeapTuple htup, Snapshot snapshot,
  *	test for it themselves.)
  */
 TM_Result
-HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
+HeapTupleSatisfiesUpdate(int region, HeapTuple htup, CommandId curcid,
 						 Buffer buffer)
 {
 	HeapTupleHeader tuple = htup->t_data;
@@ -1763,7 +1763,7 @@ HeapTupleSatisfiesHistoricMVCC(HeapTuple htup, Snapshot snapshot,
  *	if so, the indicated buffer is marked dirty.
  */
 bool
-HeapTupleSatisfiesVisibility(HeapTuple tup, Snapshot snapshot, Buffer buffer)
+HeapTupleSatisfiesVisibility(int region, HeapTuple tup, Snapshot snapshot, Buffer buffer)
 {
 	switch (snapshot->snapshot_type)
 	{
