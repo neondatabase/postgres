@@ -2383,7 +2383,7 @@ static struct config_int ConfigureNamesInt[] =
 			NULL
 		},
 		&lastWrittenLsnCacheSize,
-		16*1024, 1024, INT_MAX,
+		128*1024, 1024, INT_MAX,
 		NULL, NULL, NULL
 	},
 
