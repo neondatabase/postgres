@@ -8898,6 +8898,7 @@ heap_xlog_visible(XLogReaderState *record)
 		PageSetAllVisible(page);
 
 		MarkBufferDirty(buffer);
+		PageSetLSN(page, lsn);
 	}
 	else if (action == BLK_RESTORED)
 	{
