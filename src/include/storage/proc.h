@@ -62,6 +62,7 @@ struct XidCache
 #define		PROC_VACUUM_FOR_WRAPAROUND	0x08	/* set by autovac only */
 #define		PROC_IN_LOGICAL_DECODING	0x10	/* currently doing logical
 												 * decoding outside xact */
+#define 	PROC_IS_REMOTEXACT	0x20	/* currently running a remotexact */
 
 /* flags reset at EOXact */
 #define		PROC_VACUUM_STATE_MASK \
