@@ -976,8 +976,9 @@ lazy_scan_heap(LVRelState *vacrel)
 		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(RelationGetSmgr(vacrel->rel)))
 		{
 			int prefetch_limit = Min(rel_pages - blkno - 1, seqscan_prefetch_buffers);
-			for (int i = 1; i <= prefetch_limit; i++)
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
+			for (int i = 1; i <= prefetch_limit
+					 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i).initiated_io;
+				 i++);
 		}
 
 		/* Finished preparatory checks.  Actually scan the page. */
@@ -2437,8 +2438,9 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(RelationGetSmgr(vacrel->rel)))
 		{
 			int prefetch_limit = Min(vacrel->dead_items->num_items - index - 1, seqscan_prefetch_buffers);
-			for (int i = 1; i <= prefetch_limit; i++)
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_items->items[index + i]));
+			for (int i = 1; i <= prefetch_limit
+					 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_items->items[index + i])).initiated_io;
+				 i++);
 		}
 		vacrel->blkno = tblk;
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, tblk, RBM_NORMAL,
@@ -3047,9 +3049,10 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 			BlockNumber pblkno;
 
 			prefetchStart = blkno & ~(PREFETCH_SIZE - 1);
-			for (pblkno = prefetchStart; pblkno <= blkno; pblkno++)
+			for (pblkno = prefetchStart; pblkno <= blkno
+					 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, pblkno).initiated_io;
+				 pblkno++)
 			{
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, pblkno);
 				CHECK_FOR_INTERRUPTS();
 			}
 			prefetchedUntil = prefetchStart;
