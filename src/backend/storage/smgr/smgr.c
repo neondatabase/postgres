@@ -38,7 +38,7 @@ static const f_smgr smgr_md = {
 		.smgr_unlink = mdunlink,
 		.smgr_extend = mdextend,
 		.smgr_prefetch = mdprefetch,
-		.smgr_reset_prefetch = md_reset_prefetch,
+		.smgr_prefetch_in_progress = md_prefetch_in_progress,
 		.smgr_read = mdread,
 		.smgr_write = mdwrite,
 		.smgr_writeback = mdwriteback,
@@ -533,12 +533,12 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 }
 
 /*
- *	smgr_reset_prefetch() -- Cancel all previos prefetch requests
+ *	smgr_prefetch_in_progress() -- Check if there are active prefetch requests
  */
-void
-smgr_reset_prefetch(SMgrRelation reln)
+bool
+smgr_prefetch_in_progress(SMgrRelation reln)
 {
-	(*reln->smgr).smgr_reset_prefetch(reln);
+	return (*reln->smgr).smgr_prefetch_in_progress(reln);
 }
 
 /*

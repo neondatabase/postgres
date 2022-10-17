@@ -400,7 +400,7 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	CHECK_FOR_INTERRUPTS();
 
 	/* Prefetch next block */
-	if (enable_seqscan_prefetch)
+	if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(RelationGetSmgr(scan->rs_base.rs_rd)))
 	{
 		int prefetch_limit = seqscan_prefetch_buffers;
 		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
@@ -409,7 +409,6 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		if (page + prefetch_limit >= scan->rs_nblocks)
 			prefetch_limit = scan->rs_nblocks - page - 1;
 
-		smgr_reset_prefetch(RelationGetSmgr(scan->rs_base.rs_rd));
 		for (int i = 1; i <= prefetch_limit; i++)
 			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
 	}

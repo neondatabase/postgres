@@ -973,10 +973,9 @@ lazy_scan_heap(LVRelState *vacrel)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (enable_seqscan_prefetch)
+		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(RelationGetSmgr(vacrel->rel)))
 		{
 			int prefetch_limit = Min(rel_pages - blkno - 1, seqscan_prefetch_buffers);
-			smgr_reset_prefetch(RelationGetSmgr(vacrel->rel));
 			for (int i = 1; i <= prefetch_limit; i++)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
 		}
@@ -2435,10 +2434,9 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_items->items[index]);
-		if (enable_seqscan_prefetch)
+		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(RelationGetSmgr(vacrel->rel)))
 		{
 			int prefetch_limit = Min(vacrel->dead_items->num_items - index - 1, seqscan_prefetch_buffers);
-			smgr_reset_prefetch(RelationGetSmgr(vacrel->rel));
 			for (int i = 1; i <= prefetch_limit; i++)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_items->items[index + i]));
 		}

@@ -598,9 +598,10 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 /*
  *	mdprefetch() -- Cancel all previous prefetch requests
  */
-void
-md_reset_prefetch(SMgrRelation reln)
+bool
+md_prefetch_in_progress(SMgrRelation reln)
 {
+	return false;
 }
 
 /*
