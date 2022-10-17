@@ -1218,11 +1218,10 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (enable_seqscan_prefetch)
+		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
 		{
 			int prefetch_limit = Min(nblocks - blkno - 1, seqscan_prefetch_buffers);
 			RelationOpenSmgr(vacrel->rel);
-			smgr_reset_prefetch(vacrel->rel->rd_smgr);
 			for (int i = 1; i <= prefetch_limit; i++)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
 		}
@@ -2356,11 +2355,10 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex]);
-		if (enable_seqscan_prefetch)
+		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
 		{
 			int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1, seqscan_prefetch_buffers);
 			RelationOpenSmgr(vacrel->rel);
-			smgr_reset_prefetch(vacrel->rel->rd_smgr);
 			for (int i = 1; i <= prefetch_limit; i++)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex + i]));
 		}
@@ -3397,7 +3395,7 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 		blkno--;
 
 		/* If we haven't prefetched this lot yet, do so now. */
-		if (prefetchedUntil > blkno)
+		if (prefetchedUntil > blkno && !smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
 		{
 			BlockNumber prefetchStart;
 			BlockNumber pblkno;
