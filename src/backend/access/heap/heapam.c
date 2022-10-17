@@ -410,8 +410,9 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 			prefetch_limit = scan->rs_nblocks - page - 1;
 
 		RelationOpenSmgr(scan->rs_base.rs_rd);
-		for (int i = 1; i <= prefetch_limit; i++)
-			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i);
+		for (int i = 1; i <= prefetch_limit
+				 && PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i).initiated_io;
+			 i++);
 	}
 
 	/* read page using selected strategy */
