@@ -18,6 +18,7 @@
 #include "access/relation.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
 #include "utils/acl.h"
@@ -192,6 +193,12 @@ pg_prewarm(PG_FUNCTION_ARGS)
 			Buffer		buf;
 
 			CHECK_FOR_INTERRUPTS();
+			if (block % (seqscan_prefetch_buffers+1) == 0) {
+				int prefetch_limit = Min(last_block-block, seqscan_prefetch_buffers);
+				for (int i = 1; i <= prefetch_limit
+						 && PrefetchBuffer(rel, forkNumber, block + i).initiated_io;
+					 i++);
+			}
 			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
 			ReleaseBuffer(buf);
 			++blocks_done;
