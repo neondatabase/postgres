@@ -5875,7 +5875,6 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
-	ReleaseBuffer(buffer); /* NEON: release buffer pinned by heap_insert */
 	page = (Page) BufferGetPage(buffer);
 
 	offnum = ItemPointerGetOffsetNumber(tid);
@@ -5927,6 +5926,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	END_CRIT_SECTION();
 
+	ReleaseBuffer(buffer); /* NEON: release buffer pinned by heap_insert */
 	UnlockReleaseBuffer(buffer);
 }
 
