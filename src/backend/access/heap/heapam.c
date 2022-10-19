@@ -2261,9 +2261,9 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	if (options & HEAP_INSERT_SPECULATIVE)
 	{
 		/*
-		 * NEON: speculative token is not stored i WAL, so we are not able to reconstruct it from hep insert WAL record.
-		 * So we have to pin this page until end of speculative insert.
-		 * Page will be unpinned by heapam_tuple_complete_speculative
+		 * NEON: speculative token is not stored in WAL, so if the page is evicted
+		 * from the buffer cache, the token will be lost. To prevent that, we keep the
+		 * buffer pinned. It will be unpinned in heapam_tuple_finish/abort_speculative.
 		 */
 		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
 	}
