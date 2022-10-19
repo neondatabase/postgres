@@ -2258,7 +2258,18 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 	END_CRIT_SECTION();
 
-	UnlockReleaseBuffer(buffer);
+	if (options & HEAP_INSERT_SPECULATIVE)
+	{
+		/*
+		 * NEON: speculative token is not stored i WAL, so we are not able to reconstruct it from hep insert WAL record.
+		 * So we have to pin this page until end of speculative insert.
+		 * Page will be unpinned by heapam_tuple_complete_speculative
+		 */
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+	}
+	else
+		UnlockReleaseBuffer(buffer);
+
 	if (vmbuffer != InvalidBuffer)
 		ReleaseBuffer(vmbuffer);
 
@@ -5864,6 +5875,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	buffer = ReadBuffer(relation, ItemPointerGetBlockNumber(tid));
 	LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
+	ReleaseBuffer(buffer); /* NEON: release buffer pinned by heap_insert */
 	page = (Page) BufferGetPage(buffer);
 
 	offnum = ItemPointerGetOffsetNumber(tid);
@@ -5986,6 +5998,9 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	if (!(IsToastRelation(relation) || HeapTupleHeaderIsSpeculative(tp.t_data)))
 		elog(ERROR, "attempted to kill a non-speculative tuple");
 	Assert(!HeapTupleHeaderIsHeapOnly(tp.t_data));
+
+	if (HeapTupleHeaderIsSpeculative(tp.t_data))
+		ReleaseBuffer(buffer);  /* NEON: release buffer pinned by heap_insert */
 
 	/*
 	 * No need to check for serializable conflicts here.  There is never a
