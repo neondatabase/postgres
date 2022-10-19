@@ -2185,7 +2185,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		Page		page = BufferGetPage(buffer);
 		uint8		info = XLOG_HEAP_INSERT;
 		int			bufflags = 0;
-
+		int         ins_rec_size = (options & HEAP_INSERT_SPECULATIVE)
+			? sizeof(xl_heap_insert) : SizeOfHeapInsert;
 		/*
 		 * If this is a catalog, we need to transmit combo CIDs to properly
 		 * decode, so log that as well.
@@ -2210,7 +2211,10 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		if (all_visible_cleared)
 			xlrec.flags |= XLH_INSERT_ALL_VISIBLE_CLEARED;
 		if (options & HEAP_INSERT_SPECULATIVE)
+		{
 			xlrec.flags |= XLH_INSERT_IS_SPECULATIVE;
+			xlrec.spec_token = HeapTupleHeaderGetSpeculativeToken(heaptup->t_data);
+		}
 		Assert(ItemPointerGetBlockNumber(&heaptup->t_self) == BufferGetBlockNumber(buffer));
 
 		/*
@@ -2229,7 +2233,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		}
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
+		XLogRegisterData((char *) &xlrec, ins_rec_size);
 
 		xlhdr.t_infomask2 = heaptup->t_data->t_infomask2;
 		xlhdr.t_infomask = heaptup->t_data->t_infomask;
@@ -8985,8 +8989,16 @@ heap_xlog_insert(XLogReaderState *record)
 	XLogRedoAction action;
 
 	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
-	ItemPointerSetBlockNumber(&target_tid, blkno);
-	ItemPointerSetOffsetNumber(&target_tid, (xlrec->flags & XLH_INSERT_IS_SPECULATIVE) ? SpecTokenOffsetNumber : xlrec->offnum);
+	if (xlrec->flags & XLH_INSERT_IS_SPECULATIVE)
+	{
+		ItemPointerSetBlockNumber(&target_tid, xlrec->spec_token);
+		ItemPointerSetOffsetNumber(&target_tid, SpecTokenOffsetNumber);
+	}
+	else
+	{
+		ItemPointerSetBlockNumber(&target_tid, blkno);
+		ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
+	}
 
 	/*
 	 * The visibility map may need to be fixed even if the heap page is

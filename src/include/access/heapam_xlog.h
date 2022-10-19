@@ -157,7 +157,7 @@ typedef struct xl_heap_insert
 {
 	OffsetNumber offnum;		/* inserted tuple's offset */
 	uint8		flags;
-
+	uint32      spec_token;    /* specuative token */
 	/* xl_heap_header & TUPLE DATA in backup block 0 */
 } xl_heap_insert;
 
