@@ -2258,7 +2258,18 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 
 	END_CRIT_SECTION();
 
-	UnlockReleaseBuffer(buffer);
+	if (options & HEAP_INSERT_SPECULATIVE)
+	{
+		/*
+		 * NEON: speculative token is not stored in WAL, so if the page is evicted
+		 * from the buffer cache, the token will be lost. To prevent that, we keep the
+		 * buffer pinned. It will be unpinned in heapam_tuple_finish/abort_speculative.
+		 */
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+	}
+	else
+		UnlockReleaseBuffer(buffer);
+
 	if (vmbuffer != InvalidBuffer)
 		ReleaseBuffer(vmbuffer);
 
@@ -5930,6 +5941,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	END_CRIT_SECTION();
 
+	ReleaseBuffer(buffer); /* NEON: release buffer pinned by heap_insert */
 	UnlockReleaseBuffer(buffer);
 }
 
@@ -6001,6 +6013,16 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	if (!(IsToastRelation(relation) || HeapTupleHeaderIsSpeculative(tp.t_data)))
 		elog(ERROR, "attempted to kill a non-speculative tuple");
 	Assert(!HeapTupleHeaderIsHeapOnly(tp.t_data));
+
+    /*
+     * NEON: release buffer pinned by heap_insert
+     *
+     * This function is also used on the toast tuples of an aborted speculative
+     * insertion. For those, there is no token on the tuple, and we didn' t keep
+     * the pin. 
+      */
+	if (HeapTupleHeaderIsSpeculative(tp.t_data))
+		ReleaseBuffer(buffer);  
 
 	/*
 	 * No need to check for serializable conflicts here.  There is never a
@@ -9003,7 +9025,7 @@ heap_xlog_insert(XLogReaderState *record)
 
 	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
-	ItemPointerSetOffsetNumber(&target_tid, (xlrec->flags & XLH_INSERT_IS_SPECULATIVE) ? SpecTokenOffsetNumber : xlrec->offnum);
+	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
 
 	/*
 	 * The visibility map may need to be fixed even if the heap page is
