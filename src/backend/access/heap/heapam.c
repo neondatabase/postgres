@@ -400,19 +400,22 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	CHECK_FOR_INTERRUPTS();
 
 	/* Prefetch next block */
-	if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(scan->rs_base.rs_rd->rd_smgr))
+	if (enable_seqscan_prefetch)
 	{
-		int prefetch_limit = seqscan_prefetch_buffers;
-		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
-		if (pbscanwork != NULL && pbscanwork->phsw_chunk_remaining < prefetch_limit)
-			prefetch_limit = pbscanwork->phsw_chunk_remaining;
-		if (page + prefetch_limit >= scan->rs_nblocks)
-			prefetch_limit = scan->rs_nblocks - page - 1;
-
 		RelationOpenSmgr(scan->rs_base.rs_rd);
-		for (int i = 1; i <= prefetch_limit
-				 && PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i).initiated_io;
-			 i++);
+		if (!smgr_prefetch_in_progress(scan->rs_base.rs_rd->rd_smgr))
+		{
+			int prefetch_limit = seqscan_prefetch_buffers;
+			ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
+			if (pbscanwork != NULL && pbscanwork->phsw_chunk_remaining < prefetch_limit)
+				prefetch_limit = pbscanwork->phsw_chunk_remaining;
+			if (page + prefetch_limit >= scan->rs_nblocks)
+				prefetch_limit = scan->rs_nblocks - page - 1;
+
+			for (int i = 1; i <= prefetch_limit
+					 && PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, page+i).initiated_io;
+				 i++);
+		}
 	}
 
 	/* read page using selected strategy */

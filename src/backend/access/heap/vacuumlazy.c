@@ -1218,13 +1218,16 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
+		if (enable_seqscan_prefetch)
 		{
-			int prefetch_limit = Min(nblocks - blkno - 1, seqscan_prefetch_buffers);
 			RelationOpenSmgr(vacrel->rel);
-			for (int i = 1; i <= prefetch_limit
-					 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i).initiated_io;
-				 i++);
+			if (!smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
+			{
+				int prefetch_limit = Min(nblocks - blkno - 1, seqscan_prefetch_buffers);
+				for (int i = 1; i <= prefetch_limit
+						 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i).initiated_io;
+					 i++);
+			}
 		}
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
 								 RBM_NORMAL, vacrel->bstrategy);
@@ -2356,13 +2359,16 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex]);
-		if (enable_seqscan_prefetch && !smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
+		if (enable_seqscan_prefetch)
 		{
-			int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1, seqscan_prefetch_buffers);
 			RelationOpenSmgr(vacrel->rel);
-			for (int i = 1; i <= prefetch_limit
-					 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex + i])).initiated_io;
-				 i++);
+			if (!smgr_prefetch_in_progress(vacrel->rel->rd_smgr))
+			{
+				int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1, seqscan_prefetch_buffers);
+				for (int i = 1; i <= prefetch_limit
+						 && PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex + i])).initiated_io;
+					 i++);
+			}
 		}
 		vacrel->blkno = tblk;
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, tblk, RBM_NORMAL,
