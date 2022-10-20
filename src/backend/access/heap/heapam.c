@@ -5925,8 +5925,15 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 		elog(ERROR, "attempted to kill a non-speculative tuple");
 	Assert(!HeapTupleHeaderIsHeapOnly(tp.t_data));
 
+    /*
+     * NEON: release buffer pinned by heap_insert
+     *
+     * This function is also used on the toast tuples of an aborted speculative
+     * insertion. For those, there is no token on the tuple, and we didn' t keep
+     * the pin. 
+      */
 	if (HeapTupleHeaderIsSpeculative(tp.t_data))
-		ReleaseBuffer(buffer);  /* NEON: release buffer pinned by heap_insert */
+		ReleaseBuffer(buffer);  
 
 	/*
 	 * No need to check for serializable conflicts here.  There is never a
