@@ -6154,7 +6154,7 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 void
 SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
-	if (lsn == InvalidXLogRecPtr)
+	if (lsn == InvalidXLogRecPtr || n_blocks == 0)
 		return;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
@@ -6173,8 +6173,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 		BlockNumber end_bucket;   /* exclusive */
 
 		start_bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
-		end_bucket = n_blocks == 0
-			? start_bucket : (from + n_blocks + LAST_WRITTEN_LSN_CACHE_BUCKET - 1) / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		end_bucket = (from + n_blocks + LAST_WRITTEN_LSN_CACHE_BUCKET - 1) / LAST_WRITTEN_LSN_CACHE_BUCKET;
 
 		key.rnode = rnode;
 		key.forkNum = forknum;
