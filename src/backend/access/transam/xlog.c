@@ -5255,7 +5255,7 @@ XLOGShmemInit(void)
 
 
 	XLogCtl = (XLogCtlData *)
-		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
+		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
 
 	{
 		static HASHCTL info;
@@ -9001,9 +9001,9 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
  * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
  */
 void
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber till)
+SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
-	if (lsn == InvalidXLogRecPtr)
+	if (lsn == InvalidXLogRecPtr || n_blocks == 0)
 		return;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
@@ -9018,12 +9018,15 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 		BufferTag key;
 		bool found;
 		BlockNumber bucket;
+		BlockNumber start_bucket; /* inclusive */
+		BlockNumber end_bucket;   /* exclusive */
+
+		start_bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		end_bucket = (from + n_blocks + LAST_WRITTEN_LSN_CACHE_BUCKET - 1) / LAST_WRITTEN_LSN_CACHE_BUCKET;
 
 		key.rnode = rnode;
 		key.forkNum = forknum;
-		for (bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
-			 bucket <= till / LAST_WRITTEN_LSN_CACHE_BUCKET;
-			 bucket++)
+		for (bucket = start_bucket; bucket < end_bucket; bucket++)
 		{
 			key.blockNum = bucket;
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
@@ -9061,7 +9064,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 void
 SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
-	SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, blkno);
+	SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, 1);
 }
 
 /*
