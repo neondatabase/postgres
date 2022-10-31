@@ -493,7 +493,7 @@ extern void CancelBackup(void);
 extern size_t get_hash_memory_limit(void);
 extern int	get_hash_mem(void);
 
-/* in src/backend/tcop/zenith_wal_redo.c */
+/* in storage/buffer/buf_init.c */
 extern bool am_wal_redo_postgres;
 
 #endif							/* MISCADMIN_H */
