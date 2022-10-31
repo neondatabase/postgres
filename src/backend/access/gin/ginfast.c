@@ -364,10 +364,10 @@ ginHeapTupleFastInsert(GinState *ginstate, GinTupleCollector *collector)
 
 		data.ntuples = collector->ntuples;
 
+		START_CRIT_SECTION();
+
 		if (needWal)
 			XLogBeginInsert();
-
-		START_CRIT_SECTION();
 
 		/*
 		 * Increase counter of heap tuples

@@ -230,8 +230,6 @@ extern void BufferGetTag(Buffer buffer, RelFileNode *rnode,
 
 extern void MarkBufferDirtyHint(Buffer buffer, bool buffer_std);
 
-extern void MarkBufferPermanent(Buffer buffer);
-
 extern void UnlockBuffers(void);
 extern void LockBuffer(Buffer buffer, int mode);
 extern bool ConditionalLockBuffer(Buffer buffer);

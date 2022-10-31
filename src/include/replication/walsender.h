@@ -51,7 +51,8 @@ extern void WalSndRqstFileReload(void);
 
 /*
  * Hook to check for WAL receiving backpressure.
- * Return value in microseconds */
+ * Return value in microseconds
+ */
 extern uint64 (*delay_backend_us)(void);
 
 /* expose these so that they can be reused by the neon walproposer extension */
@@ -60,12 +61,12 @@ extern TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 extern void ProcessStandbyReply(XLogRecPtr writePtr, XLogRecPtr flushPtr,
 								XLogRecPtr applyPtr, TimestampTz replyTime,
 								bool replyRequested);
-void       PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
-void       ProcessStandbyHSFeedback(TimestampTz   replyTime,
-									TransactionId feedbackXmin,
-									uint32		feedbackEpoch,
-									TransactionId feedbackCatalogXmin,
-									uint32		feedbackCatalogEpoch);
+extern void PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
+extern void ProcessStandbyHSFeedback(TimestampTz   replyTime,
+									 TransactionId feedbackXmin,
+									 uint32		feedbackEpoch,
+									 TransactionId feedbackCatalogXmin,
+									 uint32		feedbackCatalogEpoch);
 
 /*
  * Remember that we want to wakeup walsenders later
