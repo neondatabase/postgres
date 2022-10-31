@@ -107,6 +107,7 @@ spgbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	SpGistInitBuffer(nullbuffer, SPGIST_LEAF | SPGIST_NULLS);
 	MarkBufferDirty(nullbuffer);
 
+
 	END_CRIT_SECTION();
 
 	UnlockReleaseBuffer(metabuffer);
