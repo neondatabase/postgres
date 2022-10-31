@@ -278,6 +278,8 @@ typedef struct WritebackContext
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
 
+extern Buffer wal_redo_buffer;
+
 /* in localbuf.c */
 extern BufferDesc *LocalBufferDescriptors;
 
