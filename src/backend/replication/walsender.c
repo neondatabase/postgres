@@ -2879,7 +2879,7 @@ XLogSendPhysical(void)
 	 *
 	 * In theory we could make XLogFlush() record a time in shmem whenever WAL
 	 * is flushed and we could get that time as well as the LSN when we call
-	 * GetFlushRecPtr(NULL) above (and likewise for the cascading standby
+	 * GetFlushRecPtr() above (and likewise for the cascading standby
 	 * equivalent), but rather than putting any new code into the hot WAL path
 	 * it seems good enough to capture the time here.  We should reach this
 	 * after XLogFlush() runs WalSndWakeupProcessRequests(), and although that
@@ -2974,8 +2974,8 @@ XLogSendPhysical(void)
 	Assert(nbytes <= MAX_SEND_SIZE);
 
 	/*
-	* OK to read and send the slice.
-	*/
+	 * OK to read and send the slice.
+	 */
 	if (output_message.data)
 		resetStringInfo(&output_message);
 	else
@@ -2987,20 +2987,20 @@ XLogSendPhysical(void)
 	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
 
 	/*
-	* Read the log directly into the output buffer to avoid extra memcpy
-	* calls.
-	*/
+	 * Read the log directly into the output buffer to avoid extra memcpy
+	 * calls.
+	 */
 	enlargeStringInfo(&output_message, nbytes);
 
 retry:
 	if (!WALRead(xlogreader,
-				&output_message.data[output_message.len],
-				startptr,
-				nbytes,
-				xlogreader->seg.ws_tli,	/* Pass the current TLI because
-											* only WalSndSegmentOpen controls
-											* whether new TLI is needed. */
-				&errinfo))
+				 &output_message.data[output_message.len],
+				 startptr,
+				 nbytes,
+				 xlogreader->seg.ws_tli,	/* Pass the current TLI because
+											 * only WalSndSegmentOpen controls
+											 * whether new TLI is needed. */
+				 &errinfo))
 		WALReadRaiseError(&errinfo);
 
 	/* See logical_read_xlog_page(). */
@@ -3008,11 +3008,11 @@ retry:
 	CheckXLogRemoved(segno, xlogreader->seg.ws_tli);
 
 	/*
-	* During recovery, the currently-open WAL file might be replaced with the
-	* file of the same name retrieved from archive. So we always need to
-	* check what we read was valid after reading into the buffer. If it's
-	* invalid, we try to open and read the file again.
-	*/
+	 * During recovery, the currently-open WAL file might be replaced with the
+	 * file of the same name retrieved from archive. So we always need to
+	 * check what we read was valid after reading into the buffer. If it's
+	 * invalid, we try to open and read the file again.
+	 */
 	if (am_cascading_walsender)
 	{
 		WalSnd	   *walsnd = MyWalSnd;
@@ -3035,12 +3035,12 @@ retry:
 	output_message.data[output_message.len] = '\0';
 
 	/*
-		* Fill the send timestamp last, so that it is taken as late as possible.
-		*/
+	 * Fill the send timestamp last, so that it is taken as late as possible.
+	 */
 	resetStringInfo(&tmpbuf);
 	pq_sendint64(&tmpbuf, GetCurrentTimestamp());
 	memcpy(&output_message.data[1 + sizeof(int64) + sizeof(int64)],
-			tmpbuf.data, sizeof(int64));
+		   tmpbuf.data, sizeof(int64));
 
 	pq_putmessage_noblock('d', output_message.data, output_message.len);
 
@@ -3078,7 +3078,7 @@ XLogSendLogical(void)
 	/*
 	 * We'll use the current flush point to determine whether we've caught up.
 	 * This variable is static in order to cache it across calls.  Caching is
-	 * helpful because GetFlushRecPtr(NULL) needs to acquire a heavily-contended
+	 * helpful because GetFlushRecPtr() needs to acquire a heavily-contended
 	 * spinlock.
 	 */
 	static XLogRecPtr flushPtr = InvalidXLogRecPtr;

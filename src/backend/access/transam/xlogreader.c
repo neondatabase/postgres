@@ -1826,7 +1826,6 @@ DecodeXLogRecord(XLogReaderState *state,
 				}
 				else
 					blk->hole_length = BLCKSZ - blk->bimg_len;
-
 				datatotal += blk->bimg_len;
 
 				/*
@@ -1972,7 +1971,6 @@ DecodeXLogRecord(XLogReaderState *state,
 
 	/* Report the actual size we used. */
 	decoded->size = MAXALIGN(out - (char *) decoded);
-
 	Assert(DecodeXLogRecordRequiredSpace(record->xl_tot_len) >=
 		   decoded->size);
 
