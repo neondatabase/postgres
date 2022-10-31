@@ -24,8 +24,7 @@ OBJS = \
 	syncrep_gram.o \
 	walreceiver.o \
 	walreceiverfuncs.o \
-	walsender.o \
-	walpropcompat.o
+	walsender.o
 
 SUBDIRS = logical
 
