@@ -58,6 +58,7 @@
 #include "utils/timestamp.h"
 #include "replication/walsender.h"
 
+
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
 #define BufferGetLSN(bufHdr)	(PageGetLSN(BufHdrGetBlock(bufHdr)))
@@ -806,12 +807,13 @@ ReadBufferWithoutRelcache(RelFileNode rnode, ForkNumber forkNum,
 	bool		hit;
 
 	SMgrRelation smgr = smgropen(rnode, InvalidBackendId,
-							 	 RELPERSISTENCE_PERMANENT);
+								 RELPERSISTENCE_PERMANENT);
 
 	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
 							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
 							 mode, strategy, &hit);
 }
+
 
 /*
  * ReadBuffer_common -- common logic for all ReadBuffer variants

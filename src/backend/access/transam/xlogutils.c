@@ -378,7 +378,6 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	{
 		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 		{
-			//FIXME assume relpersistence permanent. Is it always true?
 			*buf = ReadBufferWithoutRelcache(rnode, forknum,
 											 blkno, mode, NULL, true);
 			return BLK_DONE;

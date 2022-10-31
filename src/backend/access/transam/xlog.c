@@ -4740,7 +4740,6 @@ BootStrapXLOG(void)
 	ReadControlFile();
 }
 
-
 static char *
 str_time(pg_time_t tnow)
 {
@@ -6490,7 +6489,7 @@ LogCheckpointEnd(bool restartpoint)
 	average_sync_time = 0;
 	if (CheckpointStats.ckpt_sync_rels > 0)
 		average_sync_time = CheckpointStats.ckpt_agg_sync_time /
-						CheckpointStats.ckpt_sync_rels;
+			CheckpointStats.ckpt_sync_rels;
 	average_msecs = (long) ((average_sync_time + 999) / 1000);
 
 	if (restartpoint)
