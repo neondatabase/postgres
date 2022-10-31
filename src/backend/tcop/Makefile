@@ -20,6 +20,4 @@ OBJS = \
 	pquery.o \
 	utility.o
 
-OBJS += zenith_wal_redo.o
-
 include $(top_srcdir)/src/backend/common.mk
