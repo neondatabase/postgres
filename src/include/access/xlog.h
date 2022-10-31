@@ -26,10 +26,8 @@
 #define SYNC_METHOD_OPEN_DSYNC	4	/* for O_DSYNC */
 extern PGDLLIMPORT int sync_method;
 
-
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
 extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
-
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
 
 /*
