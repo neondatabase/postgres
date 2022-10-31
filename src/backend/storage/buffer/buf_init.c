@@ -23,6 +23,14 @@ ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
 
+/*
+ * Buffer with target WAL redo page.
+ * We must not evict this page from the buffer pool, but we cannot just keep it pinned because
+ * some WAL redo functions expect the page to not be pinned. So we have a special check in
+ * localbuf.c to prevent this buffer from being evicted.
+ */
+Buffer		wal_redo_buffer;
+bool		am_wal_redo_postgres = false;
 
 /*
  * Data Structures:

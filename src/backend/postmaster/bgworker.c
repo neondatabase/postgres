@@ -22,7 +22,6 @@
 #include "postmaster/postmaster.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
-#include "replication/walpropshim.h"
 #include "storage/dsm.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
