@@ -1497,8 +1497,6 @@ FinishWalRecovery(void)
 	 * An important side-effect of this is to load the last page into
 	 * xlogreader. The caller uses it to initialize the WAL for writing.
 	 */
-
-
 	if (!InRecovery)
 	{
 		lastRec = CheckPointLoc;
