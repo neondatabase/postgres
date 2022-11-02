@@ -2213,8 +2213,7 @@ static struct config_int ConfigureNamesInt[] =
 		 GUC_EXPLAIN
 		},
 		&seqscan_prefetch_buffers,
-		/* 8, 0, 1000, */
-		0, 0, 1000, /* temporary disable to be able to merge in main */
+		100, 0, 1000,
 		NULL, NULL, NULL
 	},
 	{

@@ -123,6 +123,7 @@ typedef struct f_smgr
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
+	void        (*smgr_fcntl)(SMgrRelation reln, int cmd, void const* data, size_t size);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -177,5 +178,8 @@ extern bool ProcessBarrierSmgrRelease(void);
 extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
+extern void smgr_fcntl(SMgrRelation reln, int cmd, void const* data, size_t size);
+
+#define SMGR_FCNTL_CACHE_SNAPSHOT 1
 
 #endif							/* SMGR_H */
