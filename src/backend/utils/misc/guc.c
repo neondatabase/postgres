@@ -2163,7 +2163,7 @@ static struct config_int ConfigureNamesInt[] =
 		 GUC_EXPLAIN
 		},
 		&seqscan_prefetch_buffers,
-		10, 0, 10000,
+		100, 0, 10000,
 		NULL, NULL, NULL
 	},
 	{

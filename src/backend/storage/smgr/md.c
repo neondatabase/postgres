@@ -584,6 +584,12 @@ md_prefetch_in_progress(SMgrRelation reln)
 	return false;
 }
 
+
+void
+mdfcntl(SMgrRelation reln, int cmd, void const* data, size_t size)
+{
+}
+
 /*
  * mdwriteback() -- Tell the kernel to write pages back to storage.
  *

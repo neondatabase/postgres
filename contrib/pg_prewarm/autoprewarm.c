@@ -27,12 +27,14 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "access/relation.h"
 #include "access/xact.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "postmaster/interrupt.h"
@@ -272,10 +274,10 @@ static void
 apw_load_buffers(void)
 {
 	FILE	   *file = NULL;
-	int			num_elements,
-				i;
+	int			num_elements;
 	BlockInfoRecord *blkinfo;
 	dsm_segment *seg;
+	struct stat statbuf;
 
 	/*
 	 * Skip the prewarm if the dump file is in use; otherwise, prevent any
@@ -298,47 +300,34 @@ apw_load_buffers(void)
 	 * Open the block dump file.  Exit quietly if it doesn't exist, but report
 	 * any other error.
 	 */
-	file = AllocateFile(AUTOPREWARM_FILE, "r");
-	if (!file)
+	if (stat(AUTOPREWARM_FILE, &statbuf) == 0)
 	{
-		if (errno == ENOENT)
+		file = AllocateFile(AUTOPREWARM_FILE, "r");
+		if (!file)
 		{
-			LWLockAcquire(&apw_state->lock, LW_EXCLUSIVE);
-			apw_state->pid_using_dumpfile = InvalidPid;
-			LWLockRelease(&apw_state->lock);
-			return;				/* No file to load. */
-		}
-		ereport(ERROR,
+			ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not read file \"%s\": %m",
 						AUTOPREWARM_FILE)));
-	}
-
-	/* First line of the file is a record count. */
-	if (fscanf(file, "<<%d>>\n", &num_elements) != 1)
-		ereport(ERROR,
-				(errcode_for_file_access(),
-				 errmsg("could not read from file \"%s\": %m",
-						AUTOPREWARM_FILE)));
-
-	/* Allocate a dynamic shared memory segment to store the record data. */
-	seg = dsm_create(sizeof(BlockInfoRecord) * num_elements, 0);
-	blkinfo = (BlockInfoRecord *) dsm_segment_address(seg);
-
-	/* Read records, one per line. */
-	for (i = 0; i < num_elements; i++)
-	{
-		unsigned	forknum;
-
-		if (fscanf(file, "%u,%u,%u,%u,%u\n", &blkinfo[i].database,
-				   &blkinfo[i].tablespace, &blkinfo[i].filenode,
-				   &forknum, &blkinfo[i].blocknum) != 5)
+		}
+		seg = dsm_create(statbuf.st_size, 0);
+		blkinfo = (BlockInfoRecord *) dsm_segment_address(seg);
+		num_elements = statbuf.st_size / sizeof(BlockInfoRecord);
+		if (fread(blkinfo, sizeof(BlockInfoRecord), num_elements, file) != num_elements)
+		{
 			ereport(ERROR,
-					(errmsg("autoprewarm block dump file is corrupted at line %d",
-							i + 1)));
-		blkinfo[i].forknum = forknum;
+				(errcode_for_file_access(),
+				 errmsg("could not read file \"%s\": %m",
+						AUTOPREWARM_FILE)));
+		}
 	}
-
+	else
+	{
+		LWLockAcquire(&apw_state->lock, LW_EXCLUSIVE);
+		apw_state->pid_using_dumpfile = InvalidPid;
+		LWLockRelease(&apw_state->lock);
+		return;				/* No file to load. */
+	}
 	FreeFile(file);
 
 	/* Sort the blocks to be loaded. */
@@ -438,6 +427,7 @@ autoprewarm_database_main(Datum main_arg)
 	BlockNumber nblocks = 0;
 	BlockInfoRecord *old_blk = NULL;
 	dsm_segment *seg;
+	int last_prefetch_pos = -1;
 
 	/* Establish signal handlers; once that's done, unblock signals. */
 	pqsignal(SIGTERM, die);
@@ -452,15 +442,14 @@ autoprewarm_database_main(Datum main_arg)
 				 errmsg("could not map dynamic shared memory segment")));
 	BackgroundWorkerInitializeConnectionByOid(apw_state->database, InvalidOid, 0);
 	block_info = (BlockInfoRecord *) dsm_segment_address(seg);
-	pos = apw_state->prewarm_start_idx;
 
 	/*
 	 * Loop until we run out of blocks to prewarm or until we run out of free
 	 * buffers.
 	 */
-	while (pos < apw_state->prewarm_stop_idx && have_free_buffer())
+	for (pos = apw_state->prewarm_start_idx; pos < apw_state->prewarm_stop_idx && have_free_buffer(); pos++)
 	{
-		BlockInfoRecord *blk = &block_info[pos++];
+		BlockInfoRecord *blk = &block_info[pos];
 		Buffer		buf;
 
 		CHECK_FOR_INTERRUPTS();
@@ -536,6 +525,34 @@ autoprewarm_database_main(Datum main_arg)
 			continue;
 		}
 
+		if (pos > last_prefetch_pos) {
+			int i;
+			int prefetch_limit = Min(apw_state->prewarm_stop_idx-pos-1, seqscan_prefetch_buffers);
+			for (i = 1; i <= prefetch_limit; i++)
+			{
+				BlockInfoRecord *prefetch_blk = &block_info[pos + i];
+				/*
+				 * Quit if we've reached records for another database. If previous
+				 * blocks are of some global objects, then continue pre-warming.
+				 */
+				if (prefetch_blk->database != blk->database && blk->database != 0)
+					break;
+				/*
+				 * Prefetch only blocks of oe fork of one relation
+				 */
+				if (prefetch_blk->filenode != blk->filenode || prefetch_blk->forknum != blk->forknum)
+					break;
+
+				/* Check whether blocknum is valid and within fork file size. */
+				if (prefetch_blk->blocknum >= nblocks)
+					break;
+
+				/* Stop prefetch if page is already present i shared buffers */
+				if (!PrefetchBuffer(rel, prefetch_blk->forknum, prefetch_blk->blocknum).initiated_io)
+					break;
+			}
+			last_prefetch_pos = pos + i - 1;
+		}
 		/* Prewarm buffer. */
 		buf = ReadBufferExtended(rel, blk->forknum, blk->blocknum, RBM_NORMAL,
 								 NULL);
@@ -559,9 +576,8 @@ autoprewarm_database_main(Datum main_arg)
 }
 
 /*
- * Dump information on blocks in shared buffers.  We use a text format here
- * so that it's easy to understand and even change the file contents if
- * necessary.
+ * Dump information on blocks in shared buffers. Use binary format to avoid fprintf/fscanf overhead
+ * and reduce size.
  * Returns the number of blocks dumped.
  */
 static int
@@ -627,7 +643,12 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 
 		UnlockBufHdr(bufHdr, buf_state);
 	}
-
+	if (num_blocks > 0)
+	{
+		RelFileNode dummy_rnode = {0,0,0};
+		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+		smgr_fcntl(rel, SMGR_FCNTL_CACHE_SNAPSHOT, block_info_array, num_blocks * sizeof(BlockInfoRecord));
+	}
 	snprintf(transient_dump_file_path, MAXPGPATH, "%s.tmp", AUTOPREWARM_FILE);
 	file = AllocateFile(transient_dump_file_path, "w");
 	if (!file)
@@ -635,9 +656,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m",
 						transient_dump_file_path)));
-
-	ret = fprintf(file, "<<%d>>\n", num_blocks);
-	if (ret < 0)
+	if (fwrite(block_info_array, sizeof(BlockInfoRecord), num_blocks, file) != num_blocks)
 	{
 		int			save_errno = errno;
 
@@ -646,32 +665,8 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 		errno = save_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not write to file \"%s\": %m",
-						transient_dump_file_path)));
-	}
-
-	for (i = 0; i < num_blocks; i++)
-	{
-		CHECK_FOR_INTERRUPTS();
-
-		ret = fprintf(file, "%u,%u,%u,%u,%u\n",
-					  block_info_array[i].database,
-					  block_info_array[i].tablespace,
-					  block_info_array[i].filenode,
-					  (uint32) block_info_array[i].forknum,
-					  block_info_array[i].blocknum);
-		if (ret < 0)
-		{
-			int			save_errno = errno;
-
-			FreeFile(file);
-			unlink(transient_dump_file_path);
-			errno = save_errno;
-			ereport(ERROR,
-					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\": %m",
-							transient_dump_file_path)));
-		}
+				 errmsg("could not write file \"%s\": %m",
+						AUTOPREWARM_FILE)));
 	}
 
 	pfree(block_info_array);

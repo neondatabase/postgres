@@ -31,6 +31,7 @@ extern void mdextend(SMgrRelation reln, ForkNumber forknum,
 extern bool mdprefetch(SMgrRelation reln, ForkNumber forknum,
 					   BlockNumber blocknum);
 extern bool md_prefetch_in_progress(SMgrRelation reln);
+extern void mdfcntl(SMgrRelation reln, int cmd, void const* data, size_t size);
 extern void mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 				   char *buffer);
 extern void mdwrite(SMgrRelation reln, ForkNumber forknum,
