@@ -1218,14 +1218,6 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (enable_seqscan_prefetch)
-		{
-			int prefetch_limit = Min(nblocks - blkno - 1, seqscan_prefetch_buffers);
-			RelationOpenSmgr(vacrel->rel);
-			smgr_reset_prefetch(vacrel->rel->rd_smgr);
-			for (int i = 1; i <= prefetch_limit; i++)
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
-		}
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
 								 RBM_NORMAL, vacrel->bstrategy);
 
@@ -2323,7 +2315,8 @@ lazy_vacuum_all_indexes(LVRelState *vacrel)
 static void
 lazy_vacuum_heap_rel(LVRelState *vacrel)
 {
-	int			tupindex;
+	int			tupindex,
+				ptupindex;
 	BlockNumber vacuumed_pages;
 	PGRUsage	ru0;
 	Buffer		vmbuffer = InvalidBuffer;
@@ -2346,6 +2339,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	vacuumed_pages = 0;
 
 	tupindex = 0;
+	ptupindex = 0;
 	while (tupindex < vacrel->dead_tuples->num_tuples)
 	{
 		BlockNumber tblk;
@@ -2356,14 +2350,46 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 		vacuum_delay_point();
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex]);
-		if (enable_seqscan_prefetch)
+
+		if (enable_seqscan_prefetch && seqscan_prefetch_buffers > 0)
 		{
-			int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1, seqscan_prefetch_buffers);
-			RelationOpenSmgr(vacrel->rel);
-			smgr_reset_prefetch(vacrel->rel->rd_smgr);
-			for (int i = 1; i <= prefetch_limit; i++)
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[tupindex + i]));
+			/*
+			 * If we're just starting out, prefetch N consecutive blocks.
+			 * If not, only the next 1 block
+			 */
+			if (tupindex == 0)
+			{
+				int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1,
+										 Min(vacrel->rel_pages,
+											 seqscan_prefetch_buffers));
+				BlockNumber prev_prefetch = 0;
+
+				RelationOpenSmgr(vacrel->rel);
+
+				while (++ptupindex < vacrel->dead_tuples->num_tuples &&
+					   prefetch_limit > 0)
+				{
+					ItemPointer ptr = &vacrel->dead_tuples->itemptrs[ptupindex];
+					if (ItemPointerGetBlockNumber(ptr) != prev_prefetch)
+					{
+						prev_prefetch = ItemPointerGetBlockNumber(ptr);
+						prefetch_limit -= 1;
+						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
+					}
+				}
+			}
+			else
+			{
+				BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]);
+				while (ptupindex < vacrel->dead_tuples->num_tuples)
+				{
+					if (toPrefetch != ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]))
+						break;
+				}
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
+			}
 		}
+
 		vacrel->blkno = tblk;
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, tblk, RBM_NORMAL,
 								 vacrel->bstrategy);
