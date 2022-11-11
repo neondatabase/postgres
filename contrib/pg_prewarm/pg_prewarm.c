@@ -185,22 +185,18 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
-		BlockNumber last_prefetch_block = 0;
+		BlockNumber prefetch_block = first_block;
 		/*
 		 * In buffer mode, we actually pull the data into shared_buffers.
 		 */
 		for (block = first_block; block <= last_block; ++block)
 		{
-			Buffer		buf;
-
+			Buffer buf;
+			int prefetch_stop = block + Min(last_block - block + 1, seqscan_prefetch_buffers);
 			CHECK_FOR_INTERRUPTS();
-			if (block == first_block || block > last_prefetch_block) {
-				int i;
-				int prefetch_limit = Min(last_block-block, seqscan_prefetch_buffers);
-				for (i = 1; i <= prefetch_limit
-						 && PrefetchBuffer(rel, forkNumber, block + i).initiated_io;
-					 i++);
-				last_prefetch_block = block + i - 1;
+			while (prefetch_block < prefetch_stop)
+			{
+				PrefetchBuffer(rel, forkNumber, prefetch_block++);
 			}
 			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
 			ReleaseBuffer(buf);
