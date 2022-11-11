@@ -848,6 +848,7 @@ lazy_scan_heap(LVRelState *vacrel)
 	BlockNumber rel_pages = vacrel->rel_pages,
 				blkno,
 				next_unskippable_block,
+				next_prefetch_block,
 				next_failsafe_block = 0,
 				next_fsm_block_to_vacuum = 0;
 	VacDeadItems *dead_items = vacrel->dead_items;
@@ -871,6 +872,7 @@ lazy_scan_heap(LVRelState *vacrel)
 	next_unskippable_block = lazy_scan_skip(vacrel, &vmbuffer, 0,
 											&next_unskippable_allvis,
 											&skipping_current_range);
+	next_prefetch_block = 0;
 	for (blkno = 0; blkno < rel_pages; blkno++)
 	{
 		Buffer		buf;
@@ -976,24 +978,28 @@ lazy_scan_heap(LVRelState *vacrel)
 		if (enable_seqscan_prefetch && seqscan_prefetch_buffers > 0)
 		{
 			/*
-			 * If we're starting the scan, we need to prefetch the first N pages.
-			 * If not, we need to only prefetch page blkno+n.
+			 * Prefetch seqscan_prefetch_buffers blocks ahead
 			 */
-			if (blkno == 0)
-			{
-				int prefetch_limit = Min(rel_pages - blkno - 1,
-										 seqscan_prefetch_buffers);
+			uint32 prefetch_budget = seqscan_prefetch_buffers;
 
-				for (int i = 1; i <= prefetch_limit; i++)
-					PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, blkno+i);
-			}
-			else
-			{
-				/* No need to prefetch past the end of the relation */
-				if (blkno + seqscan_prefetch_buffers < rel_pages)
-					PrefetchBuffer(vacrel->rel, MAIN_FORKNUM,
-								   blkno + seqscan_prefetch_buffers);
-			}
+			/* never trail behind the current scan */
+			if (next_prefetch_block < blkno)
+				next_prefetch_block = blkno;
+
+			/* but only up to the end of the relation */
+			if (prefetch_budget > rel_pages - next_prefetch_block)
+				prefetch_budget = rel_pages - next_prefetch_block;
+
+			/* And only up to seqscan_prefetch_buffers ahead of the current vacuum scan */
+			if (next_prefetch_block + prefetch_budget > blkno + seqscan_prefetch_buffers)
+				prefetch_budget = blkno + seqscan_prefetch_buffers - next_prefetch_block;
+
+			/* And only up to the next unskippable block */
+			if (next_prefetch_block + prefetch_budget > next_unskippable_block)
+				prefetch_budget = next_unskippable_block - next_prefetch_block;
+
+			for (; prefetch_budget-- > 0; next_prefetch_block++)
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, next_prefetch_block);
 		}
 
 		/* Finished preparatory checks.  Actually scan the page. */
@@ -2459,34 +2465,38 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 			 * If we're just starting out, prefetch N consecutive blocks.
 			 * If not, only the next 1 block
 			 */
-			if (index == 0)
+			if (pindex == 0)
 			{
-				int prefetch_limit = Min(vacrel->dead_items->num_items - 1,
-										 Min(vacrel->rel_pages,
-											 seqscan_prefetch_buffers));
-				BlockNumber prev_prefetch = 0;
+				int prefetch_budget = Min(vacrel->dead_items->num_items,
+										  Min(vacrel->rel_pages,
+											  seqscan_prefetch_buffers));
+				BlockNumber prev_prefetch = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 
 				while (++pindex < vacrel->dead_items->num_items &&
-					   prefetch_limit > 0)
+					   prefetch_budget > 0)
 				{
 					ItemPointer ptr = &vacrel->dead_items->items[pindex];
 					if (ItemPointerGetBlockNumber(ptr) != prev_prefetch)
 					{
 						prev_prefetch = ItemPointerGetBlockNumber(ptr);
-						prefetch_limit -= 1;
+						prefetch_budget -= 1;
 						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 					}
 				}
 			}
-			else
+			else if (pindex < vacrel->dead_items->num_items)
 			{
-				BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
-				while (pindex < vacrel->dead_items->num_items)
+				BlockNumber previous = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
+				while (++pindex < vacrel->dead_items->num_items)
 				{
-					if (toPrefetch != ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]))
+					BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
+					if (previous != toPrefetch)
+					{
+						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
 						break;
+					}
 				}
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
 			}
 		}
 
