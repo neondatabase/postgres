@@ -913,6 +913,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 	BlockNumber nblocks,
 				blkno,
 				next_unskippable_block,
+				next_prefetch_block,
 				next_failsafe_block,
 				next_fsm_block_to_vacuum;
 	PGRUsage	ru0;
@@ -942,6 +943,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 
 	nblocks = RelationGetNumberOfBlocks(vacrel->rel);
 	next_unskippable_block = 0;
+	next_prefetch_block = 0;
 	next_failsafe_block = 0;
 	next_fsm_block_to_vacuum = 0;
 	vacrel->rel_pages = nblocks;
@@ -1217,6 +1219,33 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 		 * cycle of index vacuuming.
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
+
+		if (enable_seqscan_prefetch && seqscan_prefetch_buffers > 0)
+		{
+			/*
+			 * Prefetch seqscan_prefetch_buffers blocks ahead
+			 */
+			uint32 prefetch_budget = seqscan_prefetch_buffers;
+
+			/* never trail behind the current scan */
+			if (next_prefetch_block < blkno)
+				next_prefetch_block = blkno;
+
+			/* but only up to the end of the relation */
+			if (prefetch_budget > vacrel->rel_pages - next_prefetch_block)
+				prefetch_budget = vacrel->rel_pages - next_prefetch_block;
+
+			/* And only up to seqscan_prefetch_buffers ahead of the current vacuum scan */
+			if (next_prefetch_block + prefetch_budget > blkno + seqscan_prefetch_buffers)
+				prefetch_budget = blkno + seqscan_prefetch_buffers - next_prefetch_block;
+
+			/* And only up to the next unskippable block */
+			if (next_prefetch_block + prefetch_budget > next_unskippable_block)
+				prefetch_budget = next_unskippable_block - next_prefetch_block;
+
+			for (; prefetch_budget-- > 0; next_prefetch_block++)
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, next_prefetch_block);
+		}
 
 		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno,
 								 RBM_NORMAL, vacrel->bstrategy);
@@ -2357,36 +2386,40 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 			 * If we're just starting out, prefetch N consecutive blocks.
 			 * If not, only the next 1 block
 			 */
-			if (tupindex == 0)
+			if (ptupindex == 0)
 			{
-				int prefetch_limit = Min(vacrel->dead_tuples->num_tuples - tupindex - 1,
-										 Min(vacrel->rel_pages,
-											 seqscan_prefetch_buffers));
-				BlockNumber prev_prefetch = 0;
+				int prefetch_budget = Min(vacrel->dead_tuples->num_tuples,
+										  Min(vacrel->rel_pages,
+											  seqscan_prefetch_buffers));
+				BlockNumber prev_prefetch = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]);
 
 				RelationOpenSmgr(vacrel->rel);
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 
 				while (++ptupindex < vacrel->dead_tuples->num_tuples &&
-					   prefetch_limit > 0)
+					   prefetch_budget > 0)
 				{
 					ItemPointer ptr = &vacrel->dead_tuples->itemptrs[ptupindex];
 					if (ItemPointerGetBlockNumber(ptr) != prev_prefetch)
 					{
 						prev_prefetch = ItemPointerGetBlockNumber(ptr);
-						prefetch_limit -= 1;
+						prefetch_budget -= 1;
 						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 					}
 				}
 			}
-			else
+			else if (ptupindex < vacrel->dead_tuples->num_tuples)
 			{
-				BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]);
-				while (ptupindex < vacrel->dead_tuples->num_tuples)
+				BlockNumber previous = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]);
+				while (++ptupindex < vacrel->dead_tuples->num_tuples)
 				{
-					if (toPrefetch != ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]))
+					BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_tuples->itemptrs[ptupindex]);
+					if (previous != toPrefetch)
+					{
+						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
 						break;
+					}
 				}
-				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
 			}
 		}
 
