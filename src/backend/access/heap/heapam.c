@@ -317,6 +317,27 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 		scan->rs_startblock = 0;
 	}
 
+	if (enable_seqscan_prefetch)
+	{
+		/*
+		 * Do not use tablespace setting for catalog scans, as we might have
+		 * the tablespace settings in the catalogs locked already, which
+		 * might result in a deadlock.
+		 */
+		if (IsCatalogRelation(scan->rs_base.rs_rd))
+			scan->rs_prefetch_maximum = effective_io_concurrency;
+		else
+			scan->rs_prefetch_maximum =
+				get_tablespace_io_concurrency(scan->rs_base.rs_rd->rd_rel->reltablespace);
+
+		scan->rs_prefetch_target = 1;
+	}
+	else
+	{
+		scan->rs_prefetch_maximum = -1;
+		scan->rs_prefetch_target = -1;
+	}
+
 	scan->rs_numblocks = InvalidBlockNumber;
 	scan->rs_inited = false;
 	scan->rs_ctup.t_data = NULL;
@@ -399,34 +420,29 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
-	/* Prefetch up to seqscan_prefetch_buffers blocks ahead */
-	if (enable_seqscan_prefetch && seqscan_prefetch_buffers > 0)
+	/* Prefetch up to io_concurrency blocks ahead */
+	if (scan->rs_prefetch_maximum > 0 && scan->rs_nblocks > 1)
 	{
-		int64	nblocks;
-		int64	rel_scan_start;
-		int64	rel_scan_end; /* blockno of end of scan (mod scan->rs_nblocks) */
+		int64 nblocks;
+		int64 rel_scan_start;
+		int64 rel_scan_end; /* blockno of end of scan (mod scan->rs_nblocks) */
 
-		int64	prefetch_start; /* start block of prefetch requests this iteration */
-		int64	prefetch_end; /* end block of prefetch requests this iteration, if applicable */
+		int64 prefetch_start; /* start block of prefetch requests this iteration */
+		int64 prefetch_end; /* end block of prefetch requests this iteration, if applicable */
 		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
-
-		Assert(seqscan_prefetch_buffers > 0);
 
 		/*
 		 * Parallel scans look like repeated sequential table scans for
 		 * prefetching; with a scan start at nalloc + ch_remaining - ch_size
 		 */
-		if (pbscanwork != NULL)
-		{
+		if (pbscanwork != NULL) {
 			rel_scan_start = (BlockNumber) pbscanwork->phsw_nallocated + 1
 							 + pbscanwork->phsw_chunk_remaining
 							 - pbscanwork->phsw_chunk_size;
 			rel_scan_end = Min(pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining,
 							   scan->rs_nblocks);
 			nblocks = pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining;
-		}
-		else
-		{
+		} else {
 			rel_scan_start = scan->rs_startblock;
 			rel_scan_end = scan->rs_startblock + scan->rs_nblocks;
 			nblocks = scan->rs_nblocks;
@@ -440,18 +456,15 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		 * page that we haven't prefetched yet, at page + n.
 		 * If this is the last page of the prefetch, 
 		 */
-		if (rel_scan_start != page)
-		{
-			prefetch_start = (page + seqscan_prefetch_buffers - 1);
+		if (rel_scan_start != page) {
+			prefetch_start = (page + scan->rs_prefetch_target - 1);
 
 			prefetch_end = prefetch_start + 1;
 
 			/* If we've wrapped around, add nblocks to get the block number in the [start, end] range */
 			if (page < rel_scan_start)
 				prefetch_start += nblocks;
-		}
-		else
-		{
+		} else {
 			/* first block we're fetching, cannot have wrapped around yet */
 			prefetch_start = page;
 
@@ -462,17 +475,26 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		if (prefetch_start > rel_scan_end)
 			prefetch_end = 0;
 
-		if (prefetch_end > prefetch_start + seqscan_prefetch_buffers)
-			prefetch_end = prefetch_start + seqscan_prefetch_buffers;
+		if (prefetch_end > prefetch_start + scan->rs_prefetch_target)
+			prefetch_end = prefetch_start + scan->rs_prefetch_target;
 
-		while (prefetch_start < prefetch_end)
-		{
+		while (prefetch_start < prefetch_end) {
 			BlockNumber blckno = (prefetch_start % nblocks);
 			Assert(blckno < nblocks);
 			Assert(blckno < INT_MAX);
 			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, blckno);
 			prefetch_start += 1;
 		}
+
+		/*
+		 * Use exponential growth of readahead up to prefetch_maximum, to
+		 * make sure that a low LIMIT does not result in high IO overhead,
+		 * but operations in general are still very fast.
+		 */
+		if (scan->rs_prefetch_target < scan->rs_prefetch_maximum / 2)
+			scan->rs_prefetch_target *= 2;
+		else if (scan->rs_prefetch_target < scan->rs_prefetch_maximum)
+			scan->rs_prefetch_target = scan->rs_prefetch_maximum;
 	}
 
 	/* read page using selected strategy */
