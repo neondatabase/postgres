@@ -2155,17 +2155,6 @@ static struct config_bool ConfigureNamesBool[] =
 static struct config_int ConfigureNamesInt[] =
 {
 	{
-		{"seqscan_prefetch_buffers", PGC_USERSET, QUERY_TUNING_METHOD,
-		 gettext_noop("Number of subsequent buffer to be prefetched during sequential scan."),
-		 NULL,
-		 GUC_EXPLAIN
-		},
-		&seqscan_prefetch_buffers,
-		/* 8, 0, 1000, */
-		0, 0, 1000, /* temporary disable to be able to merge in main */
-		NULL, NULL, NULL
-	},
-	{
 		{"archive_timeout", PGC_SIGHUP, WAL_ARCHIVING,
 			gettext_noop("Forces a switch to the next WAL file if a "
 						 "new file has not been started within N seconds."),
