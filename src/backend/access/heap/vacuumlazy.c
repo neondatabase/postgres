@@ -981,7 +981,7 @@ lazy_scan_heap(LVRelState *vacrel)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (enable_seqscan_prefetch && vacrel->io_concurrency > 0) {
+		if (vacrel->io_concurrency > 0) {
 			/*
 			 * Prefetch io_concurrency blocks ahead
 			 */
@@ -2464,7 +2464,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_items->items[index]);
 
-		if (enable_seqscan_prefetch && vacrel->io_concurrency > 0) {
+		if (vacrel->io_concurrency > 0) {
 			/*
 			 * If we're just starting out, prefetch N consecutive blocks.
 			 * If not, only the next 1 block
