@@ -956,14 +956,13 @@ static const unit_conversion time_unit_conversion_table[] =
 static struct config_bool ConfigureNamesBool[] =
 {
 	{
-		{"enable_seqscan_prefetch", PGC_USERSET, QUERY_TUNING_METHOD,
-			gettext_noop("Enables the sequence scan next page prefetching."),
+		{"enable_seqscan_prefetch", PGC_USERSET, RESOURCES_ASYNCHRONOUS,
+			gettext_noop("Enables prefetching of next pages in sequential scans."),
 			NULL,
 			GUC_EXPLAIN
 		},
 		&enable_seqscan_prefetch,
-		false, /* temporary disable to be able to merge in main */
-		/* true, */
+		true,
 		NULL, NULL, NULL
 	},
 	{

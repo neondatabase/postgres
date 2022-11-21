@@ -426,10 +426,12 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		int64	nblocks;
 		int64	rel_scan_start;
 		int64	rel_scan_end; /* blockno of end of scan (mod scan->rs_nblocks) */
+		int64	scan_pageoff; /* page, but adjusted for scan position */
 
 		int64	prefetch_start; /* start block of prefetch requests this iteration */
 		int64	prefetch_end; /* end block of prefetch requests this iteration, if applicable */
 		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
+		ParallelBlockTableScanDesc pbscandesc = (ParallelBlockTableScanDesc) sscan->rs_parallel;
 
 		/*
 		 * Parallel scans look like repeated sequential table scans for
@@ -437,12 +439,20 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		 */
 		if (pbscanwork != NULL)
 		{
-			rel_scan_start = (BlockNumber) pbscanwork->phsw_nallocated + 1
-				+ pbscanwork->phsw_chunk_remaining
+			uint64	start_offset,
+					end_offset;
+
+			Assert(pbscandesc != NULL);
+			start_offset = pbscanwork->phsw_nallocated
+				+ pbscanwork->phsw_chunk_remaining + 1
 				- pbscanwork->phsw_chunk_size;
-			rel_scan_end = Min(pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining,
-							   scan->rs_nblocks);
-			nblocks = pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining;
+			end_offset = Min(pbscanwork->phsw_nallocated + 
+							 pbscanwork->phsw_chunk_remaining + 1,
+							 pbscandesc->phs_nblocks);
+
+			rel_scan_start = (int64) (pbscandesc->phs_startblock) + start_offset;
+			rel_scan_end = (int64) (pbscandesc->phs_startblock) + end_offset;
+			nblocks = pbscandesc->phs_nblocks;
 		}
 		else
 		{
@@ -451,7 +461,14 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 			nblocks = scan->rs_nblocks;
 		}
 
-		Assert(rel_scan_start <= page && page <= rel_scan_end);
+		prefetch_end = rel_scan_end;
+
+		if ((uint64) page < rel_scan_start)
+			scan_pageoff = page + nblocks;
+		else
+			scan_pageoff = page;
+
+		Assert(rel_scan_start <= scan_pageoff && scan_pageoff <= rel_scan_end);
 
 		/*
 		 * If this is the first page of this seqscan, initiate prefetch of
@@ -461,19 +478,12 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		 */
 		if (rel_scan_start != page)
 		{
-			prefetch_start = (page + scan->rs_prefetch_target - 1);
-
+			prefetch_start = scan_pageoff + (int64) scan->rs_prefetch_target - 1;
 			prefetch_end = prefetch_start + 1;
-
-			/* If we've wrapped around, add nblocks to get the block number in the [start, end] range */
-			if (page < rel_scan_start)
-				prefetch_start += nblocks;
 		}
 		else
 		{
-			/* first block we're fetching, cannot have wrapped around yet */ 
-			prefetch_start = page;
-
+			prefetch_start = scan_pageoff;
 			prefetch_end = rel_scan_end;
 		}
 
@@ -483,6 +493,9 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 
 		if (prefetch_end > prefetch_start + scan->rs_prefetch_target)
 			prefetch_end = prefetch_start + scan->rs_prefetch_target;
+
+		if (prefetch_end > rel_scan_end)
+			prefetch_end = rel_scan_end;
 
 		RelationOpenSmgr(scan->rs_base.rs_rd);
 
