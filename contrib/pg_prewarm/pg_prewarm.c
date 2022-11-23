@@ -198,7 +198,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		for (block = first_block; block <= last_block; ++block)
 		{
 			Buffer buf;
-			int prefetch_stop = block + Min(last_block - block + 1, io_concurrency);
+			BlockNumber prefetch_stop = block + Min(last_block - block + 1,
+													io_concurrency);
 			CHECK_FOR_INTERRUPTS();
 			while (prefetch_block < prefetch_stop)
 			{
