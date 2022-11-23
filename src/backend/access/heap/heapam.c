@@ -317,6 +317,27 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 		scan->rs_startblock = 0;
 	}
 
+	if (enable_seqscan_prefetch)
+	{
+		/*
+		 * Do not use tablespace setting for catalog scans, as we might have
+		 * the tablespace settings in the catalogs locked already, which
+		 * might result in a deadlock.
+		 */
+		if (IsCatalogRelation(scan->rs_base.rs_rd))
+			scan->rs_prefetch_maximum = effective_io_concurrency;
+		else
+			scan->rs_prefetch_maximum =
+				get_tablespace_io_concurrency(scan->rs_base.rs_rd->rd_rel->reltablespace);
+
+		scan->rs_prefetch_target = 1;
+	}
+	else
+	{
+		scan->rs_prefetch_maximum = -1;
+		scan->rs_prefetch_target = -1;
+	}
+
 	scan->rs_numblocks = InvalidBlockNumber;
 	scan->rs_inited = false;
 	scan->rs_ctup.t_data = NULL;
@@ -399,18 +420,18 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
-	/* Prefetch up to seqscan_prefetch_buffers blocks ahead */
-	if (enable_seqscan_prefetch && seqscan_prefetch_buffers > 0)
+	/* Prefetch up to io_concurrency blocks ahead */
+	if (scan->rs_prefetch_maximum > 0 && scan->rs_nblocks > 1)
 	{
 		int64	nblocks;
 		int64	rel_scan_start;
 		int64	rel_scan_end; /* blockno of end of scan (mod scan->rs_nblocks) */
+		int64	scan_pageoff; /* page, but adjusted for scan position as above */
 
 		int64	prefetch_start; /* start block of prefetch requests this iteration */
 		int64	prefetch_end; /* end block of prefetch requests this iteration, if applicable */
 		ParallelBlockTableScanWorker pbscanwork = scan->rs_parallelworkerdata;
-
-		Assert(seqscan_prefetch_buffers > 0);
+		ParallelBlockTableScanDesc pbscandesc = (ParallelBlockTableScanDesc) sscan->rs_parallel;
 
 		/*
 		 * Parallel scans look like repeated sequential table scans for
@@ -418,12 +439,20 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		 */
 		if (pbscanwork != NULL)
 		{
-			rel_scan_start = (BlockNumber) pbscanwork->phsw_nallocated + 1
-							 + pbscanwork->phsw_chunk_remaining
-							 - pbscanwork->phsw_chunk_size;
-			rel_scan_end = Min(pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining,
-							   scan->rs_nblocks);
-			nblocks = pbscanwork->phsw_nallocated + pbscanwork->phsw_chunk_remaining;
+			uint64	start_offset,
+					end_offset;
+
+			Assert(pbscandesc != NULL);
+			start_offset = pbscanwork->phsw_nallocated
+						   + pbscanwork->phsw_chunk_remaining + 1
+						   - pbscanwork->phsw_chunk_size;
+			end_offset = Min(pbscanwork->phsw_nallocated +
+							 pbscanwork->phsw_chunk_remaining + 1,
+							 pbscandesc->phs_nblocks);
+
+			rel_scan_start = (int64) (pbscandesc->phs_startblock) + start_offset;
+			rel_scan_end = (int64) (pbscandesc->phs_startblock) + end_offset;
+			nblocks = pbscandesc->phs_nblocks;
 		}
 		else
 		{
@@ -432,7 +461,14 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 			nblocks = scan->rs_nblocks;
 		}
 
-		Assert(rel_scan_start <= page && page <= rel_scan_end);
+		prefetch_end = rel_scan_end;
+
+		if ((uint64) page < rel_scan_start)
+			scan_pageoff = page + nblocks;
+		else
+			scan_pageoff = page;
+
+		Assert(rel_scan_start <= scan_pageoff && scan_pageoff <= rel_scan_end);
 
 		/*
 		 * If this is the first page of this seqscan, initiate prefetch of
@@ -442,19 +478,12 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		 */
 		if (rel_scan_start != page)
 		{
-			prefetch_start = (page + seqscan_prefetch_buffers - 1);
-
+			prefetch_start = scan_pageoff + (int64) scan->rs_prefetch_target - 1;
 			prefetch_end = prefetch_start + 1;
-
-			/* If we've wrapped around, add nblocks to get the block number in the [start, end] range */
-			if (page < rel_scan_start)
-				prefetch_start += nblocks;
 		}
 		else
 		{
-			/* first block we're fetching, cannot have wrapped around yet */
-			prefetch_start = page;
-
+			prefetch_start = scan_pageoff;
 			prefetch_end = rel_scan_end;
 		}
 
@@ -462,8 +491,11 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 		if (prefetch_start > rel_scan_end)
 			prefetch_end = 0;
 
-		if (prefetch_end > prefetch_start + seqscan_prefetch_buffers)
-			prefetch_end = prefetch_start + seqscan_prefetch_buffers;
+		if (prefetch_end > prefetch_start + scan->rs_prefetch_target)
+			prefetch_end = prefetch_start + scan->rs_prefetch_target;
+
+		if (prefetch_end > rel_scan_end)
+			prefetch_end = rel_scan_end;
 
 		while (prefetch_start < prefetch_end)
 		{
@@ -473,6 +505,16 @@ heapgetpage(TableScanDesc sscan, BlockNumber page)
 			PrefetchBuffer(scan->rs_base.rs_rd, MAIN_FORKNUM, blckno);
 			prefetch_start += 1;
 		}
+
+		/*
+		 * Use exponential growth of readahead up to prefetch_maximum, to
+		 * make sure that a low LIMIT does not result in high IO overhead,
+		 * but operations in general are still very fast.
+		 */
+		if (scan->rs_prefetch_target < scan->rs_prefetch_maximum / 2)
+			scan->rs_prefetch_target *= 2;
+		else if (scan->rs_prefetch_target < scan->rs_prefetch_maximum)
+			scan->rs_prefetch_target = scan->rs_prefetch_maximum;
 	}
 
 	/* read page using selected strategy */
