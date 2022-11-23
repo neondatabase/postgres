@@ -53,6 +53,7 @@
 #include "utils/rel.h"
 #include "utils/relfilenodemap.h"
 #include "utils/resowner.h"
+#include "utils/spccache.h"
 
 #define AUTOPREWARM_FILE "autoprewarm.blocks"
 
@@ -433,10 +434,12 @@ void
 autoprewarm_database_main(Datum main_arg)
 {
 	int			pos;
+	int			io_concurrency;
 	BlockInfoRecord *block_info;
 	Relation	rel = NULL;
 	BlockNumber nblocks = 0;
 	BlockInfoRecord *old_blk = NULL;
+	BlockInfoRecord *prefetch_blk = NULL;
 	dsm_segment *seg;
 
 	/* Establish signal handlers; once that's done, unblock signals. */
@@ -502,6 +505,8 @@ autoprewarm_database_main(Datum main_arg)
 
 			if (!rel)
 				CommitTransactionCommand();
+			else
+				io_concurrency = get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
 		}
 		if (!rel)
 		{
@@ -532,6 +537,35 @@ autoprewarm_database_main(Datum main_arg)
 			/* Move to next forknum. */
 			old_blk = blk;
 			continue;
+		}
+
+		/* if prefetching is enabled for this relation */
+		if (io_concurrency > 0)
+		{
+			/* make prefetch_blk catch up */
+			if (blk > prefetch_blk)
+			{
+				prefetch_blk = blk;
+			}
+
+			/* now, prefetch all following blocks */
+			while (prefetch_blk <= &block_info[apw_state->prewarm_stop_idx])
+			{
+				/* unless they're of a different relfilenode */
+				if (prefetch_blk->filenode != blk->filenode ||
+					prefetch_blk->forknum != blk->forknum ||
+					prefetch_blk->blocknum >= nblocks)
+					break;
+
+				/* or unless they are more than io_concurrency blocks ahead */
+				if (blk + io_concurrency <= prefetch_blk)
+					break;
+
+				PrefetchBuffer(rel, prefetch_blk->forknum, prefetch_blk->blocknum);
+
+				/* continue with the next block */
+				prefetch_blk++;
+			}
 		}
 
 		/* Prewarm buffer. */
