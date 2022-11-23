@@ -120,7 +120,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_partitionwise_aggregate | off
  enable_partitionwise_join      | off
  enable_seqscan                 | on
- enable_seqscan_prefetch        | off
+ enable_seqscan_prefetch        | on
  enable_sort                    | on
  enable_tidscan                 | on
 (21 rows)
