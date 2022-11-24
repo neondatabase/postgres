@@ -815,7 +815,13 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 	BlockNumber nblocks;
 	BlockNumber segno;
 
-	mdopenfork(reln, forknum, EXTENSION_FAIL);
+	/* NEON: md smgr is used in Neon for unlogged and temp relations.
+	 * After compute node restart their data is deleted but unlogged tables are still present in system catalog.
+	 * This is a difference with Vanilla Postgres where unlogged relations are truncated only after abnormal termination.
+	 * To avoid "could not open file" we have to use EXTENSION_RETURN_NULL hear instead of EXTENSION_FAIL
+	 */
+	if (!mdopenfork(reln, forknum, RelFileNodeBackendIsTemp(reln->smgr_rnode) ? EXTENSION_FAIL : EXTENSION_RETURN_NULL))
+		return 0;
 
 	/* mdopen has opened the first segment */
 	Assert(reln->md_num_open_segs[forknum] > 0);
