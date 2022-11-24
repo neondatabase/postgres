@@ -2367,11 +2367,11 @@ static struct config_int ConfigureNamesInt[] =
 
 	{
 		{"lsn_cache_size", PGC_POSTMASTER, UNGROUPED,
-			gettext_noop("Size of las written LSN cache used by Neon."),
+			gettext_noop("Size of last written LSN cache used by Neon."),
 			NULL
 		},
 		&lastWrittenLsnCacheSize,
-		1024, 10, 1000000, /* 1024 is enough to hold 10GB database with 8Mb bucket */
+		128*1024, 1024, INT_MAX,
 		NULL, NULL, NULL
 	},
 
