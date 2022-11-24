@@ -195,7 +195,7 @@ typedef struct LastWrittenLsnCacheEntry
 
 
 /*
- * Cache of last written LSN for each relation chunk (hash bucket).
+ * Cache of last written LSN for each relation page.
  * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
  * relation metadata update.
  * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
@@ -803,8 +803,6 @@ static WALInsertLockPadded *WALInsertLocks = NULL;
  * We maintain an image of pg_control in shared memory.
  */
 static ControlFileData *ControlFile = NULL;
-
-#define LAST_WRITTEN_LSN_CACHE_BUCKET 1024 /* blocks = 8Mb */
 
 /*
  * Calculate the amount of space left on the page after 'endptr'. Beware
@@ -8950,7 +8948,7 @@ GetInsertRecPtr(void)
  * It returns an upper bound for the last written LSN of a given page,
  * either from a cached last written LSN or a global maximum last written LSN.
  * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
- * If cache is large enough ,iterting through all hash items may be rather expensive.
+ * If cache is large enough, iterating through all hash items may be rather expensive.
  * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
  */
 XLogRecPtr
@@ -8969,7 +8967,7 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 		BufferTag key;
 		key.rnode = rnode;
 		key.forkNum = forknum;
-		key.blockNum = blkno / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		key.blockNum = blkno;
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
@@ -8993,9 +8991,9 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 /*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. To reduce cache size we store max LSN not for each page, but for
- * bucket (1024 blocks). This cache allows to use old LSN when
- * requesting pages of unchanged or appended relations.
+ * policy. Keeping last written LSN for each page allows to use old LSN when
+ * requesting pages of unchanged or appended relations. Also it is critical for
+ * efficient work of prefetch in case massive update operations (like vacuum or remove).
  *
  * rnode.relNode can be InvalidOid, in this case maxLastWrittenLsn is updated.
  * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
@@ -9017,19 +9015,13 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 		LastWrittenLsnCacheEntry* entry;
 		BufferTag key;
 		bool found;
-		BlockNumber bucket;
-		BlockNumber start_bucket; /* inclusive */
-		BlockNumber end_bucket;   /* exclusive */
-
-		start_bucket = from / LAST_WRITTEN_LSN_CACHE_BUCKET;
-		end_bucket = from == REL_METADATA_PSEUDO_BLOCKNO
-			? start_bucket + 1 : (from + n_blocks + LAST_WRITTEN_LSN_CACHE_BUCKET - 1) / LAST_WRITTEN_LSN_CACHE_BUCKET;
+		BlockNumber i;
 
 		key.rnode = rnode;
 		key.forkNum = forknum;
-		for (bucket = start_bucket; bucket < end_bucket; bucket++)
+		for (i = 0; i < n_blocks; i++)
 		{
-			key.blockNum = bucket;
+			key.blockNum = from + i;
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
 			if (found)
 			{
