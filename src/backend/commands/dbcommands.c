@@ -1488,6 +1488,10 @@ createdb_failure_callback(int code, Datum arg)
 	 */
 	if (fparms->strategy == CREATEDB_WAL_LOG)
 	{
+		/* this is an error callback, so at the very least log why we're here */
+		EmitErrorReport();
+		elog(LOG, "createdb_failure_callback(code = %i, srcdb=%i, dstdb=%i, strat=%i): DropDatabaseBuffers",
+			 code, fparms->src_dboid, fparms->dest_dboid, fparms->strategy);
 		DropDatabaseBuffers(fparms->dest_dboid);
 		ForgetDatabaseSyncRequests(fparms->dest_dboid);
 
@@ -1670,6 +1674,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 * is important to ensure that no remaining backend tries to write out a
 	 * dirty buffer to the dead database later...
 	 */
+	elog(LOG, "dropdb(%i): DropDatabaseBuffers", db_id);
 	DropDatabaseBuffers(db_id);
 
 	/*
@@ -1960,6 +1965,7 @@ movedb(const char *dbname, const char *tblspcname)
 	 * Note: it'd be sufficient to get rid of buffers matching db_id and
 	 * src_tblspcoid, but bufmgr.c presently provides no API for that.
 	 */
+	elog(LOG, "movedb(%i): DropDatabaseBuffers", db_id);
 	DropDatabaseBuffers(db_id);
 
 	/*
@@ -3200,6 +3206,8 @@ dbase_redo(XLogReaderState *record)
 		ReplicationSlotsDropDBSlots(xlrec->db_id);
 
 		/* Drop pages for this database that are in the shared buffer cache */
+		elog(LOG, "dbase_redo(lsn = %X/%X): DropDatabaseBuffers",
+			 LSN_FORMAT_ARGS(record->EndRecPtr));
 		DropDatabaseBuffers(xlrec->db_id);
 
 		/* Also, clean out any fsync requests that might be pending in md.c */

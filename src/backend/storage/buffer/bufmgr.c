@@ -1551,7 +1551,18 @@ retry:
 		LWLockRelease(oldPartitionLock);
 		/* safety check: should definitely not be our *own* pin */
 		if (GetPrivateRefCount(BufferDescriptorGetBuffer(buf)) > 0)
-			elog(ERROR, "buffer is pinned in InvalidateBuffer");
+		{
+			elog(FATAL,
+				 "buffer %i is pinned (global %i, local %i) in InvalidateBuffer. buftag=%i/%i/%i/%i/%i",
+				 buf->buf_id,
+				 BUF_STATE_GET_REFCOUNT(buf_state),
+				 GetPrivateRefCount(BufferDescriptorGetBuffer(buf)),
+				 buf->tag.rnode.dbNode,
+				 buf->tag.rnode.spcNode,
+				 buf->tag.rnode.relNode,
+				 buf->tag.forkNum,
+				 buf->tag.blockNum);
+		}
 		WaitIO(buf);
 		goto retry;
 	}
@@ -1959,6 +1970,7 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 				}
 				else
 				{
+					elog(WARNING, "UnpinBuffer(): invalidating buffer %i", buf->buf_id);
 					InvalidateBuffer(buf);
 				}
 			}
@@ -3200,6 +3212,7 @@ DropRelFileNodeBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 				bufHdr->tag.forkNum == forkNum[j] &&
 				bufHdr->tag.blockNum >= firstDelBlock[j])
 			{
+				elog(LOG, "DropRelFileNodeBuffers: invalidating buffer %i", i);
 				InvalidateBuffer(bufHdr);	/* releases spinlock */
 				break;
 			}
@@ -3369,7 +3382,10 @@ DropRelFileNodesAllBuffers(SMgrRelation *smgr_reln, int nnodes)
 
 		buf_state = LockBufHdr(bufHdr);
 		if (RelFileNodeEquals(bufHdr->tag.rnode, (*rnode)))
+		{
+			elog(LOG, "DropRelFileNodesAllBuffers: invalidating buffer %i", i);
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		}
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
@@ -3431,7 +3447,10 @@ FindAndDropRelFileNodeBuffers(RelFileNode rnode, ForkNumber forkNum,
 		if (RelFileNodeEquals(bufHdr->tag.rnode, rnode) &&
 			bufHdr->tag.forkNum == forkNum &&
 			bufHdr->tag.blockNum >= firstDelBlock)
+		{
+			elog(LOG, "FindAndDropRelFileNodeBuffers(): invalidating buffer %i", buf_id);
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		}
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
@@ -3472,7 +3491,10 @@ DropDatabaseBuffers(Oid dbid)
 
 		buf_state = LockBufHdr(bufHdr);
 		if (bufHdr->tag.rnode.dbNode == dbid)
+		{
+			elog(LOG, "DropDatabaseBuffers(%i): invalidating buffer %i", dbid, i);
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		}
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
