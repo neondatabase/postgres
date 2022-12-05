@@ -27,6 +27,7 @@
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/snapmgr.h"
+#include "utils/spccache.h"
 
 
 /* Entry in pending-list of TIDs we need to revisit */
@@ -796,7 +797,14 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	Relation	index = bds->info->index;
 	bool		needLock;
 	BlockNumber num_pages,
-				blkno;
+				blkno,
+				prefetch_blkno;
+	int			io_concurrency;
+
+	/* initiate concurrency */
+	io_concurrency = get_tablespace_maintenance_io_concurrency(
+		index->rd_rel->reltablespace
+	);
 
 	/* Finish setting up spgBulkDeleteState */
 	initSpGistState(&bds->spgstate, index);
@@ -824,6 +832,8 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	 * in btvacuumscan().
 	 */
 	blkno = SPGIST_METAPAGE_BLKNO + 1;
+	prefetch_blkno = blkno;
+
 	for (;;)
 	{
 		/* Get the current relation length */
@@ -836,9 +846,19 @@ spgvacuumscan(spgBulkDeleteState *bds)
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= num_pages)
 			break;
+
+		if (prefetch_blkno < blkno)
+			prefetch_blkno = blkno;
+		for (; prefetch_blkno < num_pages &&
+			   prefetch_blkno < blkno + io_concurrency; prefetch_blkno++)
+			PrefetchBuffer(index, MAIN_FORKNUM, prefetch_blkno);
+
 		/* Iterate over pages, then loop back to recheck length */
 		for (; blkno < num_pages; blkno++)
 		{
+			if (io_concurrency > 0 && prefetch_blkno < num_pages)
+				PrefetchBuffer(index, MAIN_FORKNUM, prefetch_blkno++);
+
 			spgvacuumpage(bds, blkno);
 			/* empty the pending-list after each page */
 			if (bds->pendingList != NULL)
