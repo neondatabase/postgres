@@ -23,6 +23,7 @@
 #include "storage/indexfsm.h"
 #include "storage/lmgr.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 
 /* Working state needed by gistbulkdelete */
 typedef struct
@@ -130,7 +131,11 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	BlockNumber num_pages;
 	bool		needLock;
 	BlockNumber blkno;
+	BlockNumber prefetch_blkno;
+	int			io_concurrency;
 	MemoryContext oldctx;
+
+	io_concurrency = get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
 
 	/*
 	 * Reset fields that track information about the entire index now.  This
@@ -203,6 +208,7 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	needLock = !RELATION_IS_LOCAL(rel);
 
 	blkno = GIST_ROOT_BLKNO;
+	prefetch_blkno = blkno;
 	for (;;)
 	{
 		/* Get the current relation length */
@@ -215,9 +221,21 @@ gistvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		/* Quit if we've scanned the whole relation */
 		if (blkno >= num_pages)
 			break;
+
+		if (prefetch_blkno < blkno)
+			prefetch_blkno = blkno;
+		for (; prefetch_blkno < num_pages &&
+			   prefetch_blkno < blkno + io_concurrency; prefetch_blkno++)
+			PrefetchBuffer(rel, MAIN_FORKNUM, prefetch_blkno);
+
 		/* Iterate over pages, then loop back to recheck length */
 		for (; blkno < num_pages; blkno++)
+		{
+			if (io_concurrency > 0 && prefetch_blkno < num_pages)
+				PrefetchBuffer(rel, MAIN_FORKNUM, prefetch_blkno++);
+
 			gistvacuumpage(&vstate, blkno, blkno);
+		}
 	}
 
 	/*
