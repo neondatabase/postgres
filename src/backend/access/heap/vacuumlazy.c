@@ -979,7 +979,8 @@ lazy_scan_heap(LVRelState *vacrel)
 		 */
 		visibilitymap_pin(vacrel->rel, blkno, &vmbuffer);
 
-		if (vacrel->io_concurrency > 0) {
+		if (vacrel->io_concurrency > 0)
+		{
 			/*
 			 * Prefetch io_concurrency blocks ahead
 			 */
@@ -2462,12 +2463,14 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		tblk = ItemPointerGetBlockNumber(&vacrel->dead_items->items[index]);
 
-		if (vacrel->io_concurrency > 0) {
+		if (vacrel->io_concurrency > 0)
+		{
 			/*
 			 * If we're just starting out, prefetch N consecutive blocks.
 			 * If not, only the next 1 block
 			 */
-			if (pindex == 0) {
+			if (pindex == 0)
+			{
 				int prefetch_budget = Min(vacrel->dead_items->num_items,
 										  Min(vacrel->rel_pages,
 											  vacrel->io_concurrency));
@@ -2475,19 +2478,25 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 
 				while (++pindex < vacrel->dead_items->num_items &&
-					   prefetch_budget > 0) {
+					   prefetch_budget > 0)
+				{
 					ItemPointer ptr = &vacrel->dead_items->items[pindex];
-					if (ItemPointerGetBlockNumber(ptr) != prev_prefetch) {
+					if (ItemPointerGetBlockNumber(ptr) != prev_prefetch)
+					{
 						prev_prefetch = ItemPointerGetBlockNumber(ptr);
 						prefetch_budget -= 1;
 						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, prev_prefetch);
 					}
 				}
-			} else if (pindex < vacrel->dead_items->num_items) {
+			}
+			else if (pindex < vacrel->dead_items->num_items)
+			{
 				BlockNumber previous = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
-				while (++pindex < vacrel->dead_items->num_items) {
+				while (++pindex < vacrel->dead_items->num_items)
+				{
 					BlockNumber toPrefetch = ItemPointerGetBlockNumber(&vacrel->dead_items->items[pindex]);
-					if (previous != toPrefetch) {
+					if (previous != toPrefetch)
+					{
 						PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, toPrefetch);
 						break;
 					}
