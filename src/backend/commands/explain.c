@@ -47,8 +47,6 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
-PrefetchStats prefetch_stats;
-
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
 #define X_CLOSING 1
@@ -122,7 +120,7 @@ static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
-static void show_prefetch_info(ExplainState *es, const PrefetchStats* prefetch_info);
+static void show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
@@ -530,7 +528,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	double		totaltime = 0;
 	int			eflags;
 	int			instrument_option = 0;
-	PrefetchStats	prefetch_before = prefetch_stats;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -539,7 +536,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	else if (es->analyze)
 		instrument_option |= INSTRUMENT_ROWS;
 
-	if (es->buffers)
+	if (es->buffers || es->prefetch)
 		instrument_option |= INSTRUMENT_BUFFERS;
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
@@ -631,16 +628,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		ExplainOpenGroup("Planning", "Planning", true, es);
 		show_buffer_usage(es, bufusage, true);
 		ExplainCloseGroup("Planning", "Planning", true, es);
-	}
-
-	if (es->prefetch)
-	{
-		PrefetchStats prefetch_elapsed;
-		prefetch_elapsed.hits = prefetch_stats.hits - prefetch_before.hits;
-		prefetch_elapsed.misses = prefetch_stats.misses - prefetch_before.misses;
-		ExplainOpenGroup("Prefetch", NULL, true, es);
-		show_prefetch_info(es, &prefetch_elapsed);
-		ExplainCloseGroup("Prefetch", NULL, true, es);
 	}
 
 	if (es->summary && planduration)
@@ -2081,6 +2068,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
+	/* Show prefetch usage */
+	if (es->prefetch && planstate->instrument)
+		show_prefetch_info(es, &planstate->instrument->bufusage.prefetch);
+
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
 	{
@@ -3520,13 +3511,15 @@ explain_get_index_name(Oid indexId)
  * Show prefetch statistics
  */
 static void
-show_prefetch_info(ExplainState *es, const PrefetchStats* prefetch_info)
+show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
 {
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 			ExplainIndentText(es);
-			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld\n",
-							 prefetch_info->hits, prefetch_info->misses);
+			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld expired=%lld\n",
+							 (long long) prefetch_info->hits,
+							 (long long) prefetch_info->misses,
+							 (long long) prefetch_info->expired);
 	}
 	else
 	{
@@ -3534,6 +3527,8 @@ show_prefetch_info(ExplainState *es, const PrefetchStats* prefetch_info)
 							   prefetch_info->hits, es);
 		ExplainPropertyInteger("Prefetch Misses", NULL,
 							   prefetch_info->misses, es);
+		ExplainPropertyInteger("Prefetch Expired Requests", NULL,
+							   prefetch_info->expired, es);
 	}
 }
 
