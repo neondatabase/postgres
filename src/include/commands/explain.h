@@ -62,16 +62,6 @@ typedef struct ExplainState
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
 
-
-/* Prefeth statistics */
-typedef struct
-{
-	long long unsigned hits;
-	long long unsigned misses;
-} PrefetchStats;
-
-extern PrefetchStats prefetch_stats;
-
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,
 										   int cursorOptions,
