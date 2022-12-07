@@ -829,6 +829,8 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	 * in btvacuumscan().
 	 */
 	blkno = SPGIST_METAPAGE_BLKNO + 1;
+	prefetch_blkno = blkno;
+
 	for (;;)
 	{
 		/* Get the current relation length */
