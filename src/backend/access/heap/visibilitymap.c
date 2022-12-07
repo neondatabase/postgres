@@ -289,7 +289,9 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				 * If data checksums are enabled (or wal_log_hints=on), we
 				 * need to protect the heap page from being torn.
 				 */
+				/* NEON: we have to update page LSN even if  wal_log_hints=off 
 				if (XLogHintBitIsNeeded())
+				*/
 				{
 					Page		heapPage = BufferGetPage(heapBuf);
 
