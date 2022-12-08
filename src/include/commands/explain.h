@@ -46,7 +46,6 @@ typedef struct ExplainState
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
 	bool		settings;		/* print modified settings */
-	bool		prefetch;		/* print prefetch statistic */
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */
 	int			indent;			/* current indentation level */
@@ -61,16 +60,6 @@ typedef struct ExplainState
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
 } ExplainState;
-
-
-/* Prefeth statistics */
-typedef struct
-{
-	long long unsigned hits;
-	long long unsigned misses;
-} PrefetchStats;
-
-extern PrefetchStats prefetch_stats;
 
 /* Hook for plugins to get control in ExplainOneQuery() */
 typedef void (*ExplainOneQuery_hook_type) (Query *query,
