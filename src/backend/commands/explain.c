@@ -47,7 +47,6 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
-PrefetchStats prefetch_stats;
 
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
@@ -122,7 +121,6 @@ static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
-static void show_prefetch_info(ExplainState *es, const PrefetchStats* prefetch_info);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
@@ -188,8 +186,6 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->costs = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "buffers") == 0)
 			es->buffers = defGetBoolean(opt);
-		else if (strcmp(opt->defname, "prefetch") == 0)
-			es->prefetch = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -530,7 +526,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	double		totaltime = 0;
 	int			eflags;
 	int			instrument_option = 0;
-	PrefetchStats	prefetch_before = prefetch_stats;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -631,16 +626,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		ExplainOpenGroup("Planning", "Planning", true, es);
 		show_buffer_usage(es, bufusage, true);
 		ExplainCloseGroup("Planning", "Planning", true, es);
-	}
-
-	if (es->prefetch)
-	{
-		PrefetchStats prefetch_elapsed;
-		prefetch_elapsed.hits = prefetch_stats.hits - prefetch_before.hits;
-		prefetch_elapsed.misses = prefetch_stats.misses - prefetch_before.misses;
-		ExplainOpenGroup("Prefetch", NULL, true, es);
-		show_prefetch_info(es, &prefetch_elapsed);
-		ExplainCloseGroup("Prefetch", NULL, true, es);
 	}
 
 	if (es->summary && planduration)
@@ -3514,27 +3499,6 @@ explain_get_index_name(Oid indexId)
 			elog(ERROR, "cache lookup failed for index %u", indexId);
 	}
 	return result;
-}
-
-/*
- * Show prefetch statistics
- */
-static void
-show_prefetch_info(ExplainState *es, const PrefetchStats* prefetch_info)
-{
-	if (es->format == EXPLAIN_FORMAT_TEXT)
-	{
-			ExplainIndentText(es);
-			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld\n",
-							 prefetch_info->hits, prefetch_info->misses);
-	}
-	else
-	{
-		ExplainPropertyInteger("Prefetch Hits", NULL,
-							   prefetch_info->hits, es);
-		ExplainPropertyInteger("Prefetch Misses", NULL,
-							   prefetch_info->misses, es);
-	}
 }
 
 /*
