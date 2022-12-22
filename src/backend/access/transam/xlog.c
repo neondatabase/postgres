@@ -114,7 +114,12 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 bool		track_wal_io_timing = false;
 uint64      predefined_sysidentifier;
-int			lastWrittenLsnCacheSize;
+
+/*
+ * Hooks for extensions to hook into the recovery process
+ */
+xlog_recovery_hook_type xlog_pre_recovery_start_hook = NULL;
+xlog_recovery_hook_type xlog_post_recovery_start_hook = NULL;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
@@ -184,25 +189,6 @@ const struct config_enum_entry recovery_target_action_options[] = {
 	{NULL, 0, false}
 };
 
-
-typedef struct LastWrittenLsnCacheEntry
-{
-	BufferTag	key;
-	XLogRecPtr	lsn;
-	/* double linked list for LRU replacement algorithm */
-	dlist_node	lru_node;
-} LastWrittenLsnCacheEntry;
-
-
-/*
- * Cache of last written LSN for each relation page.
- * Also to provide request LSN for smgrnblocks, smgrexists there is pseudokey=InvalidBlockId which stores LSN of last
- * relation metadata update.
- * Size of the cache is limited by GUC variable lastWrittenLsnCacheSize ("lsn_cache_size"),
- * pages are replaced using LRU algorithm, based on L2-list.
- * Access to this cache is protected by 'LastWrittenLsnLock'.
- */
-static HTAB *lastWrittenLsnCache;
 
 /*
  * Statistics for current checkpoint are collected in this global struct.
@@ -307,9 +293,9 @@ static bool recovery_signal_file_found = false;
 /*
  * Variables read from 'zenith.signal' file.
  */
-bool		ZenithRecoveryRequested = false;
-XLogRecPtr	zenithLastRec = InvalidXLogRecPtr;
-bool		zenithWriteOk = false;
+bool		NeonRecoveryRequested = false;
+XLogRecPtr	neonLastRec = InvalidXLogRecPtr;
+bool		neonWriteOk = false;
 
 /* Was the last xlog file restored from archive, or local? */
 static bool restoredFromArchive = false;
@@ -772,25 +758,14 @@ typedef struct XLogCtlData
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
 
-	/*
-	 * Maximal last written LSN for pages not present in lastWrittenLsnCache
-	 */
-	XLogRecPtr  maxLastWrittenLsn;
-
-	/*
-	 * Double linked list to implement LRU replacement policy for last written LSN cache.
-	 * Access to this list as well as to last written LSN cache is protected by 'LastWrittenLsnLock'.
-	 */
-	dlist_head lastWrittenLsnLRU;
-
 	/* neon: copy of startup's RedoStartLSN for walproposer's use */
 	XLogRecPtr	RedoStartLSN;
 
 	/*
-	 * size of a timeline in zenith pageserver.
+	 * size of a timeline in neon pageserver.
 	 * used to enforce timeline size limit.
 	 */
-	uint64 		zenithCurrentClusterSize;
+	uint64 		neonCurrentClusterSize;
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
 
@@ -5173,8 +5148,11 @@ LocalProcessControlFile(bool reset)
 	ReadControlFile();
 }
 
-static Size
-XLOGCtlShmemSize(void)
+/*
+ * Initialization of shared memory for XLOG
+ */
+Size
+XLOGShmemSize(void)
 {
 	Size		size;
 
@@ -5214,16 +5192,6 @@ XLOGCtlShmemSize(void)
 	return size;
 }
 
-/*
- * Initialization of shared memory for XLOG
- */
-Size
-XLOGShmemSize(void)
-{
-	return XLOGCtlShmemSize() +
-		hash_estimate_size(lastWrittenLsnCacheSize, sizeof(LastWrittenLsnCacheEntry));
-}
-
 void
 XLOGShmemInit(void)
 {
@@ -5251,17 +5219,8 @@ XLOGShmemInit(void)
 
 
 	XLogCtl = (XLogCtlData *)
-		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
+		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
-	{
-		static HASHCTL info;
-		info.keysize = sizeof(BufferTag);
-		info.entrysize = sizeof(LastWrittenLsnCacheEntry);
-		lastWrittenLsnCache = ShmemInitHash("last_written_lsn_cache",
-											lastWrittenLsnCacheSize, lastWrittenLsnCacheSize,
-											&info,
-											HASH_ELEM | HASH_BLOBS);
-	}
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
@@ -5653,8 +5612,8 @@ readZenithSignalFile(void)
 		if (strcmp(prev_lsn_str, "invalid") == 0)
 		{
 			/* No prev LSN. Forbid starting up in read-write mode */
-			zenithLastRec = InvalidXLogRecPtr;
-			zenithWriteOk = false;
+			neonLastRec = InvalidXLogRecPtr;
+			neonWriteOk = false;
 		}
 		else if (strcmp(prev_lsn_str, "none") == 0)
 		{
@@ -5663,8 +5622,8 @@ readZenithSignalFile(void)
 			 * to start without it. This happens when you start the compute
 			 * node for the first time on a new branch.
 			 */
-			zenithLastRec = InvalidXLogRecPtr;
-			zenithWriteOk = true;
+			neonLastRec = InvalidXLogRecPtr;
+			neonWriteOk = true;
 		}
 		else
 		{
@@ -5675,21 +5634,21 @@ readZenithSignalFile(void)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
-			zenithLastRec = ((uint64) hi) << 32 | lo;
+			neonLastRec = ((uint64) hi) << 32 | lo;
 
 			/* If prev LSN is given, it better be valid */
-			if (zenithLastRec == InvalidXLogRecPtr)
+			if (neonLastRec == InvalidXLogRecPtr)
 				ereport(ERROR,
 						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 						 errmsg("invalid prev-LSN in file \"%s\"", ZENITH_SIGNAL_FILE)));
-			zenithWriteOk = true;
+			neonWriteOk = true;
 		}
-		ZenithRecoveryRequested = true;
+		NeonRecoveryRequested = true;
 		close(fd);
 
 		elog(LOG,
-			 "[ZENITH] found 'zenith.signal' file. setting prev LSN to %X/%X",
-			 LSN_FORMAT_ARGS(zenithLastRec));
+			 "[neon] found 'zenith.signal' file. setting prev LSN to %X/%X",
+			 LSN_FORMAT_ARGS(neonLastRec));
 	}
 }
 
@@ -6681,7 +6640,7 @@ StartupXLOG(void)
 	/*
 	 * Check that contents look valid.
 	 */
-	if (!XRecOffIsValid(ControlFile->checkPoint) && !ZenithRecoveryRequested)
+	if (!XRecOffIsValid(ControlFile->checkPoint) && !NeonRecoveryRequested)
 		ereport(FATAL,
 				(errmsg("control file contains invalid checkpoint location")));
 
@@ -6811,9 +6770,9 @@ StartupXLOG(void)
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
-		else if (ZenithRecoveryRequested)
+		else if (NeonRecoveryRequested)
 			ereport(LOG,
-					(errmsg("starting zenith recovery")));
+					(errmsg("starting neon recovery")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -6944,18 +6903,18 @@ StartupXLOG(void)
 		/* set flag to delete it later */
 		haveBackupLabel = true;
 	}
-	else if (ZenithRecoveryRequested)
+	else if (NeonRecoveryRequested)
 	{
 		/*
 		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
-		 * just finished reading the record that started at 'zenithLastRec'
+		 * just finished reading the record that started at 'neonLastRec'
 		 * and ended at checkpoint.redo
 		 */
 		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
 			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
-			 LSN_FORMAT_ARGS(zenithLastRec));
+			 LSN_FORMAT_ARGS(neonLastRec));
 
-		checkPointLoc = zenithLastRec;
+		checkPointLoc = neonLastRec;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
 		/* make basebackup LSN available for walproposer */
 		XLogCtl->RedoStartLSN = RedoStartLSN;
@@ -7228,7 +7187,7 @@ StartupXLOG(void)
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
-	if (RecPtr < checkPoint.redo && !ZenithRecoveryRequested)
+	if (RecPtr < checkPoint.redo && !NeonRecoveryRequested)
 		ereport(PANIC,
 				(errmsg("invalid redo in checkpoint record")));
 
@@ -7257,6 +7216,9 @@ StartupXLOG(void)
 	 */
 	abortedRecPtr = InvalidXLogRecPtr;
 	missingContrecPtr = InvalidXLogRecPtr;
+
+	if (xlog_pre_recovery_start_hook)
+		xlog_pre_recovery_start_hook(ControlFile);
 
 	/* REDO */
 	if (InRecovery)
@@ -7525,6 +7487,10 @@ StartupXLOG(void)
 			SendPostmasterSignal(PMSIGNAL_RECOVERY_STARTED);
 			bgwriterLaunched = true;
 		}
+
+
+		if (xlog_post_recovery_start_hook)
+			xlog_post_recovery_start_hook(ControlFile);
 
 		/*
 		 * Allow read-only connections immediately if we're consistent
@@ -7852,6 +7818,9 @@ StartupXLOG(void)
 					(errmsg("recovery ended before configured recovery target was reached")));
 	}
 
+	if (xlog_post_recovery_start_hook)
+		xlog_post_recovery_start_hook(ControlFile);
+
 	/*
 	 * Kill WAL receiver, if it's still running, before we continue to write
 	 * the startup checkpoint and aborted-contrecord records. It will trump
@@ -7900,9 +7869,9 @@ StartupXLOG(void)
 	 * the WAL page where we will start writing new records from scratch,
 	 * instead.
 	 */
-	if (ZenithRecoveryRequested)
+	if (NeonRecoveryRequested)
 	{
-		if (!zenithWriteOk)
+		if (!neonWriteOk)
 		{
 			/*
 			 * We cannot start generating new WAL if we don't have a valid prev-LSN
@@ -8137,7 +8106,7 @@ StartupXLOG(void)
 		/* Copy the valid part of the last block, and zero the rest */
 		page = &XLogCtl->pages[firstIdx * XLOG_BLCKSZ];
 		len = EndOfLog % XLOG_BLCKSZ;
-		if (!ZenithRecoveryRequested)
+		if (!NeonRecoveryRequested)
 			memcpy(page, xlogreader->readBuf, len);
 		memset(page + len, 0, XLOG_BLCKSZ - len);
 
@@ -8160,8 +8129,6 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	dlist_init(&XLogCtl->lastWrittenLsnLRU);
 
 	LocalSetXLogInsertAllowed();
 
@@ -8932,140 +8899,41 @@ GetInsertRecPtr(void)
 	return recptr;
 }
 
-/*
- * GetLastWrittenLSN -- Returns maximal LSN of written page.
- * It returns an upper bound for the last written LSN of a given page,
- * either from a cached last written LSN or a global maximum last written LSN.
- * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
- * If cache is large enough, iterating through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
- */
-XLogRecPtr
-GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
+/* hooks for the functions below */
+xlog_set_lwlf_block_hook_type xlog_set_lwlf_block_hook = NULL;
+xlog_set_lwlf_blockrange_hook_type xlog_set_lwlf_blockrange_hook = NULL;
+xlog_set_lwlf_relation_hook_type xlog_set_lwlf_relation_hook = NULL;
+xlog_set_lwlf_database_hook_type xlog_set_lwlf_database_hook = NULL;
+xlog_set_lwlf_dbcluster_hook_type xlog_set_lwlf_dbcluster_hook = NULL;
+
+void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno)
 {
-	XLogRecPtr lsn;
-	LastWrittenLsnCacheEntry* entry;
-
-	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
-
-	/* Maximal last written LSN among all non-cached pages */
-	lsn = XLogCtl->maxLastWrittenLsn;
-
-	if (rnode.relNode != InvalidOid)
-	{
-		BufferTag key;
-		key.rnode = rnode;
-		key.forkNum = forknum;
-		key.blockNum = blkno;
-		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
-		if (entry != NULL)
-			lsn = entry->lsn;
-	}
-	else
-	{
-		HASH_SEQ_STATUS seq;
-		/* Find maximum of all cached LSNs */
-		hash_seq_init(&seq, lastWrittenLsnCache);
-		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
-		{
-			if (entry->lsn > lsn)
-				lsn = entry->lsn;
-		}
-	}
-	LWLockRelease(LastWrittenLsnLock);
-
-	return lsn;
+	if (xlog_set_lwlf_block_hook)
+		xlog_set_lwlf_block_hook(lsn, relfilenode, forknum, blkno);
 }
 
-/*
- * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. Keeping last written LSN for each page allows to use old LSN when
- * requesting pages of unchanged or appended relations. Also it is critical for
- * efficient work of prefetch in case massive update operations (like vacuum or remove).
- *
- * rnode.relNode can be InvalidOid, in this case maxLastWrittenLsn is updated.
- * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
- */
-void
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
+void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
-	if (lsn == InvalidXLogRecPtr || n_blocks == 0)
-		return;
-
-	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
-	if (rnode.relNode == InvalidOid)
-	{
-		if (lsn > XLogCtl->maxLastWrittenLsn)
-			XLogCtl->maxLastWrittenLsn = lsn;
-	}
-	else
-	{
-		LastWrittenLsnCacheEntry* entry;
-		BufferTag key;
-		bool found;
-		BlockNumber i;
-
-		key.rnode = rnode;
-		key.forkNum = forknum;
-		for (i = 0; i < n_blocks; i++)
-		{
-			key.blockNum = from + i;
-			entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
-			if (found)
-			{
-				if (lsn > entry->lsn)
-					entry->lsn = lsn;
-				/* Unlink from LRU list */
-				dlist_delete(&entry->lru_node);
-			}
-			else
-			{
-				entry->lsn = lsn;
-				if (hash_get_num_entries(lastWrittenLsnCache) > lastWrittenLsnCacheSize)
-				{
-					/* Replace least recently used entry */
-					LastWrittenLsnCacheEntry* victim = dlist_container(LastWrittenLsnCacheEntry, lru_node, dlist_pop_head_node(&XLogCtl->lastWrittenLsnLRU));
-					/* Adjust max LSN for not cached relations/chunks if needed */
-					if (victim->lsn > XLogCtl->maxLastWrittenLsn)
-						XLogCtl->maxLastWrittenLsn = victim->lsn;
-
-					hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
-				}
-			}
-			/* Link to the end of LRU list */
-			dlist_push_tail(&XLogCtl->lastWrittenLsnLRU, &entry->lru_node);
-		}
-	}
-	LWLockRelease(LastWrittenLsnLock);
+	if (xlog_set_lwlf_blockrange_hook)
+		xlog_set_lwlf_blockrange_hook(lsn, relfilenode, forknum, from, n_blocks);
 }
 
-/*
- * SetLastWrittenLSNForBlock -- Set maximal LSN for block
- */
-void
-SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
+void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum)
 {
-	SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, 1);
+	if (xlog_set_lwlf_relation_hook)
+		xlog_set_lwlf_relation_hook(lsn, relfilenode, forknum);
 }
 
-/*
- * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
- */
-void
-SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum)
+void SetLastWrittenLSNForDatabase(XLogRecPtr lsn, Oid dboid)
 {
-	SetLastWrittenLSNForBlock(lsn, rnode, forknum, REL_METADATA_PSEUDO_BLOCKNO);
+	if (xlog_set_lwlf_database_hook)
+		xlog_set_lwlf_database_hook(lsn, dboid);
 }
 
-/*
- * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
- */
-void
-SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
+void SetLastWrittenLSNForDbCluster(XLogRecPtr lsn)
 {
-	RelFileNode dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
+	if (xlog_set_lwlf_dbcluster_hook)
+		xlog_set_lwlf_dbcluster_hook(lsn);
 }
 
 /*
@@ -9080,11 +8948,11 @@ GetRedoStartLsn(void)
 
 
 uint64
-GetZenithCurrentClusterSize(void)
+GetNeonCurrentClusterSize(void)
 {
 	uint64 size;
 	SpinLockAcquire(&XLogCtl->info_lck);
-	size = XLogCtl->zenithCurrentClusterSize;
+	size = XLogCtl->neonCurrentClusterSize;
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return size;
@@ -9092,10 +8960,10 @@ GetZenithCurrentClusterSize(void)
 
 
 void
-SetZenithCurrentClusterSize(uint64 size)
+SetNeonCurrentClusterSize(uint64 size)
 {
 	SpinLockAcquire(&XLogCtl->info_lck);
-	XLogCtl->zenithCurrentClusterSize = size;
+	XLogCtl->neonCurrentClusterSize = size;
 	SpinLockRelease(&XLogCtl->info_lck);
 }
 

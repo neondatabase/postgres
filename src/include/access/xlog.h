@@ -15,6 +15,7 @@
 #include "access/xlogdefs.h"
 #include "access/xloginsert.h"
 #include "access/xlogreader.h"
+#include "catalog/pg_control.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
@@ -137,7 +138,6 @@ extern char *PrimaryConnInfo;
 extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
-extern int  lastWrittenLsnCacheSize;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
@@ -357,16 +357,40 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
+/* neon extensions */
 extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
-extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
 extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
-extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn, Oid dboid);
+extern void SetLastWrittenLSNForDbCluster(XLogRecPtr lsn);
+
+typedef void (*xlog_set_lwlf_block_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef void (*xlog_set_lwlf_blockrange_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+typedef void (*xlog_set_lwlf_relation_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+typedef void (*xlog_set_lwlf_database_hook_type)(XLogRecPtr lsn, Oid dboid);
+typedef void (*xlog_set_lwlf_dbcluster_hook_type)(XLogRecPtr lsn);
+
+extern xlog_set_lwlf_block_hook_type xlog_set_lwlf_block_hook;
+extern xlog_set_lwlf_blockrange_hook_type xlog_set_lwlf_blockrange_hook;
+extern xlog_set_lwlf_relation_hook_type xlog_set_lwlf_relation_hook;
+extern xlog_set_lwlf_database_hook_type xlog_set_lwlf_database_hook;
+extern xlog_set_lwlf_dbcluster_hook_type xlog_set_lwlf_dbcluster_hook;
+
+typedef void (*xlog_recovery_hook_type)(const ControlFileData* checkpoint);
+
+extern xlog_recovery_hook_type xlog_pre_recovery_start_hook;
+extern xlog_recovery_hook_type xlog_post_recovery_start_hook;
+
+extern bool NeonRecoveryRequested;
+extern XLogRecPtr neonLastRec;
+extern bool neonWriteOk;
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
-extern void SetZenithCurrentClusterSize(uint64 size);
-extern uint64 GetZenithCurrentClusterSize(void);
+extern void SetNeonCurrentClusterSize(uint64 size);
+extern uint64 GetNeonCurrentClusterSize(void);
+
+/* end of neon extensions */
 
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
