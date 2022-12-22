@@ -486,7 +486,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 
 		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
 
-		SetLastWrittenLSNForDatabase(lsn);
+		SetLastWrittenLSNForDbCluster(lsn);
 
 		/* As always, WAL must hit the disk before the data update does. */
 		XLogFlush(lsn);
@@ -629,7 +629,7 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 			lsn = XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
 
-			SetLastWrittenLSNForDatabase(lsn);
+			SetLastWrittenLSNForDbCluster(lsn);
 		}
 		pfree(srcpath);
 		pfree(dstpath);
@@ -2031,7 +2031,7 @@ movedb(const char *dbname, const char *tblspcname)
 			lsn = XLogInsert(RM_DBASE_ID,
 							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
 			// TODO: Do we really need to set the LSN here?
-			SetLastWrittenLSNForDatabase(lsn);
+			SetLastWrittenLSNForDbCluster(lsn);
 		}
 
 		/*
@@ -3141,7 +3141,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
-			SetLastWrittenLSNForDatabase(lsn);
+			SetLastWrittenLSNForDbCluster(lsn);
 		}
 
 		pfree(src_path);
@@ -3171,7 +3171,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
-			SetLastWrittenLSNForDatabase(lsn);
+			SetLastWrittenLSNForDbCluster(lsn);
 		}
 	}
 	else if (info == XLOG_DBASE_DROP)

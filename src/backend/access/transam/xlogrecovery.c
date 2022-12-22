@@ -95,6 +95,10 @@ char	   *PrimarySlotName = NULL;
 char	   *PromoteTriggerFile = NULL;
 bool		wal_receiver_create_temp_slot = false;
 
+/* hooks for the recovery process */
+xlog_recovery_hook_type xlog_pre_recovery_start_hook;
+xlog_recovery_hook_type xlog_post_recovery_start_hook;
+
 /*
  * recoveryTargetTimeLineGoal: what the user requested, if any
  *
@@ -543,7 +547,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
-		else if (ZenithRecoveryRequested)
+		else if (NeonRecoveryRequested)
 			ereport(LOG,
 					(errmsg("starting zenith recovery")));
 		else
@@ -686,7 +690,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		/* tell the caller to delete it later */
 		haveBackupLabel = true;
 	}
-	else if (ZenithRecoveryRequested)
+	else if (NeonRecoveryRequested)
 	{
 		/*
 		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
@@ -695,9 +699,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		 */
 		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
 			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
-			 LSN_FORMAT_ARGS(zenithLastRec));
+			 LSN_FORMAT_ARGS(neonLastRec));
 
-		CheckPointLoc = zenithLastRec;
+		CheckPointLoc = neonLastRec;
 		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
 		// FIXME needs review. rebase of ff41b709abea6a9c42100a4fcb0ff434b2c846c9
@@ -864,7 +868,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				(errmsg("invalid next transaction ID")));
 
 	/* sanity check */
-	if (checkPoint.redo > CheckPointLoc && !ZenithRecoveryRequested)
+	if (checkPoint.redo > CheckPointLoc && !NeonRecoveryRequested)
 		ereport(PANIC,
 				(errmsg("invalid redo in checkpoint record")));
 
@@ -887,6 +891,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		/* force recovery due to presence of recovery signal file */
 		InRecovery = true;
 	}
+
+	if (xlog_pre_recovery_start_hook)
+		xlog_pre_recovery_start_hook(ControlFile);
 
 	/*
 	 * If recovery is needed, update our in-memory copy of pg_control to show
@@ -1056,7 +1063,7 @@ readRecoverySignalFile(void)
 	if (standby_signal_file_found)
 	{
 		StandbyModeRequested = true;
-		ArchiveRecoveryRequested = XLogRecPtrIsInvalid(zenithLastRec); /* no need to perform WAL recovery in Neon */
+		ArchiveRecoveryRequested = XLogRecPtrIsInvalid(neonLastRec); /* no need to perform WAL recovery in Neon */
 	}
 	else if (recovery_signal_file_found)
 	{
@@ -1463,7 +1470,7 @@ FinishWalRecovery(void)
 		lastRecTLI = XLogRecoveryCtl->lastReplayedTLI;
 	}
 
-	if (!ZenithRecoveryRequested)
+	if (!NeonRecoveryRequested)
 	{
 		XLogPrefetcherBeginRead(xlogprefetcher, lastRec);
 		(void) ReadRecord(xlogprefetcher, PANIC, false, lastRecTLI);
@@ -1510,9 +1517,9 @@ FinishWalRecovery(void)
 	 * the WAL page where we will start writing new records from scratch,
 	 * instead.
 	 */
-	if (ZenithRecoveryRequested)
+	if (NeonRecoveryRequested)
 	{
-		if (!zenithWriteOk)
+		if (!neonWriteOk)
 		{
 			/*
 			 * We cannot start generating new WAL if we don't have a valid prev-LSN
@@ -1601,7 +1608,7 @@ ShutdownWalRecovery(void)
 	char		recoveryPath[MAXPGPATH];
 
 	/* Final update of pg_stat_recovery_prefetch. */
-	if (!ZenithRecoveryRequested)
+	if (!NeonRecoveryRequested)
 	{
 		XLogPrefetcherComputeStats(xlogprefetcher);
 	}
@@ -1614,7 +1621,7 @@ ShutdownWalRecovery(void)
 	}
 	XLogReaderFree(xlogreader);
 
-	if (!ZenithRecoveryRequested)
+	if (!NeonRecoveryRequested)
 	{
 		XLogPrefetcherFree(xlogprefetcher);
 	}

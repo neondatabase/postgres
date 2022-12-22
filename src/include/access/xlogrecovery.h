@@ -154,4 +154,13 @@ extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, 
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 
+/*
+ * NEON: Extra hooks for getting access to the recovery start LSN (amongst
+ * others) before any buffers are accessed.
+ */
+typedef void (*xlog_recovery_hook_type)(const ControlFileData* checkpoint);
+
+extern xlog_recovery_hook_type xlog_pre_recovery_start_hook;
+extern xlog_recovery_hook_type xlog_post_recovery_start_hook;
+
 #endif							/* XLOGRECOVERY_H */

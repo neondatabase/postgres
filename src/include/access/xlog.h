@@ -35,9 +35,9 @@ extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
  */
 #define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
 
-extern bool			ZenithRecoveryRequested;
-extern XLogRecPtr	zenithLastRec;
-extern bool			zenithWriteOk;
+extern bool			NeonRecoveryRequested;
+extern XLogRecPtr	neonLastRec;
+extern bool			neonWriteOk;
 
 /* these variables are GUC parameters related to XLOG */
 extern PGDLLIMPORT int wal_segment_size;
@@ -62,7 +62,6 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
-extern int  lastWrittenLsnCacheSize;
 
 
 /* Archive modes */
@@ -258,16 +257,29 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 
 extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
-extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
 extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
-extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn, Oid dboid);
+extern void SetLastWrittenLSNForDbCluster(XLogRecPtr lsn);
+
+typedef void (*xlog_set_lwlf_block_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef void (*xlog_set_lwlf_blockrange_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+typedef void (*xlog_set_lwlf_relation_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+typedef void (*xlog_set_lwlf_database_hook_type)(XLogRecPtr lsn, Oid dboid);
+typedef void (*xlog_set_lwlf_dbcluster_hook_type)(XLogRecPtr lsn);
+
+extern xlog_set_lwlf_block_hook_type xlog_set_lwlf_block_hook;
+extern xlog_set_lwlf_blockrange_hook_type xlog_set_lwlf_blockrange_hook;
+extern xlog_set_lwlf_relation_hook_type xlog_set_lwlf_relation_hook;
+extern xlog_set_lwlf_database_hook_type xlog_set_lwlf_database_hook;
+extern xlog_set_lwlf_dbcluster_hook_type xlog_set_lwlf_dbcluster_hook;
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
 
-extern void SetZenithCurrentClusterSize(uint64 size);
-extern uint64 GetZenithCurrentClusterSize(void);
+extern void SetNeonCurrentClusterSize(uint64 size);
+extern uint64 GetNeonCurrentClusterSize(void);
 
+/* end neon specifics */
 
 extern void SetWalWriterSleeping(bool sleeping);
 
