@@ -1601,6 +1601,17 @@ typedef struct ParallelBitmapHeapState
 	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 } ParallelBitmapHeapState;
 
+#define MAX_CACHED_PREFETCH_REQUESTS 128
+
+typedef struct TBMIteratePrefetchResult
+{
+	BlockNumber blockno;		/* page number containing tuples */
+	int			ntuples;		/* -1 indicates lossy result */
+	bool		recheck;		/* should the tuples be rechecked? */
+	/* Note: recheck is always true if ntuples < 0 */
+	OffsetNumber offsets[MaxHeapTuplesPerPage];
+} TBMIteratePrefetchResult;
+
 /* ----------------
  *	 BitmapHeapScanState information
  *
@@ -1621,7 +1632,6 @@ typedef struct ParallelBitmapHeapState
  *		pscan_len		   size of the shared memory for parallel bitmap
  *		initialized		   is node is ready to iterate
  *		shared_tbmiterator	   shared iterator
- *		shared_prefetch_iterator shared iterator for prefetching
  *		pstate			   shared state for parallel bitmap scan
  * ----------------
  */
@@ -1645,7 +1655,9 @@ typedef struct BitmapHeapScanState
 	Size		pscan_len;
 	bool		initialized;
 	TBMSharedIterator *shared_tbmiterator;
-	TBMSharedIterator *shared_prefetch_iterator;
+	TBMIteratePrefetchResult prefetch_requests[MAX_CACHED_PREFETCH_REQUESTS];
+	int n_prefetch_requests;
+	int prefetch_request_pos;
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
