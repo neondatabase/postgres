@@ -15,6 +15,14 @@
 
 #include "portability/instr_time.h"
 
+/* Prefeth statistics */
+typedef struct
+{
+	int64 hits;
+	int64 misses;
+	int64 expired;
+	int64 duplicates;
+} PrefetchInfo;
 
 /*
  * BufferUsage and WalUsage counters keep being incremented infinitely,
@@ -35,6 +43,7 @@ typedef struct BufferUsage
 	int64		temp_blks_written;	/* # of temp blocks written */
 	instr_time	blk_read_time;	/* time spent reading */
 	instr_time	blk_write_time; /* time spent writing */
+	PrefetchInfo prefetch; /* prefetch statistics */ 
 } BufferUsage;
 
 /*
