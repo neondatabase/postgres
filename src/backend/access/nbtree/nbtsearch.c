@@ -17,11 +17,13 @@
 
 #include "access/nbtree.h"
 #include "access/relscan.h"
+#include "catalog/catalog.h"
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/predicate.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 
 static void _bt_drop_lock_and_maybe_pin(IndexScanDesc scan, BTScanPos sp);
@@ -1864,6 +1866,64 @@ _bt_savepostingitem(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
 }
 
 /*
+ * _bt_read_parent - read parent page and extract references to children for prefetch
+ */
+static void
+_bt_read_parent(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
+{
+	Relation rel = scan->indexRelation;
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Buffer		buf;
+	Page		page;
+	BTPageOpaque opaque;
+	OffsetNumber offnum;
+	OffsetNumber n_child;
+	int          next_parent_prefetch_index;
+	int          i, j;
+
+	buf = _bt_getbuf(rel, parent, BT_READ);
+	page = BufferGetPage(buf);
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	offnum = P_FIRSTDATAKEY(opaque);
+	n_child = PageGetMaxOffsetNumber(page) - offnum + 1;
+	next_parent_prefetch_index = (n_child > so->prefetch_maximum)
+		? n_child - so->prefetch_maximum : 0;
+
+	if (ScanDirectionIsForward(dir))
+	{
+		so->next_parent = opaque->btpo_next;
+		if (so->next_parent == P_NONE)
+			next_parent_prefetch_index = -1;
+		for (i = 0, j = 0; i < n_child; i++)
+		{
+			ItemId itemid = PageGetItemId(page, offnum + i);
+			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
+			if (i == next_parent_prefetch_index)
+				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
+ 			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
+		}
+	}
+	else
+	{
+		so->next_parent = opaque->btpo_prev;
+		if (so->next_parent == P_NONE)
+			next_parent_prefetch_index = -1;
+		for (i = 0, j = 0; i < n_child; i++)
+		{
+			ItemId itemid = PageGetItemId(page, offnum + n_child - i - 1);
+			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
+			if (i == next_parent_prefetch_index)
+				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
+			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
+		}
+	}
+	so->n_prefetch_blocks = j;
+	so->last_prefetch_index = 0;
+	_bt_relbuf(rel, buf);
+}
+
+
+/*
  *	_bt_steppage() -- Step to next page containing valid data for scan
  *
  * On entry, if so->currPos.buf is valid the buffer is pinned but not locked;
@@ -1906,6 +1966,18 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 		so->markItemIndex = -1;
 	}
 
+	so->n_prefetch_requests -= 1;
+	if (so->last_prefetch_index == so->n_prefetch_blocks && so->next_parent != P_NONE)
+	{
+		/* we have prefetched all items from current parent page, let's move to the next parent page */
+		_bt_read_parent(scan, so->next_parent, dir);
+		so->n_prefetch_requests -= 1;
+	}
+	while (so->n_prefetch_requests < so->prefetch_maximum && so->last_prefetch_index < so->n_prefetch_blocks)
+	{
+		so->n_prefetch_requests += 1;
+		PrefetchBuffer(scan->indexRelation, MAIN_FORKNUM, so->prefetch_blocks[so->last_prefetch_index++]);
+	}
 	if (ScanDirectionIsForward(dir))
 	{
 		/* Walk right to the next page with data */
@@ -2310,6 +2382,7 @@ _bt_walk_left(Relation rel, Buffer buf, Snapshot snapshot)
  */
 Buffer
 _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
+				 BlockNumber* parent,
 				 Snapshot snapshot)
 {
 	Buffer		buf;
@@ -2318,6 +2391,7 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 	OffsetNumber offnum;
 	BlockNumber blkno;
 	IndexTuple	itup;
+	BlockNumber parent_blocknum = P_NONE;
 
 	/*
 	 * If we are looking for a leaf page, okay to descend from fast root;
@@ -2373,12 +2447,15 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 			offnum = P_FIRSTDATAKEY(opaque);
 
 		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
+		parent_blocknum = BufferGetBlockNumber(buf);
 		blkno = BTreeTupleGetDownLink(itup);
 
 		buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
 		page = BufferGetPage(buf);
 		opaque = (BTPageOpaque) PageGetSpecialPointer(page);
 	}
+	if (parent)
+		*parent = parent_blocknum;
 
 	return buf;
 }
@@ -2402,13 +2479,13 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 	BTPageOpaque opaque;
 	OffsetNumber start;
 	BTScanPosItem *currItem;
-
+	BlockNumber	parent;
 	/*
 	 * Scan down to the leftmost or rightmost leaf page.  This is a simplified
 	 * version of _bt_search().  We don't maintain a stack since we know we
 	 * won't need it.
 	 */
-	buf = _bt_get_endpoint(rel, 0, ScanDirectionIsBackward(dir), scan->xs_snapshot);
+	buf = _bt_get_endpoint(rel, 0, ScanDirectionIsBackward(dir), &parent, scan->xs_snapshot);
 
 	if (!BufferIsValid(buf))
 	{
@@ -2419,6 +2496,24 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 		PredicateLockRelation(rel, scan->xs_snapshot);
 		BTScanPosInvalidate(so->currPos);
 		return false;
+	}
+
+	so->prefetch_maximum = IsCatalogRelation(rel)
+		? effective_io_concurrency
+		: get_tablespace_io_concurrency(rel->rd_rel->reltablespace);
+	/* Neon: we currently do not use prefetch for parallel index scan
+	 * because prefetch is efficient only if prefetched blocks are accessed by the same worker which issued prefetch request,
+	 * logic of splitting pages between parallel  worked in index scan doesn't allow to satisfy this requirement.
+	 * Also prefetch of leaf pages can be efficient only for index-only scans because otherwise
+	 * time is mostly spent in reading heap pages.
+	 */
+	if (parent != P_NONE && so->prefetch_maximum > 0 && !scan->parallel_scan && scan->xs_want_itup /* index only scan */)
+	{
+		so->n_prefetch_requests = 0;
+		_bt_read_parent(scan, parent, dir);
+		so->n_prefetch_requests = so->last_prefetch_index = Min(so->prefetch_maximum, so->n_prefetch_blocks);
+		for (int i = 0; i < so->last_prefetch_index; i++)
+			PrefetchBuffer(rel, MAIN_FORKNUM, so->prefetch_blocks[i]);
 	}
 
 	PredicateLockPage(rel, BufferGetBlockNumber(buf), scan->xs_snapshot);
