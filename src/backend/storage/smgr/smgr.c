@@ -44,6 +44,7 @@ static const f_smgr smgr_md = {
 		.smgr_nblocks = mdnblocks,
 		.smgr_truncate = mdtruncate,
 		.smgr_immedsync = mdimmedsync,
+		.smgr_fcntl = mdfcntl,
 };
 
 /*
@@ -529,6 +530,15 @@ bool
 smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 {
 	return (*reln->smgr).smgr_prefetch(reln, forknum, blocknum);
+}
+
+/*
+ *	smgr_fcntl() -- Perform storage manager specific call
+ */
+void
+smgr_fcntl(SMgrRelation reln, int cmd, int arg, void* data, size_t size)
+{
+	(*reln->smgr).smgr_fcntl(reln, cmd, arg, data, size);
 }
 
 /*
