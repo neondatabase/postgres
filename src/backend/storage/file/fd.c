@@ -98,6 +98,7 @@
 #include "portability/mem.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
+#include "storage/smgr.h"
 #include "utils/guc.h"
 #include "utils/resowner_private.h"
 
@@ -188,6 +189,7 @@ int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
+#define FD_TEMP_FILE_OFFLOADED (1 << 4)	/* T = offloaded to pageserver */
 
 typedef struct vfd
 {
@@ -293,6 +295,7 @@ static int	nextTempTableSpace = 0;
  * ReleaseLruFiles - Release fd(s) until we're under the max_safe_fds limit
  * AllocateVfd	   - grab a free (or new) file record (from VfdCache)
  * FreeVfd		   - free a file record
+ * OffloadTempFiles- NEON: offload temp files to pageserver
  *
  * The Least Recently Used ring is a doubly linked list that begins and
  * ends on element zero.  Element zero is special -- it doesn't represent
@@ -1404,15 +1407,106 @@ FreeVfd(File file)
 	VfdCache[0].nextFree = file;
 }
 
+/* NEON: Offload largerst temp file to pageserver.
+ * In principle, it is not mandatory to locate largest one. We expect that largest number of temp files
+ * is reated by external sort and we can swap any completely filled file (which size is 1Gb).
+ * But number of files is not expected to be large in a any case, so locating largest one should not add large exra overhead.
+ * Attempt to implement some kind of LRU here seems to be useless, because sort is using files as streams.
+ */
+static void
+OffloadTempFiles(File pinned)
+{
+	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
+	{
+		off_t maxFileSize = 0;
+		File maxFile = -1;
+
+		Vfd* victim;
+		char* buf;
+
+		for (File i = 0; i < SizeVfdCache; i++)
+		{
+			if (i != pinned && (VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			{
+				if (VfdCache[i].fileSize > maxFileSize)
+				{
+					maxFileSize = VfdCache[i].fileSize;
+					maxFile = i;
+				}
+			}
+		}
+		if (maxFile < 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("temporary file size exceeds temp_file_limit (%dkB)",
+							temp_file_limit)));
+
+		/* Offload file to pageserver */
+		victim = &VfdCache[maxFile];
+
+		buf = malloc(victim->fileSize);
+		if (buf == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+
+		if (FileRead(maxFile, buf, victim->fileSize, 0, WAIT_EVENT_DATA_FILE_READ) != victim->fileSize)
+		{
+			free(buf);
+			ereport(ERROR,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("Failed to read temp file %s: %m",
+							victim->fileName)));
+		}
+		else
+		{
+			RelFileNode dummy_rnode = {0, 0, 0};
+			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, maxFile, buf, victim->fileSize);
+			free(buf);
+		}
+		LruDelete(maxFile); /* close this file descriptor */
+		temporary_files_size -= victim->fileSize;
+		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+	}
+}
+
 /* returns 0 on success, -1 on re-open failure (with errno set) */
 static int
 FileAccess(File file)
 {
 	int			returnValue;
+	Vfd* vfdP = &VfdCache[file];
 
 	DO_DB(elog(LOG, "FileAccess %d (%s)",
-			   file, VfdCache[file].fileName));
+			   file, vfdP->fileName));
 
+	/* NEON: download offloaded file */
+	if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
+	{
+		RelFileNode dummy_rnode = {0, 0, 0};
+		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+		char* buf = malloc(vfdP->fileSize);
+		if (buf == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, file, buf, vfdP->fileSize);
+
+
+		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
+		{
+			free(buf);
+			ereport(ERROR,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("Failed to write offloaded file %s: %m",
+							vfdP->fileName)));
+		}
+		free(buf);
+		temporary_files_size += vfdP->fileSize;
+		OffloadTempFiles(file);
+		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
+	}
 	/*
 	 * Is the file open?  If not, open it and put it at the head of the LRU
 	 * ring (possibly closing the least recently used file to get an FD).
@@ -1914,6 +2008,13 @@ FileClose(File file)
 		/* Subtract its size from current usage (do first in case of error) */
 		temporary_files_size -= vfdP->fileSize;
 		vfdP->fileSize = 0;
+
+		if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
+		{
+			RelFileNode dummy_rnode = {0, 0, 0};
+			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, file, NULL, 0);
+		}
 	}
 
 	/*
@@ -2118,14 +2219,10 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 
 		if (past_write > vfdP->fileSize)
 		{
-			uint64		newTotal = temporary_files_size;
+			temporary_files_size += past_write - vfdP->fileSize;
 
-			newTotal += past_write - vfdP->fileSize;
-			if (newTotal > (uint64) temp_file_limit * (uint64) 1024)
-				ereport(ERROR,
-						(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
-						 errmsg("temporary file size exceeds temp_file_limit (%dkB)",
-								temp_file_limit)));
+			/* NEON: instead of throwing error, swap-out them to page server.*/
+			OffloadTempFiles(file);
 		}
 	}
 
