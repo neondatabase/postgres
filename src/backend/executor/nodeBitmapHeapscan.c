@@ -198,7 +198,7 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				{
 					node->tbmres = tbmres = (TBMIterateResult *)&node->prefetch_requests[node->prefetch_request_pos];
 					node->n_prefetch_requests -= 1;
-					node->prefetch_request_pos = (node->prefetch_request_pos + 1) % MAX_CACHED_PREFETCH_REQUESTS;
+					node->prefetch_request_pos = (node->prefetch_request_pos + 1) % MAX_IO_CONCURRENCY;
 					if (node->prefetch_pages != 0)
 						node->prefetch_pages -= 1;
 				}
@@ -466,8 +466,9 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 			bool		do_prefetch = false;
 			bool		skip_fetch;
 
-			if (node->prefetch_pages < node->prefetch_target && node->n_prefetch_requests < MAX_CACHED_PREFETCH_REQUESTS)
+			if (node->prefetch_pages < node->prefetch_target)
 			{
+				Assert(node->n_prefetch_requests < MAX_IO_CONCURRENCY);
 				node->prefetch_pages++;
 				do_prefetch = true;
 			}
@@ -478,7 +479,7 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 			tbmpre = tbm_shared_iterate(node->shared_tbmiterator);
 			if (tbmpre != NULL)
 			{
-				memcpy(&node->prefetch_requests[(node->prefetch_request_pos + node->n_prefetch_requests) % MAX_CACHED_PREFETCH_REQUESTS], tbmpre, sizeof(TBMIteratePrefetchResult));
+				memcpy(&node->prefetch_requests[(node->prefetch_request_pos + node->n_prefetch_requests) % MAX_IO_CONCURRENCY], tbmpre, sizeof(TBMIteratePrefetchResult));
 				node->n_prefetch_requests += 1;
 			}
 			else

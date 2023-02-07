@@ -23,6 +23,7 @@
 #include "nodes/plannodes.h"
 #include "nodes/tidbitmap.h"
 #include "partitioning/partdefs.h"
+#include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
@@ -1601,8 +1602,6 @@ typedef struct ParallelBitmapHeapState
 	char		phs_snapshot_data[FLEXIBLE_ARRAY_MEMBER];
 } ParallelBitmapHeapState;
 
-#define MAX_CACHED_PREFETCH_REQUESTS 128
-
 typedef struct TBMIteratePrefetchResult
 {
 	BlockNumber blockno;		/* page number containing tuples */
@@ -1655,9 +1654,10 @@ typedef struct BitmapHeapScanState
 	Size		pscan_len;
 	bool		initialized;
 	TBMSharedIterator *shared_tbmiterator;
-	TBMIteratePrefetchResult prefetch_requests[MAX_CACHED_PREFETCH_REQUESTS];
-	int n_prefetch_requests;
-	int prefetch_request_pos;
+	/* parallel worker private ring buffer with prefetch requests: it allows to access prefetch result from the same worker */
+	TBMIteratePrefetchResult prefetch_requests[MAX_IO_CONCURRENCY];
+	int n_prefetch_requests; /* number of used elements in prefetch_requests ring buffer */
+	int prefetch_request_pos; /* head position in ring buffer */
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
