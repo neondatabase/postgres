@@ -1866,10 +1866,10 @@ _bt_savepostingitem(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
 }
 
 /*
- * _bt_read_parent - read parent page and extract references to children for prefetch
+ * _bt_read_parent_for_prefetch - read parent page and extract references to children for prefetch
  */
 static void
-_bt_read_parent(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
+_bt_read_parent_for_prefetch(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
 {
 	Relation rel = scan->indexRelation;
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
@@ -1915,7 +1915,7 @@ _bt_read_parent(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
 			if (i == next_parent_prefetch_index)
 				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
 			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
-		}
+Yes		}
 	}
 	so->n_prefetch_blocks = j;
 	so->last_prefetch_index = 0;
@@ -1970,7 +1970,7 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 	if (so->last_prefetch_index == so->n_prefetch_blocks && so->next_parent != P_NONE)
 	{
 		/* we have prefetched all items from current parent page, let's move to the next parent page */
-		_bt_read_parent(scan, so->next_parent, dir);
+		_bt_read_parent_for_prefetch(scan, so->next_parent, dir);
 		so->n_prefetch_requests -= 1;
 	}
 	while (so->n_prefetch_requests < so->prefetch_maximum && so->last_prefetch_index < so->n_prefetch_blocks)
@@ -2510,7 +2510,7 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 	if (parent != P_NONE && so->prefetch_maximum > 0 && !scan->parallel_scan && scan->xs_want_itup /* index only scan */)
 	{
 		so->n_prefetch_requests = 0;
-		_bt_read_parent(scan, parent, dir);
+		_bt_read_parent_for_prefetch(scan, parent, dir);
 		so->n_prefetch_requests = so->last_prefetch_index = Min(so->prefetch_maximum, so->n_prefetch_blocks);
 		for (int i = 0; i < so->last_prefetch_index; i++)
 			PrefetchBuffer(rel, MAIN_FORKNUM, so->prefetch_blocks[i]);

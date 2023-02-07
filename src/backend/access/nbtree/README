@@ -1054,3 +1054,36 @@ item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
 than key.  Suffix truncation's negative infinity attributes behave in
 the same way.
+
+Notes About Index Scan Prefetch
+-------------------------------
+
+Prefetch can significantly improve speed of OLAP queries.
+To be able to perform prefetch we need to know which pages will
+be access during scan. It is trivial for heap scan and bitmap scan,
+but requires more efforts for index scan. To implement prefetch for
+index scan we need to find out subsequent leave pages. Postgres is linking all
+pages at one level of B-Tree in double linked list. And use this list for
+forward and backward iteration. But this list can not be used for prefetching,
+because to locate next page we need first to load current page.
+So we need to iterate through parents of leave pages.
+Postgres nbtree pages has no reference to parent page.
+Stack is constructed while lookup but is then removed and not used during index traversal.
+So we have to remember parent page and then use its double linked list to locate next parent.
+
+we should prefetch not only leave pages but also next parent page.
+The trick is to correctly calculate moment when it will be needed:
+(when prefetch requests for all children from current parent are already issued)
+and place prefetch request for the next parent effective_io_concurrency
+requests before.
+
+Currently prefetch is implemented only works for non-parallel index-only index scan.
+Index scan will access heap page for each item of leaf page. So it requires different approach:
+prefetching leaf page TIDs rather than leaf pages themselves. Average number of items per page
+is about 100 which is comparable with default value of  effective_io_concurrency.
+
+Parallel index scan is using critical section for obtaining next page by parallel worker.
+Leaf page is loaded in this critical section. And if most of time is spent in loading the page, then
+it efficiently eliminates any concurrency and makes prefetch useless.
+For relatively small tables Postgres will not choose parallel plan in any case.
+For large tables it can be enforced by setting max_parallel_workers_per_gather=0.
