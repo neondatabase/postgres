@@ -2409,6 +2409,7 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 	page = BufferGetPage(buf);
 	TestForOldSnapshot(snapshot, rel, page);
 	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	blkno = BufferGetBlockNumber(buf);
 
 	for (;;)
 	{
@@ -2447,7 +2448,7 @@ _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
 			offnum = P_FIRSTDATAKEY(opaque);
 
 		itup = (IndexTuple) PageGetItem(page, PageGetItemId(page, offnum));
-		parent_blocknum = BufferGetBlockNumber(buf);
+		parent_blocknum = blkno;
 		blkno = BTreeTupleGetDownLink(itup);
 
 		buf = _bt_relandgetbuf(rel, buf, blkno, BT_READ);
