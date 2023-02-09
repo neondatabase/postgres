@@ -1068,13 +1068,21 @@ typedef struct BTScanOpaqueData
 	BTScanPosData currPos;		/* current position data */
 	BTScanPosData markPos;		/* marked position, if any */
 
-	/* prefetch state: we try to prefetch subsequent leaf pages of B-Tree for index-only scan. */
+	/* Neon: prefetch state */
+	int         prefetch_maximum; /* maximal number of prefetch requests */
+
+	/* Prefetch of leave pages of B-Tree for index-only scan */
 	BlockNumber prefetch_blocks[MaxTIDsPerBTreePage + 1]; /* leaves + parent page */
 	BlockNumber next_parent; /* pointer to next parent page */
 	int         n_prefetch_requests; /* number of active prefetch requests */
 	int         n_prefetch_blocks; /* number of elements in prefetch_blocks */
 	int         last_prefetch_index; /* current position in prefetch_blocks (prefetch_blocks[0..last_prefetch_index] are already requested */
-	int         prefetch_maximum; /* maximal number of prefetch requests */
+
+	/* Prefech of referenced heap pages for index scan */
+	/* To minimize waste prefetch requests we start with prefetch distance 1
+	 * and increase it until it reaches prefetch_maximum
+	 */
+	int         current_prefetch_distance;
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;

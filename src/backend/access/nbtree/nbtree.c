@@ -360,11 +360,6 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	else
 		so->keyData = NULL;
 
-	/* intialize prefetch */
-	so->n_prefetch_blocks = 0;
-	so->last_prefetch_index = 0;
-	so->next_parent = P_NONE;
-
 	so->arrayKeyData = NULL;	/* assume no array keys for now */
 	so->numArrayKeys = 0;
 	so->arrayKeys = NULL;
