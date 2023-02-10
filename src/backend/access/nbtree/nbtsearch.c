@@ -1180,14 +1180,13 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	{
 		if (enable_indexonlyscan_prefetch)
 		{
-			/* We do prefetch of leave pages for index only scan only if:
-			 * - no boundaries are specified, so it is index-only scan through whole relation
-			 * - parallel plan is not used
+			/* We disable prefetch for parallel index-only scan.
 			 * Neon prefetch is efficient only if prefetched blocks are accessed by the same worker
 			 * which issued prefetch request. The logic of splitting pages between parallel workers in
 			 * index scan doesn't allow to satisfy this requirement.
+			 * Also prefetch of leave pages will be useless if expected number of rows fits in one page.
 			 */
-			if (keysCount != 0 || scan->parallel_scan)
+			if (scan->parallel_scan || scan->rows_estimation <= MaxTIDsPerBTreePage)
 				so->prefetch_maximum = 0;  /* disable prefetch */
 		}
 		else

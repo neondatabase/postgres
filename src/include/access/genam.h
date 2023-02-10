@@ -137,6 +137,11 @@ typedef struct IndexOrderByDistance
  */
 #define IndexScanIsValid(scan) PointerIsValid(scan)
 
+/*
+ * Estimation for number of rows returned by index scan
+ */
+extern double indexscan_rows_estimation;
+
 extern Relation index_open(Oid relationId, LOCKMODE lockmode);
 extern void index_close(Relation relation, LOCKMODE lockmode);
 

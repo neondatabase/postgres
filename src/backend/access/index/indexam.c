@@ -104,6 +104,14 @@ do { \
 			 CppAsString(pname), RelationGetRelationName(scan->indexRelation)); \
 } while(0)
 
+
+/*
+ * Neon: this variable is used to propagate estimation of number of produced rows from palnner to AM.
+ * It seems to be more orrect to add it index_beginscan method, but it requires changing of AM API,
+ * which make brake compatibility with many extensions.
+ */
+double indexscan_rows_estimation;
+
 static IndexScanDesc index_beginscan_internal(Relation indexRelation,
 											  int nkeys, int norderbys, Snapshot snapshot,
 											  ParallelIndexScanDesc pscan, bool temp_snap);
@@ -277,6 +285,7 @@ index_beginscan_internal(Relation indexRelation,
 	/* Initialize information for parallel scan. */
 	scan->parallel_scan = pscan;
 	scan->xs_temp_snap = temp_snap;
+	scan->rows_estimation = indexscan_rows_estimation;
 
 	return scan;
 }
