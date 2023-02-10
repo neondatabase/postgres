@@ -1498,11 +1498,13 @@ OffloadTempFiles(File pinned)
 		Vfd* victim;
 		char* buf;
 
+		temporary_files_size = 0; /* recalculate temporary_file_size to have up-to-date value at parallel worker */
 		for (File i = 0; i < SizeVfdCache; i++)
 		{
-			if (i != pinned && (VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			if ((VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
 			{
-				if (VfdCache[i].fileSize > maxFileSize)
+				temporary_files_size += VfdCache[i].fileSize;
+				if (i != pinned && VfdCache[i].fileSize > maxFileSize)
 				{
 					maxFileSize = VfdCache[i].fileSize;
 					maxFile = i;
@@ -1536,9 +1538,10 @@ OffloadTempFiles(File pinned)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, maxFile, buf, victim->fileSize);
+			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | maxFile, buf, victim->fileSize);
 			free(buf);
 		}
+		FileTruncate(maxFile, 0, WAIT_EVENT_DATA_FILE_TRUNCATE);
 		LruDelete(maxFile); /* close this file descriptor */
 		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
@@ -1565,7 +1568,7 @@ FileAccess(File file)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory")));
-		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, file, buf, vfdP->fileSize);
+		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, ((uint64)MyBackendId << 32) | file, buf, vfdP->fileSize);
 
 
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
@@ -2093,7 +2096,7 @@ FileClose(File file)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, file, NULL, 0);
+			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, ((uint64)MyBackendId << 32) | file, NULL, 0);
 		}
 	}
 
