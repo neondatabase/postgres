@@ -122,7 +122,7 @@ typedef struct f_smgr
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
-	void		(*smgr_fcntl)(SMgrRelation reln, int cmd, int arg, void* data, size_t size);
+	void		(*smgr_fcntl)(SMgrRelation reln, int cmd, uint64 arg, void* data, size_t size);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -173,7 +173,7 @@ extern void AtEOXact_SMgr(void);
 extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
-extern void smgr_fcntl(SMgrRelation reln, int cmd, int arg, void* data, size_t size);
+extern void smgr_fcntl(SMgrRelation reln, int cmd, uint64 arg, void* data, size_t size);
 
 #define SMGR_FCNTL_READ_TEMP_FILE      2
 #define SMGR_FCNTL_WRITE_TEMP_FILE     3

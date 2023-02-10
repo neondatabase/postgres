@@ -1464,7 +1464,7 @@ OffloadTempFiles(File pinned)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, maxFile, buf, victim->fileSize);
+			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | maxFile, buf, victim->fileSize);
 			free(buf);
 		}
 		FileTruncate(maxFile, 0, WAIT_EVENT_DATA_FILE_TRUNCATE);
@@ -1494,7 +1494,7 @@ FileAccess(File file)
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory")));
-		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, file, buf, vfdP->fileSize);
+		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, ((uint64)MyBackendId << 32) | file, buf, vfdP->fileSize);
 
 
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
@@ -2016,7 +2016,7 @@ FileClose(File file)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, file, NULL, 0);
+			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, ((uint64)MyBackendId << 32) | file, NULL, 0);
 		}
 	}
 
