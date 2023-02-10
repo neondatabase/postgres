@@ -844,6 +844,70 @@ _bt_compare(Relation rel,
 	return 0;
 }
 
+
+/*
+ * _bt_read_parent_for_prefetch - read parent page and extract references to children for prefetch.
+ * This functions returns offset of first item.
+ */
+static int
+_bt_read_parent_for_prefetch(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
+{
+	Relation rel = scan->indexRelation;
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	Buffer		buf;
+	Page		page;
+	BTPageOpaque opaque;
+	OffsetNumber offnum;
+	OffsetNumber n_child;
+	int          next_parent_prefetch_index;
+	int          i, j;
+
+	buf = _bt_getbuf(rel, parent, BT_READ);
+	page = BufferGetPage(buf);
+	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+	offnum = P_FIRSTDATAKEY(opaque);
+	n_child = PageGetMaxOffsetNumber(page) - offnum + 1;
+
+	/* Position where we should insert prefetch of parent page: we intentionally use prefetch_maximum here instead of current_prefetch_distance,
+	 * assuming that it will reach prefetch_maximum before we reach and of the parent page
+	 */
+	next_parent_prefetch_index = (n_child > so->prefetch_maximum)
+		? n_child - so->prefetch_maximum : 0;
+
+	if (ScanDirectionIsForward(dir))
+	{
+		so->next_parent = opaque->btpo_next;
+		if (so->next_parent == P_NONE)
+			next_parent_prefetch_index = -1;
+		for (i = 0, j = 0; i < n_child; i++)
+		{
+			ItemId itemid = PageGetItemId(page, offnum + i);
+			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
+			if (i == next_parent_prefetch_index)
+				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
+ 			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
+		}
+	}
+	else
+	{
+		so->next_parent = opaque->btpo_prev;
+		if (so->next_parent == P_NONE)
+			next_parent_prefetch_index = -1;
+		for (i = 0, j = 0; i < n_child; i++)
+		{
+			ItemId itemid = PageGetItemId(page, offnum + n_child - i - 1);
+			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
+			if (i == next_parent_prefetch_index)
+				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
+			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
+		}
+	}
+	so->n_prefetch_blocks = j;
+	so->last_prefetch_index = 0;
+	_bt_relbuf(rel, buf);
+	return offnum;
+}
+
 /*
  *	_bt_first() -- Find the first item in a scan.
  *
@@ -1108,7 +1172,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	so->n_prefetch_blocks = 0;
 	so->last_prefetch_index = 0;
 	so->next_parent = P_NONE;
-	so->current_prefetch_distance = 0;
 	so->prefetch_maximum = IsCatalogRelation(rel)
 		? effective_io_concurrency
 		: get_tablespace_io_concurrency(rel->rd_rel->reltablespace);
@@ -1132,6 +1195,9 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	}
 	else if (!enable_indexscan_prefetch || !scan->heapRelation)
 		so->prefetch_maximum = 0; /* disable prefetch */
+
+	/* If key bounds are not speified, then we will scan the whole relation and it make sense to start with the lastest possible prefetch distance */
+	so->current_prefetch_distance = (keysCount == 0) ? so->prefetch_maximum : 0;
 
 	/*
 	 * If we found no usable boundary keys, we have to start from one end of
@@ -1402,6 +1468,21 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 * position ourselves on the target leaf page.
 	 */
 	stack = _bt_search(rel, &inskey, &buf, BT_READ, scan->xs_snapshot);
+
+	/* Start prefetching for index onny scan */
+	if (so->prefetch_maximum > 0 && stack != NULL && scan->xs_want_itup) /* index only scan */
+	{
+		int first_offset = _bt_read_parent_for_prefetch(scan, stack->bts_blkno, dir);
+		int skip = ScanDirectionIsForward(dir)
+			? stack->bts_offset - first_offset
+			: first_offset + so->n_prefetch_blocks - 1 - stack->bts_offset;
+		Assert(so->n_prefetch_blocks >= skip);
+		so->current_prefetch_distance = INCREASE_PREFETCH_DISTANCE_STEP;
+		so->n_prefetch_requests = Min(so->current_prefetch_distance, so->n_prefetch_blocks - skip);
+		so->last_prefetch_index = skip + so->n_prefetch_requests;
+		for (int i = skip; i < so->last_prefetch_index; i++)
+			PrefetchBuffer(rel, MAIN_FORKNUM, so->prefetch_blocks[i]);
+	}
 
 	/* don't need to keep the stack around... */
 	_bt_freestack(stack);
@@ -1968,64 +2049,6 @@ _bt_savepostingitem(BTScanOpaque so, int itemIndex, OffsetNumber offnum,
 }
 
 /*
- * _bt_read_parent_for_prefetch - read parent page and extract references to children for prefetch
- */
-static void
-_bt_read_parent_for_prefetch(IndexScanDesc scan, BlockNumber parent, ScanDirection dir)
-{
-	Relation rel = scan->indexRelation;
-	BTScanOpaque so = (BTScanOpaque) scan->opaque;
-	Buffer		buf;
-	Page		page;
-	BTPageOpaque opaque;
-	OffsetNumber offnum;
-	OffsetNumber n_child;
-	int          next_parent_prefetch_index;
-	int          i, j;
-
-	buf = _bt_getbuf(rel, parent, BT_READ);
-	page = BufferGetPage(buf);
-	opaque = (BTPageOpaque) PageGetSpecialPointer(page);
-	offnum = P_FIRSTDATAKEY(opaque);
-	n_child = PageGetMaxOffsetNumber(page) - offnum + 1;
-	next_parent_prefetch_index = (n_child > so->prefetch_maximum)
-		? n_child - so->prefetch_maximum : 0;
-
-	if (ScanDirectionIsForward(dir))
-	{
-		so->next_parent = opaque->btpo_next;
-		if (so->next_parent == P_NONE)
-			next_parent_prefetch_index = -1;
-		for (i = 0, j = 0; i < n_child; i++)
-		{
-			ItemId itemid = PageGetItemId(page, offnum + i);
-			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
-			if (i == next_parent_prefetch_index)
-				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
- 			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
-		}
-	}
-	else
-	{
-		so->next_parent = opaque->btpo_prev;
-		if (so->next_parent == P_NONE)
-			next_parent_prefetch_index = -1;
-		for (i = 0, j = 0; i < n_child; i++)
-		{
-			ItemId itemid = PageGetItemId(page, offnum + n_child - i - 1);
-			IndexTuple itup = (IndexTuple) PageGetItem(page, itemid);
-			if (i == next_parent_prefetch_index)
-				so->prefetch_blocks[j++] = so->next_parent; /* time to prefetch next parent page */
-			so->prefetch_blocks[j++] = BTreeTupleGetDownLink(itup);
-		}
-	}
-	so->n_prefetch_blocks = j;
-	so->last_prefetch_index = 0;
-	_bt_relbuf(rel, buf);
-}
-
-
-/*
  *	_bt_steppage() -- Step to next page containing valid data for scan
  *
  * On entry, if so->currPos.buf is valid the buffer is pinned but not locked;
@@ -2070,14 +2093,22 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 
 	if (scan->xs_want_itup) /* Prefetching of leave pages for index-only scan */
 	{
-		so->n_prefetch_requests -= 1;
+		/* Advance pefetch distance until it reaches prefetch_maximum */
+		if (so->current_prefetch_distance + INCREASE_PREFETCH_DISTANCE_STEP <= so->prefetch_maximum)
+			so->current_prefetch_distance += INCREASE_PREFETCH_DISTANCE_STEP;
+
+		so->n_prefetch_requests -= 1; /* we load next leaf page, so decrement number of active prefetch requests */
+
+		/* Check if the are more children to prefetch at current parent  page */
 		if (so->last_prefetch_index == so->n_prefetch_blocks && so->next_parent != P_NONE)
 		{
 			/* we have prefetched all items from current parent page, let's move to the next parent page */
 			_bt_read_parent_for_prefetch(scan, so->next_parent, dir);
-			so->n_prefetch_requests -= 1;
+			so->n_prefetch_requests -= 1; /* loading parent page consumes one more prefetch request */
 		}
-		while (so->n_prefetch_requests < so->prefetch_maximum && so->last_prefetch_index < so->n_prefetch_blocks)
+
+		/* Try to keep number of active prefetch requests equal to current prefetch distance */
+		while (so->n_prefetch_requests < so->current_prefetch_distance && so->last_prefetch_index < so->n_prefetch_blocks)
 		{
 			so->n_prefetch_requests += 1;
 			PrefetchBuffer(scan->indexRelation, MAIN_FORKNUM, so->prefetch_blocks[so->last_prefetch_index++]);
@@ -2605,9 +2636,9 @@ _bt_endpoint(IndexScanDesc scan, ScanDirection dir)
 		return false;
 	}
 
+	/* Start prefetching for index-only scan */
 	if (so->prefetch_maximum > 0 && parent != P_NONE && scan->xs_want_itup) /* index only scan */
 	{
-		/* Start prefetching of leave pagea for index-only scan */
 		_bt_read_parent_for_prefetch(scan, parent, dir);
 		so->n_prefetch_requests = so->last_prefetch_index = Min(so->prefetch_maximum, so->n_prefetch_blocks);
 		for (int i = 0; i < so->last_prefetch_index; i++)
