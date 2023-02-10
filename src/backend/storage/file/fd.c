@@ -1424,11 +1424,13 @@ OffloadTempFiles(File pinned)
 		Vfd* victim;
 		char* buf;
 
+		temporary_files_size = 0; /* recalculate temporary_file_size to have up-to-date value at parallel worker */
 		for (File i = 0; i < SizeVfdCache; i++)
 		{
-			if (i != pinned && (VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			if ((VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
 			{
-				if (VfdCache[i].fileSize > maxFileSize)
+				temporary_files_size += VfdCache[i].fileSize;
+				if (i != pinned && VfdCache[i].fileSize > maxFileSize)
 				{
 					maxFileSize = VfdCache[i].fileSize;
 					maxFile = i;
@@ -1465,6 +1467,7 @@ OffloadTempFiles(File pinned)
 			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, maxFile, buf, victim->fileSize);
 			free(buf);
 		}
+		FileTruncate(maxFile, 0, WAIT_EVENT_DATA_FILE_TRUNCATE);
 		LruDelete(maxFile); /* close this file descriptor */
 		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
