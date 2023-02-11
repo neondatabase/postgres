@@ -1465,7 +1465,7 @@ OffloadTempFiles(File pinned)
 			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | maxFile, buf, victim->fileSize);
 			free(buf);
 		}
-		FileTruncate(maxFile, 0, WAIT_EVENT_DATA_FILE_TRUNCATE);
+		ftruncate(VfdCache[maxFile].fd, 0);
 		LruDelete(maxFile); /* close this file descriptor */
 		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
