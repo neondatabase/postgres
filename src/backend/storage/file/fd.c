@@ -189,7 +189,7 @@ int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
-#define FD_TEMP_FILE_OFFLOADED (1 << 4)	/* T = offloaded to pageserver */
+#define FD_TEMP_FILE_OFFLOADED (1 << 3)	/* T = offloaded to pageserver */
 
 typedef struct vfd
 {
@@ -1482,37 +1482,6 @@ FileAccess(File file)
 	DO_DB(elog(LOG, "FileAccess %d (%s)",
 			   file, vfdP->fileName));
 
-	/* NEON: download offloaded file */
-	if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
-	{
-		RelFileNode dummy_rnode = {0, 0, 0};
-		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-		char* buf = malloc(vfdP->fileSize);
-		if (buf == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, ((uint64)MyBackendId << 32) | file, buf, vfdP->fileSize);
-
-
-		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
-		{
-			free(buf);
-			ereport(ERROR,
-					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
-					 errmsg("Failed to write offloaded file %s: %m",
-							vfdP->fileName)));
-		}
-		free(buf);
-		temporary_files_size += vfdP->fileSize;
-		OffloadTempFiles(file);
-		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
-	}
-	/*
-	 * Is the file open?  If not, open it and put it at the head of the LRU
-	 * ring (possibly closing the least recently used file to get an FD).
-	 */
-
 	if (FileIsNotOpen(file))
 	{
 		returnValue = LruInsert(file);
@@ -1530,6 +1499,32 @@ FileAccess(File file)
 		Insert(file);
 	}
 
+	/* NEON: download offloaded file */
+	if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
+	{
+		RelFileNode dummy_rnode = {0, 0, 0};
+		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+		char* buf = malloc(vfdP->fileSize);
+		if (buf == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, ((uint64)MyBackendId << 32) | file, buf, vfdP->fileSize);
+
+
+		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
+		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
+		{
+			free(buf);
+			ereport(ERROR,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("Failed to write offloaded file %s: %m",
+							vfdP->fileName)));
+		}
+		free(buf);
+		temporary_files_size += vfdP->fileSize;
+		OffloadTempFiles(file);
+	}
 	return 0;
 }
 
