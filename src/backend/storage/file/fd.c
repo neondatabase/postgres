@@ -1424,12 +1424,10 @@ OffloadTempFiles(File pinned)
 		Vfd* victim;
 		char* buf;
 
-		temporary_files_size = 0; /* recalculate temporary_file_size to have up-to-date value at parallel worker */
 		for (File i = 0; i < SizeVfdCache; i++)
 		{
 			if ((VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
 			{
-				temporary_files_size += VfdCache[i].fileSize;
 				if (i != pinned && VfdCache[i].fileSize > maxFileSize)
 				{
 					maxFileSize = VfdCache[i].fileSize;
@@ -2223,7 +2221,7 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 		if (past_write > vfdP->fileSize)
 		{
 			temporary_files_size += past_write - vfdP->fileSize;
-
+			vfdP->fileSize = past_write;
 			/* NEON: instead of throwing error, swap-out them to page server.*/
 			OffloadTempFiles(file);
 		}
