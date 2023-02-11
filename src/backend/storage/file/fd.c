@@ -213,6 +213,7 @@ typedef struct vfd
  */
 static Vfd *VfdCache;
 static Size SizeVfdCache = 0;
+static int  LastOffloadedFile = 0;
 
 /*
  * Number of file descriptors known to be in use by VFD entries.
@@ -1418,31 +1419,29 @@ OffloadTempFiles(File pinned)
 {
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
-		off_t maxFileSize = 0;
-		File maxFile = -1;
-
+		File victimFile = 0;
 		Vfd* victim;
 		char* buf;
 
 		for (File i = 0; i < SizeVfdCache; i++)
 		{
-			if ((VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			int j = LastOffloadedFile + i + 1;
+			if (j >= SizeVfdCache)
+				j -= SizeVfdCache;
+			if (j != pinned && (VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
 			{
-				if (i != pinned && VfdCache[i].fileSize > maxFileSize)
-				{
-					maxFileSize = VfdCache[i].fileSize;
-					maxFile = i;
-				}
+				victimFile = j;
+				break;
 			}
 		}
-		if (maxFile < 0)
+		if (victimFile == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("temporary file size exceeds temp_file_limit (%dkB)",
 							temp_file_limit)));
 
 		/* Offload file to pageserver */
-		victim = &VfdCache[maxFile];
+		victim = &VfdCache[victimFile];
 
 		buf = malloc(victim->fileSize);
 		if (buf == NULL)
@@ -1450,7 +1449,7 @@ OffloadTempFiles(File pinned)
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("out of memory")));
 
-		if (FileRead(maxFile, buf, victim->fileSize, 0, WAIT_EVENT_DATA_FILE_READ) != victim->fileSize)
+		if (FileRead(victimFile, buf, victim->fileSize, 0, WAIT_EVENT_DATA_FILE_READ) != victim->fileSize)
 		{
 			free(buf);
 			ereport(ERROR,
@@ -1462,13 +1461,14 @@ OffloadTempFiles(File pinned)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | maxFile, buf, victim->fileSize);
+			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | victimFile, buf, victim->fileSize);
 			free(buf);
 		}
-		ftruncate(VfdCache[maxFile].fd, 0);
-		LruDelete(maxFile); /* close this file descriptor */
+		ftruncate(VfdCache[victimFile].fd, 0);
+		LruDelete(victimFile); /* close this file descriptor */
 		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+		LastOffloadedFile = victimFile;
 	}
 }
 
@@ -2303,6 +2303,9 @@ FileSize(File file)
 
 	DO_DB(elog(LOG, "FileSize %d (%s)",
 			   file, VfdCache[file].fileName));
+
+	if (VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT)
+		return VfdCache[file].fileSize;
 
 	if (FileIsNotOpen(file))
 	{
