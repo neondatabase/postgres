@@ -578,7 +578,7 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 /*
  *	mdfcntl() -- SMGR specific operation
  */
-void
+int
 mdfcntl(SMgrRelation reln, int cmd, void* data, size_t size)
 {
 }

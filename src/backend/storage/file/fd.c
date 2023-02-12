@@ -1514,17 +1514,18 @@ FileAccess(File file)
 		char* buf = (char*)palloc(Max(vfdP->fileSize, len + 1));
 		buf[0] = (char)len;
 		memcpy(buf + 1, file_name, len);
-		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, buf, len + 1);
-
+		returnValue = smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, buf, len + 1);
+		if (returnValue !=  vfdP->fileSize)
+			ereport(ERROR,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("Receive %d bytes of offloaded file %s instead of %d expected: %m",
+							returnValue, vfdP->fileName, (int)vfdP->fileSize)));
 		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
-		{
-			pfree(buf);
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("Failed to write offloaded file %s: %m",
 							vfdP->fileName)));
-		}
 		pfree(buf);
 		temporary_files_size += vfdP->fileSize;
 		OffloadTempFiles(file);
@@ -1765,11 +1766,7 @@ OpenTemporaryFile(bool interXact)
 
 	/* Mark it for deletion at close and temporary file size limit */
 	VfdCache[file].fdstate |= FD_DELETE_AT_CLOSE | FD_TEMP_FILE_LIMIT;
-
-	VfdCache[file].fileSize = lseek(VfdCache[file].fd, 0, SEEK_SET);
-	if (VfdCache[file].fileSize < 0)
-		elog(ERROR, "could get temporary file size \"%s\": %m",
-			 VfdCache[file].fileName);
+	VfdCache[file].fileSize = 0;
 
 	/* Register it with the current resource owner */
 	if (!interXact)
@@ -1964,7 +1961,8 @@ static void UnlinkOffloadedFile(char const* file_path)
 	buf[0] = (char)len;
 	memcpy(buf + 1, file_name, len);
 	rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-	smgr_fcntl(rel, SMGR_FCNTL_UNLINK_TEMP_FILE, buf, len + 1);
+	if (smgr_fcntl(rel, SMGR_FCNTL_UNLINK_TEMP_FILE, buf, len + 1) < 0)
+		elog(ERROR, "Failed to send unlink temp file request to pageserver");
 	pfree(buf);
 }
 
