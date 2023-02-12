@@ -215,6 +215,7 @@ typedef struct vfd
  */
 static Vfd *VfdCache;
 static Size SizeVfdCache = 0;
+static int  LastOffloadedFile = 0;
 
 /*
  * Number of file descriptors known to be in use by VFD entries.
@@ -1492,41 +1493,39 @@ OffloadTempFiles(File pinned)
 {
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
-		off_t maxFileSize = 0;
-		File maxFile = -1;
-
+		File victimFile = 0;
 		Vfd* victim;
 		char* buf;
+		char const* file_name;
+		size_t len;
 
 		for (File i = 0; i < SizeVfdCache; i++)
 		{
-			if ((VfdCache[i].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			int j = LastOffloadedFile + i + 1;
+			if (j >= SizeVfdCache)
+				j -= SizeVfdCache;
+			if (j != pinned && (VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
 			{
-				if (i != pinned && VfdCache[i].fileSize > maxFileSize)
-				{
-					maxFileSize = VfdCache[i].fileSize;
-					maxFile = i;
-				}
+				victimFile = j;
+				break;
 			}
 		}
-		if (maxFile < 0)
+		if (victimFile == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("temporary file size exceeds temp_file_limit (%dkB)",
 							temp_file_limit)));
 
 		/* Offload file to pageserver */
-		victim = &VfdCache[maxFile];
-
-		buf = malloc(victim->fileSize);
-		if (buf == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-
-		if (FileRead(maxFile, buf, victim->fileSize, 0, WAIT_EVENT_DATA_FILE_READ) != victim->fileSize)
+		victim = &VfdCache[victimFile];
+		file_name = strchr(victim->fileName, '/') + 1;
+		len = strlen(file_name);
+		buf = palloc(len + 1 + victim->fileSize);
+		buf[0] = (char)len;
+		memcpy(buf+1, file_name, len);
+		if (FileRead(victimFile, buf + len + 1, victim->fileSize, 0, WAIT_EVENT_DATA_FILE_READ) != victim->fileSize)
 		{
-			free(buf);
+			pfree(buf);
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("Failed to read temp file %s: %m",
@@ -1536,13 +1535,19 @@ OffloadTempFiles(File pinned)
 		{
 			RelFileNode dummy_rnode = {0, 0, 0};
 			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, ((uint64)MyBackendId << 32) | maxFile, buf, victim->fileSize);
-			free(buf);
+			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, buf, len + 1 + victim->fileSize);
+			pfree(buf);
 		}
-		ftruncate(VfdCache[maxFile].fd, 0);
-		LruDelete(maxFile); /* close this file descriptor */
+		if (ftruncate(VfdCache[victimFile].fd, 0) < 0)
+			ereport(WARNING,
+					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
+					 errmsg("Failed to truncate temp file %s: %m",
+							victim->fileName)));
+
+		LruDelete(victimFile); /* close this file descriptor */
 		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+		LastOffloadedFile = victimFile;
 	}
 }
 
@@ -1578,24 +1583,23 @@ FileAccess(File file)
 	{
 		RelFileNode dummy_rnode = {0, 0, 0};
 		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-		char* buf = malloc(vfdP->fileSize);
-		if (buf == NULL)
-			ereport(ERROR,
-					(errcode(ERRCODE_OUT_OF_MEMORY),
-					 errmsg("out of memory")));
-		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, ((uint64)MyBackendId << 32) | file, buf, vfdP->fileSize);
-
+		char const* file_name = strchr(vfdP->fileName, '/') + 1;
+		size_t len = strlen(file_name);
+		char* buf = (char*)palloc(Max(vfdP->fileSize, len + 1));
+		buf[0] = (char)len;
+		memcpy(buf + 1, file_name, len);
+		smgr_fcntl(rel, SMGR_FCNTL_READ_TEMP_FILE, buf, len + 1);
 
 		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
 		{
-			free(buf);
+			pfree(buf);
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("Failed to write offloaded file %s: %m",
 							vfdP->fileName)));
 		}
-		free(buf);
+		pfree(buf);
 		temporary_files_size += vfdP->fileSize;
 		OffloadTempFiles(file);
 	}
@@ -1631,7 +1635,7 @@ RegisterTemporaryFile(File file)
 	VfdCache[file].resowner = CurrentResourceOwner;
 
 	/* Backup mechanism for closing at end of xact. */
-	VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT;
+	VfdCache[file].fdstate |= FD_CLOSE_AT_EOXACT | FD_TEMP_FILE_LIMIT;
 	have_xact_temporary_files = true;
 }
 
@@ -1838,6 +1842,11 @@ OpenTemporaryFile(bool interXact)
 	/* Mark it for deletion at close and temporary file size limit */
 	VfdCache[file].fdstate |= FD_DELETE_AT_CLOSE | FD_TEMP_FILE_LIMIT;
 
+	VfdCache[file].fileSize = lseek(VfdCache[file].fd, 0, SEEK_SET);
+	if (VfdCache[file].fileSize < 0)
+		elog(ERROR, "could get temporary file size \"%s\": %m",
+			 VfdCache[file].fileName);
+
 	/* Register it with the current resource owner */
 	if (!interXact)
 		RegisterTemporaryFile(file);
@@ -1981,7 +1990,33 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 
 	file = PathNameOpenFile(path, mode | PG_BINARY);
 
-	/* If no such file, then we don't raise an error. */
+	if (file <= 0 && errno == ENOENT)
+	{
+		char* offloaded_path = psprintf("%s.offloaded", path);
+		struct stat filestats;
+
+		if (stat(offloaded_path, &filestats) == 0)
+		{
+			unlink(offloaded_path);
+			file = PathNameOpenFile(path, mode | PG_BINARY | O_CREAT | O_TRUNC);
+			if (file > 0)
+			{
+				VfdCache[file].fdstate |= FD_TEMP_FILE_OFFLOADED;
+				VfdCache[file].fileSize = filestats.st_size;
+			}
+		}
+	}
+	else if (file > 0)
+	{
+		VfdCache[file].fileSize = lseek(VfdCache[file].fd, 0, SEEK_SET);
+		if (VfdCache[file].fileSize < 0)
+			elog(ERROR, "could get temporary file size \"%s\": %m",
+				 VfdCache[file].fileName);
+		temporary_files_size += VfdCache[file].fileSize;
+		OffloadTempFiles(file);
+	}
+
+    /* If no such file, then we don't raise an error. */
 	if (file <= 0 && errno != ENOENT)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -1995,6 +2030,22 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 	}
 
 	return file;
+}
+
+
+static void UnlinkOffloadedFile(char const* file_path)
+{
+	RelFileNode dummy_rnode = {0, 0, 0};
+	char const* file_name = strchr(file_path, '/') + 1;
+	size_t len = strlen(file_name);
+	char* buf = palloc(len + 1);
+	SMgrRelation rel;
+
+	buf[0] = (char)len;
+	memcpy(buf + 1, file_name, len);
+	rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
+	smgr_fcntl(rel, SMGR_FCNTL_UNLINK_TEMP_FILE, buf, len + 1);
+	pfree(buf);
 }
 
 /*
@@ -2023,12 +2074,22 @@ PathNameDeleteTemporaryFile(const char *path, bool error_on_failure)
 
 	if (unlink(path) < 0)
 	{
+		char* offloaded_path;
+
 		if (errno != ENOENT)
 			ereport(error_on_failure ? ERROR : LOG,
 					(errcode_for_file_access(),
 					 errmsg("could not unlink temporary file \"%s\": %m",
 							path)));
-		return false;
+
+		offloaded_path = psprintf("%s.offloaded", path);
+		if (unlink(offloaded_path) <= 0)
+		{
+			pfree(offloaded_path);
+			return false;
+		}
+		UnlinkOffloadedFile(path);
+		pfree(offloaded_path);
 	}
 
 	if (stat_errno == 0)
@@ -2081,16 +2142,30 @@ FileClose(File file)
 
 	if (vfdP->fdstate & FD_TEMP_FILE_LIMIT)
 	{
-		/* Subtract its size from current usage (do first in case of error) */
+		if ((vfdP->fdstate & (FD_TEMP_FILE_OFFLOADED | FD_DELETE_AT_CLOSE)) == FD_TEMP_FILE_OFFLOADED)
+		{
+			int fd;
+			char* offloaded_path = psprintf("%s.offloaded", vfdP->fileName);
+
+			unlink(vfdP->fileName);
+			fd = BasicOpenFile(offloaded_path, vfdP->fileFlags | O_CREAT | O_TRUNC);
+			if (fd < 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not open file \"%s\": %m",
+								offloaded_path)));
+			/* We need to remember offloaded files size: assume FS support sparse files and will not actually allocate all requested space */
+			if (ftruncate(fd, vfdP->fileSize) != 0)
+				ereport(ERROR,
+						(errcode_for_file_access(),
+						 errmsg("could not truncate file \"%s\": %m",
+								offloaded_path)));
+			close(fd);
+			pfree(offloaded_path);
+		}
+        /* Subtract its size from current usage (do first in case of error) */
 		temporary_files_size -= vfdP->fileSize;
 		vfdP->fileSize = 0;
-
-		if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
-		{
-			RelFileNode dummy_rnode = {0, 0, 0};
-			SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-			smgr_fcntl(rel, SMGR_FCNTL_CLOSE_TEMP_FILE, ((uint64)MyBackendId << 32) | file, NULL, 0);
-		}
 	}
 
 	/*
@@ -2116,6 +2191,10 @@ FileClose(File file)
 			stat_errno = errno;
 		else
 			stat_errno = 0;
+
+
+		if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
+			UnlinkOffloadedFile(vfdP->fileName);
 
 		/* in any case do the unlink */
 		if (unlink(vfdP->fileName))
@@ -2383,6 +2462,9 @@ FileSize(File file)
 
 	DO_DB(elog(LOG, "FileSize %d (%s)",
 			   file, VfdCache[file].fileName));
+
+	if (VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT)
+		return VfdCache[file].fileSize;
 
 	if (FileIsNotOpen(file))
 	{
