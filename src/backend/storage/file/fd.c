@@ -2068,26 +2068,40 @@ PathNameDeleteTemporaryFile(const char *path, bool error_on_failure)
 	 * many segments it has to delete until it runs out.
 	 */
 	if (stat_errno == ENOENT)
-		return false;
-
-	if (unlink(path) < 0)
 	{
 		char* offloaded_path;
-
-		if (errno != ENOENT)
-			ereport(error_on_failure ? ERROR : LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not unlink temporary file \"%s\": %m",
-							path)));
-
 		offloaded_path = psprintf("%s.offloaded", path);
-		if (unlink(offloaded_path) <= 0)
+
+		if (stat(offloaded_path, &filestats) != 0)
 		{
 			pfree(offloaded_path);
 			return false;
 		}
+		if (unlink(offloaded_path) <= 0)
+		{
+			pfree(offloaded_path);
+			ereport(error_on_failure ? ERROR : LOG,
+					(errcode_for_file_access(),
+					 errmsg("could not unlink temporary file \"%s\": %m",
+							path)));
+			return false;
+		}
 		UnlinkOffloadedFile(path);
 		pfree(offloaded_path);
+		stat_errno = 0;
+	}
+	else
+	{
+		if (unlink(path) < 0)
+		{
+			if (errno != ENOENT)
+			{
+				ereport(error_on_failure ? ERROR : LOG,
+						(errcode_for_file_access(),
+						 errmsg("could not unlink temporary file \"%s\": %m",
+								path)));
+			}
+		}
 	}
 
 	if (stat_errno == 0)
