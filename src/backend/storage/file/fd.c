@@ -1408,6 +1408,13 @@ FreeVfd(File file)
 	VfdCache[0].nextFree = file;
 }
 
+static char const* GetFileName(char const* path)
+{
+	char const* sep = strrchr(path, '/');
+	Assert(sep != NULL);
+	return sep + 1;
+}
+
 /* NEON: Offload largerst temp file to pageserver.
  * In principle, it is not mandatory to locate largest one. We expect that largest number of temp files
  * is reated by external sort and we can swap any completely filled file (which size is 1Gb).
@@ -1444,7 +1451,7 @@ OffloadTempFiles(File pinned)
 
 		/* Offload file to pageserver */
 		victim = &VfdCache[victimFile];
-		file_name = strchr(victim->fileName, '/') + 1;
+		file_name = GetFileName(victim->fileName);
 		len = strlen(file_name);
 		buf = palloc(len + 1 + victim->fileSize);
 		buf[0] = (char)len;
@@ -1509,7 +1516,7 @@ FileAccess(File file)
 	{
 		RelFileNode dummy_rnode = {0, 0, 0};
 		SMgrRelation rel = smgropen(dummy_rnode, InvalidBackendId, 'p');
-		char const* file_name = strchr(vfdP->fileName, '/') + 1;
+		char const* file_name = GetFileName(vfdP->fileName);
 		size_t len = strlen(file_name);
 		char* buf = (char*)palloc(Max(vfdP->fileSize, len + 1));
 		buf[0] = (char)len;
@@ -1925,7 +1932,7 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 	}
 	else if (file > 0)
 	{
-		VfdCache[file].fileSize = lseek(VfdCache[file].fd, 0, SEEK_SET);
+		VfdCache[file].fileSize = lseek(VfdCache[file].fd, 0, SEEK_END);
 		if (VfdCache[file].fileSize < 0)
 			elog(ERROR, "could get temporary file size \"%s\": %m",
 				 VfdCache[file].fileName);
@@ -1953,7 +1960,7 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 static void UnlinkOffloadedFile(char const* file_path)
 {
 	RelFileNode dummy_rnode = {0, 0, 0};
-	char const* file_name = strchr(file_path, '/') + 1;
+	char const* file_name = GetFileName(file_path);
 	size_t len = strlen(file_name);
 	char* buf = palloc(len + 1);
 	SMgrRelation rel;
