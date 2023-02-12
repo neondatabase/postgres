@@ -581,6 +581,7 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 int
 mdfcntl(SMgrRelation reln, int cmd, void* data, size_t size)
 {
+	return 0;
 }
 
 /*
