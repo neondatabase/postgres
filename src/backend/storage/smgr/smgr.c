@@ -535,10 +535,10 @@ smgrprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 /*
  *	smgr_fcntl() -- Perform storage manager specific call
  */
-void
+int
 smgr_fcntl(SMgrRelation reln, int cmd, void* data, size_t size)
 {
-	(*reln->smgr).smgr_fcntl(reln, cmd, data, size);
+	return (*reln->smgr).smgr_fcntl(reln, cmd, data, size);
 }
 
 /*
