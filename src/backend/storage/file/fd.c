@@ -189,7 +189,8 @@ int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
-#define FD_TEMP_FILE_OFFLOADED (1 << 3)	/* T = offloaded to pageserver */
+#define FD_TEMP_FILE_PINNED (1 << 3)	/* T = file pinned from been offloaded */
+#define FD_TEMP_FILE_OFFLOADED (1 << 4)	/* T = offloaded to pageserver */
 
 typedef struct vfd
 {
@@ -1422,7 +1423,7 @@ static char const* GetFileName(char const* path)
  * Attempt to implement some kind of LRU here seems to be useless, because sort is using files as streams.
  */
 static void
-OffloadTempFiles(File pinned)
+OffloadTempFiles(void)
 {
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
@@ -1437,7 +1438,7 @@ OffloadTempFiles(File pinned)
 			int j = LastOffloadedFile + i + 1;
 			if (j >= SizeVfdCache)
 				j -= SizeVfdCache;
-			if (j != pinned && (VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			if ((VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED | FD_TEMP_FILE_PINNED)) == FD_TEMP_FILE_LIMIT)
 			{
 				victimFile = j;
 				break;
@@ -1451,6 +1452,8 @@ OffloadTempFiles(File pinned)
 
 		/* Offload file to pageserver */
 		victim = &VfdCache[victimFile];
+		temporary_files_size -= victim->fileSize;
+		victim->fdstate |= FD_TEMP_FILE_PINNED;
 		file_name = GetFileName(victim->fileName);
 		len = strlen(file_name);
 		buf = palloc(len + 1 + victim->fileSize);
@@ -1478,8 +1481,8 @@ OffloadTempFiles(File pinned)
 							victim->fileName)));
 
 		LruDelete(victimFile); /* close this file descriptor */
-		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
 		LastOffloadedFile = victimFile;
 	}
 }
@@ -1528,6 +1531,7 @@ FileAccess(File file)
 					 errmsg("Receive %d bytes of offloaded file %s instead of %d expected: %m",
 							returnValue, vfdP->fileName, (int)vfdP->fileSize)));
 		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
+		vfdP->fdstate |= FD_TEMP_FILE_PINNED;
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
@@ -1535,7 +1539,8 @@ FileAccess(File file)
 							vfdP->fileName)));
 		pfree(buf);
 		temporary_files_size += vfdP->fileSize;
-		OffloadTempFiles(file);
+		OffloadTempFiles();
+		vfdP->fdstate &= ~FD_TEMP_FILE_PINNED;
 	}
 	return 0;
 }
@@ -1936,8 +1941,10 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 		if (VfdCache[file].fileSize < 0)
 			elog(ERROR, "could get temporary file size \"%s\": %m",
 				 VfdCache[file].fileName);
+		VfdCache[file].fdstate |= FD_TEMP_FILE_PINNED;
 		temporary_files_size += VfdCache[file].fileSize;
-		OffloadTempFiles(file);
+		OffloadTempFiles();
+		VfdCache[file].fdstate &= ~FD_TEMP_FILE_PINNED;
 	}
 
     /* If no such file, then we don't raise an error. */
@@ -2103,7 +2110,8 @@ FileClose(File file)
 			pfree(offloaded_path);
 		}
         /* Subtract its size from current usage (do first in case of error) */
-		temporary_files_size -= vfdP->fileSize;
+		if (!(vfdP->fdstate & FD_TEMP_FILE_OFFLOADED))
+			temporary_files_size -= vfdP->fileSize;
 		vfdP->fileSize = 0;
 	}
 
@@ -2316,7 +2324,9 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 			temporary_files_size += past_write - vfdP->fileSize;
 			vfdP->fileSize = past_write;
 			/* NEON: instead of throwing error, swap-out them to page server.*/
-			OffloadTempFiles(file);
+			vfdP->fdstate |= FD_TEMP_FILE_PINNED;
+			OffloadTempFiles();
+			vfdP->fdstate &= ~FD_TEMP_FILE_PINNED;
 		}
 	}
 
