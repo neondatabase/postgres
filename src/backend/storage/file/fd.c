@@ -1551,16 +1551,23 @@ OffloadTempFiles(File pinned)
 			smgr_fcntl(rel, SMGR_FCNTL_WRITE_TEMP_FILE, buf, len + 1 + victim->fileSize);
 			pfree(buf);
 		}
-		if (ftruncate(VfdCache[victimFile].fd, 0) < 0)
+		LruDelete(victimFile); /* close this file descriptor */
+		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
+		if (victim->fileMode & O_RDONLY)
+		{
+			/* Need spawed out file to be writtable */
+			victim->fileMode &= ~O_RDONLY;
+			victim->fileMode |= O_RDWR;
+		}
+		LastOffloadedFile = victimFile;
+
+		if (truncate(victim->fileName, 0) < 0)
 			ereport(WARNING,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("Failed to truncate temp file %s: %m",
 							victim->fileName)));
 
-		LruDelete(victimFile); /* close this file descriptor */
-		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
-		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
-		LastOffloadedFile = victimFile;
 	}
 	Insert(pinned);
 	VfdCache[pinned].fdstate &= ~FD_TEMP_FILE_PINNED;
@@ -2011,7 +2018,7 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 		if (stat(offloaded_path, &filestats) == 0)
 		{
 			unlink(offloaded_path);
-			file = PathNameOpenFile(path, mode | PG_BINARY | O_CREAT | O_TRUNC);
+			file = PathNameOpenFile(path, (mode & ~O_RDONLY) | PG_BINARY | O_RDWR | O_CREAT | O_TRUNC);
 			if (file > 0)
 			{
 				VfdCache[file].fdstate |= FD_TEMP_FILE_OFFLOADED;
@@ -2176,7 +2183,7 @@ FileClose(File file)
 			char* offloaded_path = psprintf("%s.offloaded", vfdP->fileName);
 
 			unlink(vfdP->fileName);
-			fd = BasicOpenFile(offloaded_path, vfdP->fileFlags | O_CREAT | O_TRUNC);
+			fd = BasicOpenFile(offloaded_path, O_RDWR | O_CREAT | O_TRUNC);
 			if (fd < 0)
 				ereport(ERROR,
 						(errcode_for_file_access(),
