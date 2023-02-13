@@ -1423,8 +1423,11 @@ static char const* GetFileName(char const* path)
  * Attempt to implement some kind of LRU here seems to be useless, because sort is using files as streams.
  */
 static void
-OffloadTempFiles(void)
+OffloadTempFiles(File pinned)
 {
+	VfdCache[pinned].fdstate |= FD_TEMP_FILE_PINNED;
+	Delete(file); /* protect from closing */
+
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
 		File victimFile = 0;
@@ -1485,6 +1488,8 @@ OffloadTempFiles(void)
 		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
 		LastOffloadedFile = victimFile;
 	}
+	Insert(file);
+	VfdCache[pinned].fdstate &= ~FD_TEMP_FILE_PINNED;
 }
 
 /* returns 0 on success, -1 on re-open failure (with errno set) */
@@ -1496,23 +1501,6 @@ FileAccess(File file)
 
 	DO_DB(elog(LOG, "FileAccess %d (%s)",
 			   file, vfdP->fileName));
-
-	if (FileIsNotOpen(file))
-	{
-		returnValue = LruInsert(file);
-		if (returnValue != 0)
-			return returnValue;
-	}
-	else if (VfdCache[0].lruLessRecently != file)
-	{
-		/*
-		 * We now know that the file is open and that it is not the last one
-		 * accessed, so we need to move it to the head of the Lru ring.
-		 */
-
-		Delete(file);
-		Insert(file);
-	}
 
 	/* NEON: download offloaded file */
 	if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
@@ -1531,17 +1519,32 @@ FileAccess(File file)
 					 errmsg("Receive %d bytes of offloaded file %s instead of %d expected: %m",
 							returnValue, vfdP->fileName, (int)vfdP->fileSize)));
 		vfdP->fdstate &= ~FD_TEMP_FILE_OFFLOADED;
-		vfdP->fdstate |= FD_TEMP_FILE_PINNED;
 		if (FileWrite(file, buf, vfdP->fileSize, 0, WAIT_EVENT_DATA_FILE_WRITE) != vfdP->fileSize)
 			ereport(ERROR,
 					(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 					 errmsg("Failed to write offloaded file %s: %m",
 							vfdP->fileName)));
 		pfree(buf);
-		temporary_files_size += vfdP->fileSize;
-		OffloadTempFiles();
-		vfdP->fdstate &= ~FD_TEMP_FILE_PINNED;
+		OffloadTempFiles(file);
 	}
+
+	if (FileIsNotOpen(file))
+	{
+		returnValue = LruInsert(file);
+		if (returnValue != 0)
+			return returnValue;
+	}
+	else if (VfdCache[0].lruLessRecently != file)
+	{
+		/*
+		 * We now know that the file is open and that it is not the last one
+		 * accessed, so we need to move it to the head of the Lru ring.
+		 */
+
+		Delete(file);
+		Insert(file);
+	}
+
 	return 0;
 }
 
@@ -1941,10 +1944,8 @@ PathNameOpenTemporaryFile(const char *path, int mode)
 		if (VfdCache[file].fileSize < 0)
 			elog(ERROR, "could get temporary file size \"%s\": %m",
 				 VfdCache[file].fileName);
-		VfdCache[file].fdstate |= FD_TEMP_FILE_PINNED;
 		temporary_files_size += VfdCache[file].fileSize;
-		OffloadTempFiles();
-		VfdCache[file].fdstate &= ~FD_TEMP_FILE_PINNED;
+		OffloadTempFiles(file);
 	}
 
     /* If no such file, then we don't raise an error. */
@@ -2324,9 +2325,7 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 			temporary_files_size += past_write - vfdP->fileSize;
 			vfdP->fileSize = past_write;
 			/* NEON: instead of throwing error, swap-out them to page server.*/
-			vfdP->fdstate |= FD_TEMP_FILE_PINNED;
-			OffloadTempFiles();
-			vfdP->fdstate &= ~FD_TEMP_FILE_PINNED;
+			OffloadTempFiles(file);
 		}
 	}
 
