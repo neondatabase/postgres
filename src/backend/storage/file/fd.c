@@ -1426,7 +1426,7 @@ static void
 OffloadTempFiles(File pinned)
 {
 	VfdCache[pinned].fdstate |= FD_TEMP_FILE_PINNED;
-	Delete(file); /* protect from closing */
+	Delete(pinned); /* protect from closing */
 
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
@@ -1488,7 +1488,7 @@ OffloadTempFiles(File pinned)
 		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
 		LastOffloadedFile = victimFile;
 	}
-	Insert(file);
+	Insert(pinned);
 	VfdCache[pinned].fdstate &= ~FD_TEMP_FILE_PINNED;
 }
 
@@ -1525,6 +1525,7 @@ FileAccess(File file)
 					 errmsg("Failed to write offloaded file %s: %m",
 							vfdP->fileName)));
 		pfree(buf);
+		temporary_files_size += vfdP->fileSize;
 		OffloadTempFiles(file);
 	}
 
@@ -2308,27 +2309,6 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 
 	vfdP = &VfdCache[file];
 
-	/*
-	 * If enforcing temp_file_limit and it's a temp file, check to see if the
-	 * write would overrun temp_file_limit, and throw error if so.  Note: it's
-	 * really a modularity violation to throw error here; we should set errno
-	 * and return -1.  However, there's no way to report a suitable error
-	 * message if we do that.  All current callers would just throw error
-	 * immediately anyway, so this is safe at present.
-	 */
-	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
-	{
-		off_t		past_write = offset + amount;
-
-		if (past_write > vfdP->fileSize)
-		{
-			temporary_files_size += past_write - vfdP->fileSize;
-			vfdP->fileSize = past_write;
-			/* NEON: instead of throwing error, swap-out them to page server.*/
-			OffloadTempFiles(file);
-		}
-	}
-
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
@@ -2352,6 +2332,8 @@ retry:
 			{
 				temporary_files_size += past_write - vfdP->fileSize;
 				vfdP->fileSize = past_write;
+				/* NEON: instead of throwing error, swap-out them to page server.*/
+				OffloadTempFiles(file);
 			}
 		}
 	}
@@ -2441,11 +2423,14 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 	returnCode = ftruncate(VfdCache[file].fd, offset);
 	pgstat_report_wait_end();
 
-	if (returnCode == 0 && VfdCache[file].fileSize > offset)
+	if (returnCode == 0)
 	{
-		/* adjust our state for truncation of a temp file */
-		Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
-		temporary_files_size -= VfdCache[file].fileSize - offset;
+		if (VfdCache[file].fileSize > offset)
+		{
+			/* adjust our state for truncation of a temp file */
+			Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
+			temporary_files_size -= VfdCache[file].fileSize - offset;
+		}
 		VfdCache[file].fileSize = offset;
 	}
 
