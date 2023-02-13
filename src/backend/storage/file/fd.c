@@ -1554,12 +1554,8 @@ OffloadTempFiles(File pinned)
 		LruDelete(victimFile); /* close this file descriptor */
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
 		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
-		if (victim->fileMode & O_RDONLY)
-		{
-			/* Need spawed out file to be writtable */
-			victim->fileMode &= ~O_RDONLY;
-			victim->fileMode |= O_RDWR;
-		}
+		/* Need offloaded out file to be writtable */
+		victim->fileMode |= O_RDWR;
 		LastOffloadedFile = victimFile;
 
 		if (truncate(victim->fileName, 0) < 0)
