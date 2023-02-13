@@ -191,7 +191,8 @@ int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 #define FD_DELETE_AT_CLOSE	(1 << 0)	/* T = delete when closed */
 #define FD_CLOSE_AT_EOXACT	(1 << 1)	/* T = close at eoXact */
 #define FD_TEMP_FILE_LIMIT	(1 << 2)	/* T = respect temp_file_limit */
-#define FD_TEMP_FILE_OFFLOADED (1 << 3)	/* T = offloaded to pageserver */
+#define FD_TEMP_FILE_PINNED (1 << 3)	/* T = file pinned from been offloaded */
+#define FD_TEMP_FILE_OFFLOADED (1 << 4)	/* T = offloaded to pageserver */
 
 typedef struct vfd
 {
@@ -1498,6 +1499,9 @@ static char const* GetFileName(char const* path)
 static void
 OffloadTempFiles(File pinned)
 {
+	VfdCache[pinned].fdstate |= FD_TEMP_FILE_PINNED;
+	Delete(pinned); /* protect from closing */
+
 	while (temporary_files_size > (uint64) temp_file_limit * (uint64) 1024)
 	{
 		File victimFile = 0;
@@ -1511,7 +1515,7 @@ OffloadTempFiles(File pinned)
 			int j = LastOffloadedFile + i + 1;
 			if (j >= SizeVfdCache)
 				j -= SizeVfdCache;
-			if (j != pinned && (VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED)) == FD_TEMP_FILE_LIMIT)
+			if ((VfdCache[j].fdstate & (FD_TEMP_FILE_LIMIT | FD_TEMP_FILE_OFFLOADED | FD_TEMP_FILE_PINNED)) == FD_TEMP_FILE_LIMIT)
 			{
 				victimFile = j;
 				break;
@@ -1525,6 +1529,8 @@ OffloadTempFiles(File pinned)
 
 		/* Offload file to pageserver */
 		victim = &VfdCache[victimFile];
+		temporary_files_size -= victim->fileSize;
+		victim->fdstate |= FD_TEMP_FILE_PINNED;
 		file_name = GetFileName(victim->fileName);
 		len = strlen(file_name);
 		buf = palloc(len + 1 + victim->fileSize);
@@ -1552,10 +1558,12 @@ OffloadTempFiles(File pinned)
 							victim->fileName)));
 
 		LruDelete(victimFile); /* close this file descriptor */
-		temporary_files_size -= victim->fileSize;
 		victim->fdstate |= FD_TEMP_FILE_OFFLOADED;
+		victim->fdstate &= ~FD_TEMP_FILE_PINNED;
 		LastOffloadedFile = victimFile;
 	}
+	Insert(pinned);
+	VfdCache[pinned].fdstate &= ~FD_TEMP_FILE_PINNED;
 }
 
 /* returns 0 on success, -1 on re-open failure (with errno set) */
@@ -1567,23 +1575,6 @@ FileAccess(File file)
 
 	DO_DB(elog(LOG, "FileAccess %d (%s)",
 			   file, vfdP->fileName));
-
-	if (FileIsNotOpen(file))
-	{
-		returnValue = LruInsert(file);
-		if (returnValue != 0)
-			return returnValue;
-	}
-	else if (VfdCache[0].lruLessRecently != file)
-	{
-		/*
-		 * We now know that the file is open and that it is not the last one
-		 * accessed, so we need to move it to the head of the Lru ring.
-		 */
-
-		Delete(file);
-		Insert(file);
-	}
 
 	/* NEON: download offloaded file */
 	if (vfdP->fdstate & FD_TEMP_FILE_OFFLOADED)
@@ -1611,6 +1602,24 @@ FileAccess(File file)
 		temporary_files_size += vfdP->fileSize;
 		OffloadTempFiles(file);
 	}
+
+	if (FileIsNotOpen(file))
+	{
+		returnValue = LruInsert(file);
+		if (returnValue != 0)
+			return returnValue;
+	}
+	else if (VfdCache[0].lruLessRecently != file)
+	{
+		/*
+		 * We now know that the file is open and that it is not the last one
+		 * accessed, so we need to move it to the head of the Lru ring.
+		 */
+
+		Delete(file);
+		Insert(file);
+	}
+
 	return 0;
 }
 
@@ -2183,7 +2192,8 @@ FileClose(File file)
 			pfree(offloaded_path);
 		}
         /* Subtract its size from current usage (do first in case of error) */
-		temporary_files_size -= vfdP->fileSize;
+		if (!(vfdP->fdstate & FD_TEMP_FILE_OFFLOADED))
+			temporary_files_size -= vfdP->fileSize;
 		vfdP->fileSize = 0;
 	}
 
@@ -2379,27 +2389,6 @@ FileWrite(File file, char *buffer, int amount, off_t offset,
 
 	vfdP = &VfdCache[file];
 
-	/*
-	 * If enforcing temp_file_limit and it's a temp file, check to see if the
-	 * write would overrun temp_file_limit, and throw error if so.  Note: it's
-	 * really a modularity violation to throw error here; we should set errno
-	 * and return -1.  However, there's no way to report a suitable error
-	 * message if we do that.  All current callers would just throw error
-	 * immediately anyway, so this is safe at present.
-	 */
-	if (temp_file_limit >= 0 && (vfdP->fdstate & FD_TEMP_FILE_LIMIT))
-	{
-		off_t		past_write = offset + amount;
-
-		if (past_write > vfdP->fileSize)
-		{
-			temporary_files_size += past_write - vfdP->fileSize;
-			vfdP->fileSize = past_write;
-			/* NEON: instead of throwing error, swap-out them to page server.*/
-			OffloadTempFiles(file);
-		}
-	}
-
 retry:
 	errno = 0;
 	pgstat_report_wait_start(wait_event_info);
@@ -2423,6 +2412,8 @@ retry:
 			{
 				temporary_files_size += past_write - vfdP->fileSize;
 				vfdP->fileSize = past_write;
+				/* NEON: instead of throwing error, swap-out them to page server.*/
+				OffloadTempFiles(file);
 			}
 		}
 	}
@@ -2512,11 +2503,14 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 	returnCode = ftruncate(VfdCache[file].fd, offset);
 	pgstat_report_wait_end();
 
-	if (returnCode == 0 && VfdCache[file].fileSize > offset)
+	if (returnCode == 0)
 	{
-		/* adjust our state for truncation of a temp file */
-		Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
-		temporary_files_size -= VfdCache[file].fileSize - offset;
+		if (VfdCache[file].fileSize > offset)
+		{
+			/* adjust our state for truncation of a temp file */
+			Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
+			temporary_files_size -= VfdCache[file].fileSize - offset;
+		}
 		VfdCache[file].fileSize = offset;
 	}
 
