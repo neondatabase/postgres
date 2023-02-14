@@ -119,10 +119,10 @@ typedef struct f_smgr
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 
-	void		(*smgr_reset_prefetch) (SMgrRelation reln);
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
+	int 		(*smgr_fcntl)(SMgrRelation reln, int cmd, void* data, size_t size);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -173,5 +173,10 @@ extern void AtEOXact_SMgr(void);
 extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
+extern int  smgr_fcntl(SMgrRelation reln, int cmd, void* data, size_t size);
+
+#define SMGR_FCNTL_READ_TEMP_FILE      2
+#define SMGR_FCNTL_WRITE_TEMP_FILE     3
+#define SMGR_FCNTL_UNLINK_TEMP_FILE    4
 
 #endif							/* SMGR_H */

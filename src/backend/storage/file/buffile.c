@@ -58,8 +58,13 @@
  * We break BufFiles into gigabyte-sized segments, regardless of RELSEG_SIZE.
  * The reason is that we'd like large BufFiles to be spread across multiple
  * tablespaces when available.
- */
 #define MAX_PHYSICAL_FILESIZE	0x40000000
+ */
+/*
+ * NEON: use smaller temp file to allows swapping them to pageserver.
+ * 1Gb files cause palloc failure and requires sending file in multiple requests
+ */
+#define MAX_PHYSICAL_FILESIZE	0x10000000
 #define BUFFILE_SEG_SIZE		(MAX_PHYSICAL_FILESIZE / BLCKSZ)
 
 /*

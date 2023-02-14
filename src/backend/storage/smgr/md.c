@@ -576,11 +576,12 @@ mdprefetch(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum)
 
 
 /*
- *	mdprefetch() -- Cancel all previous prefetch requests
+ *	mdfcntl() -- SMGR specific operation
  */
-void
-md_reset_prefetch(SMgrRelation reln)
+int
+mdfcntl(SMgrRelation reln, int cmd, void* data, size_t size)
 {
+	return 0;
 }
 
 /*
