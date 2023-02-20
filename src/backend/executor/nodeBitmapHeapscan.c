@@ -211,6 +211,8 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				break;
 			}
 
+			BitmapAdjustPrefetchIterator(node, tbmres);
+
 			/*
 			 * We can skip fetching the heap page if we don't need any fields
 			 * from the heap, and the bitmap entries don't need rechecking,
@@ -366,7 +368,9 @@ BitmapAdjustPrefetchIterator(BitmapHeapScanState *node,
 {
 #ifdef USE_PREFETCH
 	TBMIterator *prefetch_iterator = node->prefetch_iterator;
-	Assert(node->pstate == NULL);
+
+	if (node->pstate != NULL)
+		return;
 
 	if (node->prefetch_pages > 0)
 	{
@@ -396,6 +400,9 @@ static inline void
 BitmapAdjustPrefetchTarget(BitmapHeapScanState *node)
 {
 #ifdef USE_PREFETCH
+	if (node->pstate != NULL)
+		return;
+
 	if (node->prefetch_target >= node->prefetch_maximum)
 		/* don't increase any further */ ;
 	else if (node->prefetch_target >= node->prefetch_maximum / 2)
