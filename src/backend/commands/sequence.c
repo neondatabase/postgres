@@ -1220,11 +1220,18 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 		/* NEON: reinitialize unlogged sequence */
 		if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 		{
-			/* TODO: hardcoded defaults - will not work with custim sequences */
 			Datum		value[SEQ_COL_LASTCOL] = {0};
 			bool		null[SEQ_COL_LASTCOL] = {false};
 			HeapTuple tuple;
-			value[SEQ_COL_LASTVAL-1] = Int64GetDatumFast(1); /* start sequence with 1 */
+			Form_pg_sequence pgsform;
+
+			tuple = SearchSysCache1(SEQRELID, RelationGetRelid(rel));
+			if (!HeapTupleIsValid(tuple))
+				elog(ERROR, "cache lookup failed for sequence %u", RelationGetRelid(rel));
+			pgsform = (Form_pg_sequence) GETSTRUCT(tuple);
+			value[SEQ_COL_LASTVAL-1] = Int64GetDatumFast(pgsform->seqstart);
+			ReleaseSysCache(tuple);
+
 			tuple = heap_form_tuple(RelationGetDescr(rel), value, null);
 			fill_seq_fork_with_data(rel, tuple, MAIN_FORKNUM, *buf);
 		}
