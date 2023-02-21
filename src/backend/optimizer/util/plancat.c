@@ -48,6 +48,7 @@
 #include "statistics/statistics.h"
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
+#include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
@@ -83,23 +84,34 @@ static void set_baserel_partition_constraint(Relation relation,
 											 RelOptInfo *rel);
 
 static bool
-is_index_valid(Relation index)
+is_index_valid(Relation index, LOCKMODE lmode)
 {
 	if (!index->rd_index->indisvalid)
 		return false;
 
 	if (index->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 	{
-		Buffer metapage = ReadBuffer(index, 0);
-		bool isNew = PageIsNew(BufferGetPage(metapage));
-		ReleaseBuffer(metapage);
-		if (isNew)
+		while (true)
 		{
-			Relation heap;
-			DropRelFileNodesAllBuffers(&index->rd_smgr, 1);
-			heap = RelationIdGetRelation(index->rd_index->indrelid);
-			index->rd_indam->ambuild(heap, index, BuildIndexInfo(index));
-			RelationClose(heap);
+			Buffer metapage = ReadBuffer(index, 0);
+			bool isNew = PageIsNew(BufferGetPage(metapage));
+			ReleaseBuffer(metapage);
+			if (isNew)
+			{
+				Relation heap;
+				if (lmode != ExclusiveLock)
+				{
+					UnlockRelation(index, lmode);
+					LockRelation(index, ExclusiveLock);
+					lmode = ExclusiveLock;
+					continue;
+				}
+				DropRelFileNodesAllBuffers(&index->rd_smgr, 1);
+				heap = RelationIdGetRelation(index->rd_index->indrelid);
+				index->rd_indam->ambuild(heap, index, BuildIndexInfo(index));
+				RelationClose(heap);
+			}
+			break;
 		}
 	}
 	return true;
@@ -245,7 +257,7 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			 * still needs to insert into "invalid" indexes, if they're marked
 			 * indisready.
 			 */
-			if (!is_index_valid(indexRelation))
+			if (!is_index_valid(indexRelation, lmode))
 			{
 				index_close(indexRelation, NoLock);
 				continue;
