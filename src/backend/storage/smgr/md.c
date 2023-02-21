@@ -489,6 +489,11 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 	path = relpath(reln->smgr_rnode, forknum);
 
 	fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
+
+	/*
+	 * NEON: unlogged relation files are lost after compute restart - we need to implicitly recreate them
+	 * to allow data insertion
+	 */
 	if (fd < 0 && (behavior & EXTENSION_CREATE))
 		fd = PathNameOpenFile(path, O_RDWR | O_CREAT | PG_BINARY);
 
