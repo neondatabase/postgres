@@ -369,6 +369,7 @@ BitmapAdjustPrefetchIterator(BitmapHeapScanState *node,
 #ifdef USE_PREFETCH
 	TBMIterator *prefetch_iterator = node->prefetch_iterator;
 
+	/* NEON: we are not using prefetch iterator for parallel plan so no need to adjust it */
 	if (node->pstate != NULL)
 		return;
 
@@ -400,6 +401,7 @@ static inline void
 BitmapAdjustPrefetchTarget(BitmapHeapScanState *node)
 {
 #ifdef USE_PREFETCH
+	/* NEON: we are not using prefetch iterator for parallel plan so no need to adjust it */
 	if (node->pstate != NULL)
 		return;
 
