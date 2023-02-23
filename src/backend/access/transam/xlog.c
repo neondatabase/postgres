@@ -5253,6 +5253,7 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
 
+	if (lastWrittenLsnCacheSize > 0)
 	{
 		static HASHCTL info;
 		info.keysize = sizeof(BufferTag);
@@ -5262,6 +5263,7 @@ XLOGShmemInit(void)
 											&info,
 											HASH_ELEM | HASH_BLOBS);
 	}
+
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
@@ -8955,6 +8957,8 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 	XLogRecPtr lsn;
 	LastWrittenLsnCacheEntry* entry;
 
+	Assert(lastWrittenLsnCacheSize != 0);
+
 	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
 
 	/* Maximal last written LSN among all non-cached pages */
@@ -8999,7 +9003,7 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 void
 SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
-	if (lsn == InvalidXLogRecPtr || n_blocks == 0)
+	if (lsn == InvalidXLogRecPtr || n_blocks == 0 || lastWrittenLsnCacheSize == 0)
 		return;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
