@@ -59,7 +59,7 @@ static void check_root(const char *progname);
 typedef int (*MainFunc) (int argc, char *argv[]);
 
 static int
-CallExtMain(char *library_name, char *main_func_name, int argc, char *argv[])
+CallExtMain(char *library_name, char *main_func_name, int argc, char *argv[], bool load_config)
 {
 	MainFunc main_func;
 
@@ -76,7 +76,7 @@ CallExtMain(char *library_name, char *main_func_name, int argc, char *argv[])
 	InitializeGUCOptions();
 
 	/* Acquire configuration parameters */
-	if (!SelectConfigFiles(NULL, progname))
+	if (load_config && !SelectConfigFiles(NULL, progname))
 		exit(1);
 
 	/*
@@ -235,9 +235,9 @@ main(int argc, char *argv[])
 		PostgresSingleUserMain(argc, argv,
 							   strdup(get_user_name_or_exit(progname)));
 	else if (argc > 1 && strcmp(argv[1], "--wal-redo") == 0)
-		CallExtMain("neon_walredo", "WalRedoMain", argc, argv);
+		CallExtMain("neon_walredo", "WalRedoMain", argc, argv, false);
 	else if (argc > 1 && strcmp(argv[1], "--sync-safekeepers") == 0)
-		CallExtMain("neon", "WalProposerSync", argc, argv);
+		CallExtMain("neon", "WalProposerSync", argc, argv, true);
 	else
 		PostmasterMain(argc, argv);
 	/* the functions above should not return */
