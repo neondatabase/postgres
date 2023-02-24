@@ -493,13 +493,6 @@ mdopenfork(SMgrRelation reln, ForkNumber forknum, int behavior)
 
 	fd = PathNameOpenFile(path, O_RDWR | PG_BINARY);
 
-	/*
-	 * NEON: unlogged relation files are lost after compute restart - we need to implicitly recreate them
-	 * to allow data insertion
-	 */
-	if (fd < 0 && (behavior & EXTENSION_CREATE))
-		fd = PathNameOpenFile(path, O_RDWR | O_CREAT | PG_BINARY);
-
 	if (fd < 0)
 	{
 		if ((behavior & EXTENSION_RETURN_NULL) &&
@@ -662,23 +655,9 @@ mdread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 										reln->smgr_rnode.node.relNode,
 										reln->smgr_rnode.backend);
 
-	/* NEON: md smgr is used in Neon for unlogged and temp relations.
-	 * After compute node restart their data is deleted but unlogged tables are still present in system catalog.
-	 * This is a difference with Vanilla Postgres where unlogged relations are truncated only after abnormal termination.
-	 * To avoid "could not open file" we have to use EXTENSION_RETURN_NULL hear instead of EXTENSION_FAIL
-	 */
 	v = _mdfd_getseg(reln, forknum, blocknum, false,
-					 RelFileNodeBackendIsTemp(reln->smgr_rnode)
-					 ? EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY
-					 : EXTENSION_RETURN_NULL);
-	if (v == NULL)
-	{
-		char* path = relpath(reln->smgr_rnode, forknum);
-		(void)PathNameOpenFile(path, O_RDWR | O_CREAT | PG_BINARY);
-		pfree(path);
-		MemSet(buffer, 0, BLCKSZ);
-		return;
-	}
+					 EXTENSION_FAIL | EXTENSION_CREATE_RECOVERY);
+
 	seekpos = (off_t) BLCKSZ * (blocknum % ((BlockNumber) RELSEG_SIZE));
 
 	Assert(seekpos < (off_t) BLCKSZ * RELSEG_SIZE);
@@ -799,13 +778,7 @@ mdnblocks(SMgrRelation reln, ForkNumber forknum)
 	BlockNumber nblocks;
 	BlockNumber segno;
 
-	/* NEON: md smgr is used in Neon for unlogged and temp relations.
-	 * After compute node restart their data is deleted but unlogged tables are still present in system catalog.
-	 * This is a difference with Vanilla Postgres where unlogged relations are truncated only after abnormal termination.
-	 * To avoid "could not open file" we have to use EXTENSION_RETURN_NULL hear instead of EXTENSION_FAIL
-	 */
-	if (!mdopenfork(reln, forknum, RelFileNodeBackendIsTemp(reln->smgr_rnode) ? EXTENSION_FAIL : EXTENSION_RETURN_NULL))
-		return 0;
+	mdopenfork(reln, forknum, EXTENSION_FAIL);
 
 	/* mdopen has opened the first segment */
 	Assert(reln->md_num_open_segs[forknum] > 0);
