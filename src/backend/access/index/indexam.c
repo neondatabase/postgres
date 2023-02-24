@@ -57,6 +57,7 @@
 #include "nodes/makefuncs.h"
 #include "pgstat.h"
 #include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
 #include "utils/ruleutils.h"
@@ -114,6 +115,7 @@ static IndexScanDesc index_beginscan_internal(Relation indexRelation,
  * ----------------------------------------------------------------
  */
 
+
 /* ----------------
  *		index_open - open an index relation by relation OID
  *
@@ -142,6 +144,41 @@ index_open(Oid relationId, LOCKMODE lockmode)
 				 errmsg("\"%s\" is not an index",
 						RelationGetRelationName(r))));
 
+	/*
+	 * NEON: support unogged indexes.
+	 * Data of unlogged indexes is lost after compute restart so we have to reinitialize them to avoid errors.
+	 */
+	if (r->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
+	{
+		LOCKMODE orig_lockmode = lockmode;
+		while (true)
+		{
+			Buffer metapage = ReadBuffer(r, 0);
+			bool isNew = PageIsNew(BufferGetPage(metapage));
+			ReleaseBuffer(metapage);
+			if (isNew)
+			{
+				Relation heap;
+				if (lockmode != ExclusiveLock)
+				{
+					UnlockRelation(r, lockmode);
+					LockRelation(r, ExclusiveLock);
+					lockmode = ExclusiveLock;
+					continue;
+				}
+				DropRelFileNodesAllBuffers(&r->rd_smgr, 1);
+				heap = RelationIdGetRelation(r->rd_index->indrelid);
+				r->rd_indam->ambuild(heap, r, BuildIndexInfo(r));
+				RelationClose(heap);
+			}
+			break;
+		}
+		if (orig_lockmode != lockmode)
+		{
+			UnlockRelation(r, lockmode);
+			LockRelation(r, orig_lockmode);
+		}
+	}
 	return r;
 }
 
