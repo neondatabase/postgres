@@ -98,7 +98,7 @@ static HTAB *seqhashtab = NULL; /* hash table for SeqTable items */
 static SeqTableData *last_used_seq = NULL;
 
 static void fill_seq_with_data(Relation rel, HeapTuple tuple);
-static void fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum, Buffer buf);
+static void fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum);
 static Relation lock_and_open_sequence(SeqTable seq);
 static void create_seq_hashtable(void);
 static void init_sequence(Oid relid, SeqTable *p_elm, Relation *p_rel);
@@ -351,7 +351,7 @@ ResetSequence(Oid seq_relid)
 static void
 fill_seq_with_data(Relation rel, HeapTuple tuple)
 {
-	fill_seq_fork_with_data(rel, tuple, MAIN_FORKNUM, InvalidBuffer);
+	fill_seq_fork_with_data(rel, tuple, MAIN_FORKNUM);
 
 	if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 	{
@@ -360,7 +360,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 		srel = smgropen(rel->rd_node, InvalidBackendId, rel->rd_rel->relpersistence);
 		smgrcreate(srel, INIT_FORKNUM, false);
 		log_smgrcreate(&rel->rd_node, INIT_FORKNUM);
-		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM, InvalidBuffer);
+		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
 		FlushRelationBuffers(rel);
 		smgrclose(srel);
 	}
@@ -370,27 +370,27 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
  * Initialize a sequence's relation fork with the specified tuple as content
  */
 static void
-fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum, Buffer buf)
+fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum)
 {
+	Buffer		buf;
 	Page		page;
 	sequence_magic *sm;
 	OffsetNumber offnum;
-	bool lockBuffer = false;
 
 	/* Initialize first page of relation with special magic number */
-	if (buf == InvalidBuffer)
-	{
-		buf = ReadBufferExtended(rel, forkNum, P_NEW, RBM_NORMAL, NULL);
-		Assert(BufferGetBlockNumber(buf) == 0);
-		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
-		lockBuffer = true;
-	}
+
+	buf = ReadBufferExtended(rel, forkNum, P_NEW, RBM_NORMAL, NULL);
+	Assert(BufferGetBlockNumber(buf) == 0);
+
 	page = BufferGetPage(buf);
+
 	PageInit(page, BufferGetPageSize(buf), sizeof(sequence_magic));
 	sm = (sequence_magic *) PageGetSpecialPointer(page);
 	sm->magic = SEQ_MAGIC;
 
 	/* Now insert sequence tuple */
+
+	LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
 
 	/*
 	 * Since VACUUM does not process sequences, we have to force the tuple to
@@ -440,8 +440,7 @@ fill_seq_fork_with_data(Relation rel, HeapTuple tuple, ForkNumber forkNum, Buffe
 
 	END_CRIT_SECTION();
 
-	if (lockBuffer)
-		UnlockReleaseBuffer(buf);
+	UnlockReleaseBuffer(buf);
 }
 
 /*
@@ -1216,29 +1215,9 @@ read_seq_tuple(Relation rel, Buffer *buf, HeapTuple seqdatatuple)
 	sm = (sequence_magic *) PageGetSpecialPointer(page);
 
 	if (sm->magic != SEQ_MAGIC)
-	{
-		/* NEON: reinitialize unlogged sequence */
-		if (rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
-		{
-			Datum		value[SEQ_COL_LASTCOL] = {0};
-			bool		null[SEQ_COL_LASTCOL] = {false};
-			HeapTuple tuple;
-			Form_pg_sequence pgsform;
+		elog(ERROR, "bad magic number in sequence \"%s\": %08X",
+			 RelationGetRelationName(rel), sm->magic);
 
-			tuple = SearchSysCache1(SEQRELID, RelationGetRelid(rel));
-			if (!HeapTupleIsValid(tuple))
-				elog(ERROR, "cache lookup failed for sequence %u", RelationGetRelid(rel));
-			pgsform = (Form_pg_sequence) GETSTRUCT(tuple);
-			value[SEQ_COL_LASTVAL-1] = Int64GetDatumFast(pgsform->seqstart);
-			ReleaseSysCache(tuple);
-
-			tuple = heap_form_tuple(RelationGetDescr(rel), value, null);
-			fill_seq_fork_with_data(rel, tuple, MAIN_FORKNUM, *buf);
-		}
-		else
-			elog(ERROR, "bad magic number in sequence \"%s\": %08X",
-				 RelationGetRelationName(rel), sm->magic);
-	}
 	lp = PageGetItemId(page, FirstOffsetNumber);
 	Assert(ItemIdIsNormal(lp));
 
