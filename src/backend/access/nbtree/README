@@ -1058,18 +1058,16 @@ the same way.
 Notes About Index Scan Prefetch
 -------------------------------
 
-Prefetch can significantly improve speed of OLAP queries.
-To be able to perform prefetch we need to know which pages will
-be access during scan. It is trivial for heap scan and bitmap scan,
-but requires more efforts for index scan. To implement prefetch for
-index scan we need to find out subsequent leave pages. Postgres is linking all
-pages at one level of B-Tree in double linked list. And use this list for
-forward and backward iteration. But this list can not be used for prefetching,
-because to locate next page we need first to load current page.
-So we need to iterate through parents of leave pages.
-Postgres nbtree pages has no reference to parent page.
-Stack is constructed while lookup but is then removed and not used during index traversal.
-So we have to remember parent page and then use its double linked list to locate next parent.
+Prefetch can significantly improve the speed of OLAP queries.
+To be able to perform prefetch, we need to know which pages will
+be accessed during the scan. It is trivial for heap- and bitmap scans,
+but requires more effort for index scans: to implement prefetch for
+index scans, we need to find out subsequent leaf pages. 
+
+Postgres links all pages at the same level of the B-Tree in a doubly linked list and uses this list for
+forward and backward iteration. This list, however, can not trivially be used for prefetching because to locate the next page because we need first to load the current page. To prefetch more than only the next page, we can utilize the parent page's downlinks instead, as it contains references to most of the target page's sibling pages.
+
+Because Postgres' nbtree pages have no reference to their parent page, we need to remember the parent page when descending the btree and use it to prefetch subsequent pages. We will utilize the parent's linked list to improve the performance of this prefetch system past the key range of the parent page.
 
 We should prefetch not only leave pages but also next parent page.
 The trick is to correctly calculate moment when it will be needed:
