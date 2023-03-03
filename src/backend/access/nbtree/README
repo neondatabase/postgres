@@ -1069,11 +1069,9 @@ forward and backward iteration. This list, however, can not trivially be used fo
 
 Because Postgres' nbtree pages have no reference to their parent page, we need to remember the parent page when descending the btree and use it to prefetch subsequent pages. We will utilize the parent's linked list to improve the performance of this prefetch system past the key range of the parent page.
 
-We should prefetch not only leave pages but also next parent page.
-The trick is to correctly calculate moment when it will be needed:
-(when prefetch requests for all children from current parent are already issued)
-and place prefetch request for the next parent effective_io_concurrency
-requests before.
+We should prefetch not only leaf pages, but also the next parent page.
+The trick is to correctly calculate the moment when it will be needed:
+We should not issue the prefetch request when prefetch requests for all children from the current parent page have already been issued, but when there are only effective_io_concurrency line pointers left to prefetch from the page.
 
 Currently there are two different prefetch implementations for
 index-only scan and index scan. Index-only scan doesn't need to access heap tuples so it prefetches
