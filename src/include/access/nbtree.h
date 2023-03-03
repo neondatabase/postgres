@@ -1079,7 +1079,7 @@ typedef struct BTScanOpaqueData
 	int         last_prefetch_index; /* current position in prefetch_blocks (prefetch_blocks[0..last_prefetch_index] are already requested */
 
 	/* Prefech of referenced heap pages for index scan */
-	/* To minimize waste prefetch requests we start with prefetch distance 1
+	/* To minimize waste prefetch requests we start with prefetch distance 0
 	 * and increase it until it reaches prefetch_maximum
 	 */
 	int         current_prefetch_distance;

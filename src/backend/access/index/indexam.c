@@ -107,8 +107,8 @@ do { \
 
 /*
  * Neon: this variable is used to propagate estimation of number of produced rows from palnner to AM.
- * It seems to be more orrect to add it index_beginscan method, but it requires changing of AM API,
- * which make brake compatibility with many extensions.
+ * It seems to be more correct to add it to index_beginscan method, but it requires changing of AM API,
+ * which may brake compatibility with many extensions.
  */
 double indexscan_rows_estimation;
 
