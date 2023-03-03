@@ -1195,7 +1195,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	else if (!enable_indexscan_prefetch || !scan->heapRelation)
 		so->prefetch_maximum = 0; /* disable prefetch */
 
-	/* If key bounds are not speified, then we will scan the whole relation and it make sense to start with the lastest possible prefetch distance */
+	/* If key bounds are not speified, then we will scan the whole relation and it make sense to start with the largest possible prefetch distance */
 	so->current_prefetch_distance = (keysCount == 0) ? so->prefetch_maximum : 0;
 
 	/*
