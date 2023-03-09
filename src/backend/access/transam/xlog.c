@@ -8144,11 +8144,14 @@ xlog_redo(XLogReaderState *record)
 				continue;
 			}
 			result = XLogReadBufferForRedo(record, block_id, &buffer);
-			if (result == BLK_DONE && !IsUnderPostmaster)
+			if (result == BLK_DONE && (!IsUnderPostmaster || StandbyMode))
 			{
 				/*
-				 * In the special WAL process, blocks that are being ignored
-				 * return BLK_DONE. Accept that.
+				 * NEON: In the special WAL redo process, blocks that are being
+				 * ignored return BLK_DONE. Accept that.
+				 * Additionally, in standby mode, blocks that are not present
+				 * in shared buffers are ignored during replay, so we also
+				 * ignore those blocks.
 				 */
 			}
 			else if (result != BLK_RESTORED)
