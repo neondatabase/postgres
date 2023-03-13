@@ -1647,7 +1647,7 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 		 */
 		if (ScanDirectionIsForward(dir))
 		{
-			while (prefetchDistance <= prefetchLimit && so->currPos.itemIndex + prefetchDistance <= so->currPos.lastItem)
+			while (prefetchDistance < prefetchLimit && so->currPos.itemIndex + prefetchDistance <= so->currPos.lastItem)
 			{
 				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex + prefetchDistance].heapTid.ip_blkid);
 				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
@@ -1656,7 +1656,7 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 		}
 		else
 		{
-			while (prefetchDistance <= prefetchLimit && so->currPos.itemIndex - prefetchDistance >= so->currPos.firstItem)
+			while (prefetchDistance < prefetchLimit && so->currPos.itemIndex - prefetchDistance >= so->currPos.firstItem)
 			{
 				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex - prefetchDistance].heapTid.ip_blkid);
 				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
