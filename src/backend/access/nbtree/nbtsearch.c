@@ -1468,7 +1468,7 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	 */
 	stack = _bt_search(rel, &inskey, &buf, BT_READ, scan->xs_snapshot);
 
-	/* Start prefetching for index onny scan */
+	/* Start prefetching for index only scan */
 	if (so->prefetch_maximum > 0 && stack != NULL && scan->xs_want_itup) /* index only scan */
 	{
 		int first_offset = _bt_read_parent_for_prefetch(scan, stack->bts_blkno, dir);
@@ -1616,8 +1616,7 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 	}
 	else if (so->prefetch_maximum > 0)
 	{
-		int prefetchLimit;
-		int prefetchDistance = so->current_prefetch_distance;
+		int prefetchLimit, prefetchDistance;
 
 		/* Neon: prefetch referenced heap pages.
 		 * As far as it is difficult to predict how much items index scan will return
@@ -1633,56 +1632,38 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 		/* How much we can prefetch */
 		prefetchLimit = Min(so->current_prefetch_distance, so->currPos.lastItem - so->currPos.firstItem + 1);
 
+		/* Active prefeth requests */
+		prefetchDistance = so->n_prefetch_requests;
+
+		/*
+		 * Consume one prefetch request (if any)
+		 */
+		if (prefetchDistance != 0)
+			prefetchDistance -= 1;
+
+		/* Keep number of active prefetch requests equal to the current prefetch distance.
+		 * When prefetch distance reaches prefetch maximum, this loop performs at most one iteration,
+		 * but at the beginning of index scan it performs up to INCREASE_PREFETCH_DISTANCE_STEP+1 iterations
+		 */
 		if (ScanDirectionIsForward(dir))
 		{
-			if (so->currPos.itemIndex == so->currPos.firstItem)
+			while (prefetchDistance <= prefetchLimit && so->currPos.itemIndex + prefetchDistance <= so->currPos.lastItem)
 			{
-				/* New leaf page is just loaded: prefetch up to prefetchLimit items */
-				for (int i = 0; i < prefetchLimit; i++)
-				{
-					BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.firstItem + i].heapTid.ip_blkid);
-					PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-				}
-			}
-			else
-			{
-				/* Otherwise just keep number of active prefetch requests equal to the current prefetch distance.
-				 * When prefetch distance reaches prefetch maximum, this loop performs at most one iteration,
-				 * but at the beginning of index scan it performs up to INCREASE_PREFETCH_DISTANCE_STEP+1 iterations
-				 */
-				while (prefetchDistance <= prefetchLimit && so->currPos.lastItem - so->currPos.itemIndex + 1 >= prefetchDistance)
-				{
-					BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex + prefetchDistance - 1].heapTid.ip_blkid);
-					PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-					prefetchDistance += 1;
-				}
+				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex + prefetchDistance].heapTid.ip_blkid);
+				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
+				prefetchDistance += 1;
 			}
 		}
 		else
 		{
-			if (so->currPos.itemIndex == so->currPos.lastItem)
+			while (prefetchDistance <= prefetchLimit && so->currPos.itemIndex - prefetchDistance >= so->currPos.firstItem)
 			{
-				/* New leaf page is just loaded: prefetch up to prefetchLimit items */
-				for (int i = 0; i < prefetchLimit; i++)
-				{
-					BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.lastItem - i].heapTid.ip_blkid);
-					PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-				}
-			}
-			else
-			{
-				/* Otherwise just keep number of active prefetch requests equal to the current prefetch distance.
-				 * When prefetch distance reaches prefetch maximum, this loop performs at most one iteration,
-				 * but at the beginning of index scan it performs up to INCREASE_PREFETCH_DISTANCE_STEP+1 iterations
-				 */
-				while (prefetchDistance <= prefetchLimit && so->currPos.itemIndex - so->currPos.firstItem + 1 >= prefetchDistance)
-				{
-					BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex - prefetchDistance + 1].heapTid.ip_blkid);
-					PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-					prefetchDistance += 1;
-				}
+				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex - prefetchDistance].heapTid.ip_blkid);
+				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
+				prefetchDistance += 1;
 			}
 		}
+		so->n_prefetch_requests = prefetchDistance; /* update number of active prefetch requests */
 	}
 	return true;
 }
