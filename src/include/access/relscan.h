@@ -119,7 +119,6 @@ typedef struct IndexScanDescData
 	struct SnapshotData *xs_snapshot;	/* snapshot to see */
 	int			numberOfKeys;	/* number of index qualifier conditions */
 	int			numberOfOrderBys;	/* number of ordering operators */
-	double		rows_estimation;	/* number of rows which is expected to be returned by this scan */
 	struct ScanKeyData *keyData;	/* array of index qualifier descriptors */
 	struct ScanKeyData *orderByData;	/* array of ordering op descriptors */
 	bool		xs_want_itup;	/* caller requests index tuples */

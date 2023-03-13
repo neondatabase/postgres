@@ -1627,8 +1627,6 @@ ExecIndexBuildScanKeys(PlanState *planstate, Relation index,
 		array_keys = NULL;
 	}
 
-	indexscan_rows_estimation = planstate->plan->plan_rows;
-
 	/*
 	 * Return info to our caller.
 	 */
