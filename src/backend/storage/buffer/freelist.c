@@ -209,12 +209,17 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	 * If given a strategy object, see whether it can select a buffer. We
 	 * assume strategy objects don't need buffer_strategy_lock.
 	 *
-	 * Neon: is is critical for Neon architecture to warm shared buffers as fast as possible,
-	 * because we can not rely on file system cache. Prewarming can be done using pg_prewarm
-	 * extension. But it requires manual invocation of pg_perwarm function for each relation
-	 * (including indexes and TOAST) which is very inconvenient. Also Neon can restart compute
-	 * at any moment of time (for example because of inactivity), so it is not clear who and when
-	 * should do prewarming.
+	 * Note: access strategies are ignored while we still have empty buffers, as it makes
+	 * little sense to evict buffers to get space if buffer space is still available.
+	 *
+	 * Neon: It is critical for Neon architecture to fill shared buffers as fast as possible
+	 * with relation data (and not drop buffers if there are still empty buffers available)
+	 * because we can not rely on the OS's page cache. Although prewarming can be done using
+	 * the pg_prewarm extension, it requires manual invocations of `pg_perwarm()` for each
+	 * relation (including indexes and TOAST), which is very inconvenient. Also, Neon can
+	 * restart PostgreSQL at any moment of time (e.g., because of inactivity), so it is not
+	 * clear who and when we should do prewarming. Ignoring the access strategy while free
+	 * buffers are still available is therefore critical to keep warm data in caches.
 	 */
 	if (strategy != NULL && StrategyControl->firstFreeBuffer < 0)
 	{
