@@ -208,8 +208,15 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state)
 	/*
 	 * If given a strategy object, see whether it can select a buffer. We
 	 * assume strategy objects don't need buffer_strategy_lock.
+	 *
+	 * Neon: is is critical for Neon architecture to warm shared buffers as fast as possible,
+	 * because we can not rely on file system cache. Prewarming can be done using pg_prewarm
+	 * extension. But it requires manual invocation of pg_perwarm function for each relation
+	 * (including indexes and TOAST) which is very inconvenient. Also Neon can restart compute
+	 * at any moment of time (for example because of inactivity), so it is not clear who and when
+	 * should do prewarming.
 	 */
-	if (strategy != NULL)
+	if (strategy != NULL && StrategyControl->firstFreeBuffer < 0)
 	{
 		buf = GetBufferFromRing(strategy, buf_state);
 		if (buf != NULL)
