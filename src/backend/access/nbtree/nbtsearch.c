@@ -1628,6 +1628,8 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 		/* Advance pefetch distance until it reaches prefetch_maximum */
 		if (so->current_prefetch_distance + INCREASE_PREFETCH_DISTANCE_STEP <= so->prefetch_maximum)
 			so->current_prefetch_distance += INCREASE_PREFETCH_DISTANCE_STEP;
+		else
+			so->current_prefetch_distance = so->prefetch_maximum;
 
 		/* How much we can prefetch */
 		prefetchLimit = Min(so->current_prefetch_distance, so->currPos.lastItem - so->currPos.firstItem + 1);
