@@ -104,7 +104,6 @@ do { \
 			 CppAsString(pname), RelationGetRelationName(scan->indexRelation)); \
 } while(0)
 
-
 static IndexScanDesc index_beginscan_internal(Relation indexRelation,
 											  int nkeys, int norderbys, Snapshot snapshot,
 											  ParallelIndexScanDesc pscan, bool temp_snap);
