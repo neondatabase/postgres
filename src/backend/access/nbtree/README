@@ -1089,7 +1089,7 @@ So there is not so much sense trying to prefetch also next leaf page.
 
 As far as it is difficult to estimate number of entries traversed by index scan,
 we prefer not to prefetch  large number of pages from the very beginning.
-Such useless prefetch can reduce performance of "dot" selects.
+Such useless prefetch can reduce the performance of point lookups.
 Instead of it we start with smallest prefetch distance and increase it
 by INCREASE_PREFETCH_DISTANCE_STEP after processing each item
 until it reaches effective_io_concurrency. In case of index-only
