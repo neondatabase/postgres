@@ -2073,7 +2073,7 @@ _bt_steppage(IndexScanDesc scan, ScanDirection dir)
 		so->markItemIndex = -1;
 	}
 
-	if (scan->xs_want_itup) /* Prefetching of leave pages for index-only scan */
+	if (scan->xs_want_itup && so->prefetch_maximum > 0) /* Prefetching of leave pages for index-only scan */
 	{
 		/* Advance pefetch distance until it reaches prefetch_maximum */
 		if (so->current_prefetch_distance + INCREASE_PREFETCH_DISTANCE_STEP <= so->prefetch_maximum)
