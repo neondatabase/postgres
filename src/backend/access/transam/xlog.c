@@ -8161,7 +8161,17 @@ StartupXLOG(void)
 		XLogCtl->InitializedUpTo = EndOfLog;
 	}
 
-	LogwrtResult.Write = LogwrtResult.Flush = EndOfLog;
+	/*
+	 * In case of neon, we initialized WAL page in WAL buffers, but the page on
+	 * disc is still zero. To prevent walproposer reading its header (it will
+	 * send it if we start on page boundary), establish flush position to the
+	 * beginning of the page. Writing of the next record will write the header
+	 * as well.
+	 */
+	if (ZenithRecoveryRequested)
+		LogwrtResult.Write = LogwrtResult.Flush = EndOfLog - (EndOfLog % XLOG_BLCKSZ);
+	else
+		LogwrtResult.Write = LogwrtResult.Flush = EndOfLog;
 
 	XLogCtl->LogwrtResult = LogwrtResult;
 
