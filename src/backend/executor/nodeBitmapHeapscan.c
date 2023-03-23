@@ -401,10 +401,6 @@ static inline void
 BitmapAdjustPrefetchTarget(BitmapHeapScanState *node)
 {
 #ifdef USE_PREFETCH
-	/* NEON: we are not using prefetch iterator for parallel plan so no need to adjust it */
-	if (node->pstate != NULL)
-		return;
-
 	if (node->prefetch_target >= node->prefetch_maximum)
 		/* don't increase any further */ ;
 	else if (node->prefetch_target >= node->prefetch_maximum / 2)
