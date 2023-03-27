@@ -7324,6 +7324,14 @@ StartupXLOG(void)
 	abortedRecPtr = InvalidXLogRecPtr;
 	missingContrecPtr = InvalidXLogRecPtr;
 
+	/*
+	 * Setup last written lsn cache, max written LSN.
+	 * Starting from here, we could be modifying pages through REDO, which requires
+	 * the existance of maxLwLsn + LwLsn LRU.
+	 */
+	XLogCtl->maxLastWrittenLsn = RedoRecPtr;
+	dlist_init(&XLogCtl->lastWrittenLsnLRU);
+
 	/* REDO */
 	if (InRecovery)
 	{
@@ -8228,8 +8236,6 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	dlist_init(&XLogCtl->lastWrittenLsnLRU);
 
 	LocalSetXLogInsertAllowed();
 
