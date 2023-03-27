@@ -154,15 +154,8 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				node->prefetch_request_pos = 0;
 				if (node->prefetch_maximum > 0)
 				{
-					pstate->prefetch_iterator =
-						tbm_prepare_shared_iterate(tbm);
-
-					/*
-					 * We don't need the mutex here as we haven't yet woke up
-					 * others.
-					 */
-					pstate->prefetch_pages = 0;
-					pstate->prefetch_target = -1;
+					node->prefetch_pages = 0;
+					node->prefetch_target = -1;
 				}
 #endif
 
@@ -264,19 +257,8 @@ BitmapHeapNext(BitmapHeapScanState *node)
 			 * Try to prefetch at least a few pages even before we get to the
 			 * second page if we don't stop reading after the first tuple.
 			 */
-			if (!pstate)
-			{
-				if (node->prefetch_target < node->prefetch_maximum)
-					node->prefetch_target++;
-			}
-			else if (pstate->prefetch_target < node->prefetch_maximum)
-			{
-				/* take spinlock while updating shared state */
-				SpinLockAcquire(&pstate->mutex);
-				if (pstate->prefetch_target < node->prefetch_maximum)
-					pstate->prefetch_target++;
-				SpinLockRelease(&pstate->mutex);
-			}
+			if (node->prefetch_target < node->prefetch_maximum)
+				node->prefetch_target++;
 #endif							/* USE_PREFETCH */
 		}
 
@@ -401,10 +383,6 @@ static inline void
 BitmapAdjustPrefetchTarget(BitmapHeapScanState *node)
 {
 #ifdef USE_PREFETCH
-	/* NEON: we are not using prefetch iterator for parallel plan so no need to adjust it */
-	if (node->pstate != NULL)
-		return;
-
 	if (node->prefetch_target >= node->prefetch_maximum)
 		/* don't increase any further */ ;
 	else if (node->prefetch_target >= node->prefetch_maximum / 2)
