@@ -275,6 +275,9 @@ cost_seqscan(Path *path, PlannerInfo *root,
 		/* The CPU cost is divided among all the workers. */
 		cpu_run_cost /= parallel_divisor;
 
+		/* Pages can be also fetched in parallel */
+		disk_run_cost /= parallel_divisor;
+
 		/*
 		 * It may be possible to amortize some of the I/O cost, but probably
 		 * not very much, because most operating systems already do aggressive
@@ -500,6 +503,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 	Cost		startup_cost = 0;
 	Cost		run_cost = 0;
 	Cost		cpu_run_cost = 0;
+	Cost		disk_run_cost = 0;
 	Cost		indexStartupCost;
 	Cost		indexTotalCost;
 	Selectivity indexSelectivity;
@@ -739,8 +743,7 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 
 	startup_cost += qpqual_cost.startup;
 	cpu_per_tuple = cpu_tuple_cost + qpqual_cost.per_tuple;
-
-	cpu_run_cost += cpu_per_tuple * tuples_fetched;
+	disk_run_cost = cpu_per_tuple * tuples_fetched;
 
 	/* tlist eval costs are paid per output row, not per tuple scanned */
 	startup_cost += path->path.pathtarget->cost.startup;
@@ -755,9 +758,12 @@ cost_index(IndexPath *path, PlannerInfo *root, double loop_count,
 
 		/* The CPU cost is divided among all the workers. */
 		cpu_run_cost /= parallel_divisor;
+
+		/* Pages can be also fetched in parallel */
+		disk_run_cost /= parallel_divisor;
 	}
 
-	run_cost += cpu_run_cost;
+	run_cost += disk_run_cost + cpu_run_cost;
 
 	path->path.startup_cost = startup_cost;
 	path->path.total_cost = startup_cost + run_cost;
@@ -964,6 +970,7 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 	Cost		cpu_per_tuple;
 	Cost		cost_per_page;
 	Cost		cpu_run_cost;
+	Cost		disk_run_cost;
 	double		tuples_fetched;
 	double		pages_fetched;
 	double		spc_seq_page_cost,
@@ -1010,7 +1017,7 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 	else
 		cost_per_page = spc_random_page_cost;
 
-	run_cost += pages_fetched * cost_per_page;
+	disk_run_cost = pages_fetched * cost_per_page;
 
 	/*
 	 * Estimate CPU costs per tuple.
@@ -1035,11 +1042,14 @@ cost_bitmap_heap_scan(Path *path, PlannerInfo *root, RelOptInfo *baserel,
 		/* The CPU cost is divided among all the workers. */
 		cpu_run_cost /= parallel_divisor;
 
+		/* Pages can be also fetched in parallel */
+		disk_run_cost /= parallel_divisor;
+
 		path->rows = clamp_row_est(path->rows / parallel_divisor);
 	}
 
 
-	run_cost += cpu_run_cost;
+	run_cost += disk_run_cost + cpu_run_cost;
 
 	/* tlist eval costs are paid per output row, not per tuple scanned */
 	startup_cost += path->pathtarget->cost.startup;
@@ -1060,7 +1070,6 @@ cost_bitmap_tree_node(Path *path, Cost *cost, Selectivity *selec)
 	{
 		*cost = ((IndexPath *) path)->indextotalcost;
 		*selec = ((IndexPath *) path)->indexselectivity;
-
 		/*
 		 * Charge a small amount per retrieved tuple to reflect the costs of
 		 * manipulating the bitmap.  This is mostly to make sure that a bitmap
