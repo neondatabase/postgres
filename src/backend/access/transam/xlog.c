@@ -5303,6 +5303,14 @@ StartupXLOG(void)
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
+	/*
+	 * Setup last written lsn cache, max written LSN.
+	 * Starting from here, we could be modifying pages through REDO, which requires
+	 * the existance of maxLwLsn + LwLsn LRU.
+	 */
+	XLogCtl->maxLastWrittenLsn = RedoRecPtr;
+	dlist_init(&XLogCtl->lastWrittenLsnLRU);
+
 	/* REDO */
 	if (InRecovery)
 	{
@@ -5671,8 +5679,6 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	dlist_init(&XLogCtl->lastWrittenLsnLRU);
 
 	/*
 	 * Preallocate additional log files, if wanted.
