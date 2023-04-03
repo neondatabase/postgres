@@ -156,7 +156,7 @@ BitmapHeapNext(BitmapHeapScanState *node)
 #ifdef USE_PREFETCH
 			node->prefetch_head = 0;
 			node->prefetch_pages = 0;
-			node->prefetch_target = 0;//-1;
+			node->prefetch_target = -1;
 #endif
 
 			/* Allocate a private iterator and attach the shared state to it */
