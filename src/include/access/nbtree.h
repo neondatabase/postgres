@@ -1067,6 +1067,22 @@ typedef struct BTScanOpaqueData
 	/* keep these last in struct for efficiency */
 	BTScanPosData currPos;		/* current position data */
 	BTScanPosData markPos;		/* marked position, if any */
+
+	/* Neon: prefetch state */
+	int         prefetch_maximum; /* maximal number of prefetch requests */
+
+	/* Prefetch of leave pages of B-Tree for index-only scan */
+	BlockNumber prefetch_blocks[MaxTIDsPerBTreePage + 1]; /* leaves + parent page */
+	BlockNumber next_parent; /* pointer to next parent page */
+	int         n_prefetch_requests; /* number of active prefetch requests */
+	int         n_prefetch_blocks; /* number of elements in prefetch_blocks */
+	int         last_prefetch_index; /* current position in prefetch_blocks (prefetch_blocks[0..last_prefetch_index] are already requested */
+
+	/* Prefech of referenced heap pages for index scan */
+	/* To minimize waste prefetch requests we start with prefetch distance 0
+	 * and increase it until it reaches prefetch_maximum
+	 */
+	int         current_prefetch_distance;
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;
@@ -1230,6 +1246,7 @@ extern int32 _bt_compare(Relation rel, BTScanInsert key, Page page, OffsetNumber
 extern bool _bt_first(IndexScanDesc scan, ScanDirection dir);
 extern bool _bt_next(IndexScanDesc scan, ScanDirection dir);
 extern Buffer _bt_get_endpoint(Relation rel, uint32 level, bool rightmost,
+							   BlockNumber* parent,
 							   Snapshot snapshot);
 
 /*
