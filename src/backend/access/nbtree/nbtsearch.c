@@ -948,8 +948,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 
 	pgstat_count_index_scan(rel);
 
-	elog(LOG, "_bt_first: so=%p, parallel_scan=%p", so, scan->parallel_scan);
-
 	/*
 	 * Examine the scan keys and eliminate any redundant keys; also mark the
 	 * keys that must be matched to continue the scan.

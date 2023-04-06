@@ -369,7 +369,6 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
 	so->prefetch_maximum = 0;   /* disable prefetch */
-	elog(LOG, "Begin index scan: so=%p", so);
 
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
