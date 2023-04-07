@@ -149,19 +149,15 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				 * multiple processes to iterate jointly.
 				 */
 				pstate->tbmiterator = tbm_prepare_shared_iterate(tbm);
-#ifdef USE_PREFETCH
-				node->n_prefetch_requests = 0;
-				node->prefetch_request_pos = 0;
-				if (node->prefetch_maximum > 0)
-				{
-					node->prefetch_pages = 0;
-					node->prefetch_target = -1;
-				}
-#endif
 
 				/* We have initialized the shared state so wake up others. */
 				BitmapDoneInitializingSharedState(pstate);
 			}
+#ifdef USE_PREFETCH
+			node->prefetch_head = 0;
+			node->prefetch_pages = 0;
+			node->prefetch_target = -1;
+#endif
 
 			/* Allocate a private iterator and attach the shared state to it */
 			node->shared_tbmiterator = shared_tbmiterator =
@@ -184,20 +180,25 @@ BitmapHeapNext(BitmapHeapScanState *node)
 		if (tbmres == NULL)
 		{
 			if (!pstate)
-				node->tbmres = tbmres = tbm_iterate(tbmiterator);
+				tbmres = tbm_iterate(tbmiterator);
 			else
 			{
-				if (node->n_prefetch_requests != 0)
+				if (node->prefetch_pages != 0)
 				{
-					node->tbmres = tbmres = (TBMIterateResult *)&node->prefetch_requests[node->prefetch_request_pos];
-					node->n_prefetch_requests -= 1;
-					node->prefetch_request_pos = (node->prefetch_request_pos + 1) % MAX_IO_CONCURRENCY;
-					if (node->prefetch_pages != 0)
-						node->prefetch_pages -= 1;
+					tbmres = (TBMIterateResult *)&node->prefetch_requests[node->prefetch_head];
+					node->prefetch_pages -= 1;
+					node->prefetch_head = (node->prefetch_head + 1) % MAX_IO_CONCURRENCY;
 				}
 				else
-					node->tbmres = tbmres = tbm_shared_iterate(shared_tbmiterator);
+					tbmres = tbm_shared_iterate(shared_tbmiterator);
+				if (tbmres)
+				{
+					/* Need to copy result because iterator can be used for prefetch and vocant position in prefetch ring buffer can also be reused */
+					memcpy(&node->tbmres_copy, tbmres, offsetof(TBMIterateResult, offsets) + sizeof(OffsetNumber)*Max(tbmres->ntuples, 0));
+					tbmres = (TBMIterateResult *)&node->tbmres_copy;
+				}
 			}
+			node->tbmres = tbmres;
 			if (tbmres == NULL)
 			{
 				/* no more entries in the bitmap */
@@ -236,7 +237,6 @@ BitmapHeapNext(BitmapHeapScanState *node)
 				/* AM doesn't think this block is valid, skip */
 				continue;
 			}
-
 			if (tbmres->ntuples >= 0)
 				node->exact_pages++;
 			else
@@ -455,8 +455,7 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 
 			if (node->prefetch_pages < node->prefetch_target)
 			{
-				Assert(node->n_prefetch_requests < MAX_IO_CONCURRENCY);
-				node->prefetch_pages++;
+				Assert(node->prefetch_pages < MAX_IO_CONCURRENCY);
 				do_prefetch = true;
 			}
 
@@ -466,8 +465,10 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 			tbmpre = tbm_shared_iterate(node->shared_tbmiterator);
 			if (tbmpre != NULL)
 			{
-				memcpy(&node->prefetch_requests[(node->prefetch_request_pos + node->n_prefetch_requests) % MAX_IO_CONCURRENCY], tbmpre, sizeof(TBMIteratePrefetchResult));
-				node->n_prefetch_requests += 1;
+				memcpy(&node->prefetch_requests[(node->prefetch_head + node->prefetch_pages) % MAX_IO_CONCURRENCY],
+					   tbmpre,
+					   offsetof(TBMIterateResult, offsets) + sizeof(OffsetNumber)*Max(tbmpre->ntuples, 0));
+				node->prefetch_pages += 1;
 			}
 			else
 			{
@@ -477,7 +478,7 @@ BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan)
 
 			/* As above, skip prefetch if we expect not to need page */
 			skip_fetch = (node->can_skip_fetch &&
-						  (node->tbmres ? !node->tbmres->recheck : false) &&
+						  !tbmpre->recheck &&
 						  VM_ALL_VISIBLE(node->ss.ss_currentRelation,
 										 tbmpre->blockno,
 										 &node->pvmbuffer));
@@ -715,8 +716,7 @@ ExecInitBitmapHeapScan(BitmapHeapScan *node, EState *estate, int eflags)
 	 * Maximum number of prefetches for the tablespace if configured,
 	 * otherwise the current value of the effective_io_concurrency GUC.
 	 */
-	scanstate->prefetch_maximum =
-		get_tablespace_io_concurrency(currentRelation->rd_rel->reltablespace);
+	scanstate->prefetch_maximum = get_tablespace_io_concurrency(currentRelation->rd_rel->reltablespace);
 
 	scanstate->ss.ss_currentRelation = currentRelation;
 
