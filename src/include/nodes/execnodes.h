@@ -1699,8 +1699,8 @@ typedef struct BitmapHeapScanState
 	TBMSharedIterator *shared_tbmiterator;
 	/* parallel worker private ring buffer with prefetch requests: it allows to access prefetch result from the same worker */
 	TBMIteratePrefetchResult prefetch_requests[MAX_IO_CONCURRENCY];
-	int n_prefetch_requests; /* number of used elements in prefetch_requests ring buffer */
-	int prefetch_request_pos; /* head position in ring buffer */
+	TBMIteratePrefetchResult tbmres_copy; /* copy of current iterator result */
+	int prefetch_head; /* head position in ring buffer */
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
