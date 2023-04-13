@@ -754,6 +754,7 @@ typedef struct XLogCtlData
 	TimeLineID	lastReplayedTLI;
 	XLogRecPtr	replayEndRecPtr;
 	TimeLineID	replayEndTLI;
+	ConditionVariable replayProgressCV;
 	/* timestamp of last COMMIT/ABORT record replayed (or being replayed) */
 	TimestampTz recoveryLastXTime;
 
@@ -5340,7 +5341,65 @@ XLOGShmemInit(void)
 	SpinLockInit(&XLogCtl->info_lck);
 	SpinLockInit(&XLogCtl->ulsn_lck);
 	InitSharedLatch(&XLogCtl->recoveryWakeupLatch);
+	ConditionVariableInit(&XLogCtl->replayProgressCV);
 	ConditionVariableInit(&XLogCtl->recoveryNotPausedCV);
+}
+
+/*
+ * Wait for recovery to complete replaying all WAL up to and including
+ * redoEndRecPtr.
+ *
+ * This gets woken up for every WAL record replayed, so make sure you're not
+ * trying to wait an LSN that is too far in the future.
+ */
+void
+XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
+{
+	static XLogRecPtr replayRecPtr = 0;
+
+	if (!RecoveryInProgress())
+		return;
+
+	/*
+	 * Check the backend-local variable first, we may be able to skip accessing
+	 * shared memory (which requires locking)
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+	/*
+	 * Check again if we're going to need to wait, now that we've updated
+	 * the local cached variable.
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	/*
+	 * We need to wait for the variable, so prepare for that.
+	 * 
+	 * Note: This wakes up every time a WAL record is replayed, so this can
+	 * be expensive.
+	 */
+	ConditionVariablePrepareToSleep(&XLogCtl->replayProgressCV);
+
+	while (redoEndRecPtr > replayRecPtr)
+	{
+		bool timeout;
+		timeout = ConditionVariableTimedSleep(&XLogCtl->replayProgressCV,
+											  10000000,
+											  WAIT_EVENT_RECOVERY_WAL_STREAM);
+		
+		if (timeout)
+			ereport(LOG,
+					(errmsg("Waiting for recovery to catch up to %X/%X",
+							LSN_FORMAT_ARGS(redoEndRecPtr))));
+		else
+			replayRecPtr = GetXLogReplayRecPtr(NULL);
+	}
+
+	ConditionVariableCancelSleep();
 }
 
 /*
@@ -7265,6 +7324,14 @@ StartupXLOG(void)
 	abortedRecPtr = InvalidXLogRecPtr;
 	missingContrecPtr = InvalidXLogRecPtr;
 
+	/*
+	 * Setup last written lsn cache, max written LSN.
+	 * Starting from here, we could be modifying pages through REDO, which requires
+	 * the existance of maxLwLsn + LwLsn LRU.
+	 */
+	XLogCtl->maxLastWrittenLsn = RedoRecPtr;
+	dlist_init(&XLogCtl->lastWrittenLsnLRU);
+
 	/* REDO */
 	if (InRecovery)
 	{
@@ -7772,6 +7839,8 @@ StartupXLOG(void)
 						WalSndWakeup();
 				}
 
+				ConditionVariableBroadcast(&XLogCtl->replayProgressCV);
+
 				/* Exit loop if we reached inclusive recovery target */
 				if (recoveryStopsAfter(xlogreader))
 				{
@@ -8167,8 +8236,6 @@ StartupXLOG(void)
 
 	XLogCtl->LogwrtRqst.Write = EndOfLog;
 	XLogCtl->LogwrtRqst.Flush = EndOfLog;
-	XLogCtl->maxLastWrittenLsn = EndOfLog;
-	dlist_init(&XLogCtl->lastWrittenLsnLRU);
 
 	LocalSetXLogInsertAllowed();
 
@@ -10978,11 +11045,14 @@ xlog_redo(XLogReaderState *record)
 			XLogRedoAction result;
 
 			result = XLogReadBufferForRedo(record, block_id, &buffer);
-			if (result == BLK_DONE && !IsUnderPostmaster)
+			if (result == BLK_DONE && (!IsUnderPostmaster || StandbyMode))
 			{
 				/*
-				 * In the special WAL process, blocks that are being ignored
-				 * return BLK_DONE. Accept that.
+				 * NEON: In the special WAL redo process, blocks that are being
+				 * ignored return BLK_DONE. Accept that.
+				 * Additionally, in standby mode, blocks that are not present
+				 * in shared buffers are ignored during replay, so we also
+				 * ignore those blocks.
 				 */
 			}
 			else if (result != BLK_RESTORED)
