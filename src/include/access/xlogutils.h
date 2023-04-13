@@ -33,6 +33,10 @@ typedef enum
 								 * need to be replayed) */
 } XLogRedoAction;
 
+/*
+ * Returns true if we shouldn't do REDO on that block in record indicated by
+ * block_id; false otherwise.
+ */
 extern bool	(*redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id);
 
 extern XLogRedoAction XLogReadBufferForRedo(XLogReaderState *record,
