@@ -336,6 +336,7 @@ typedef struct XLogRecoveryCtlData
 	XLogRecPtr	lastReplayedReadRecPtr; /* start position */
 	XLogRecPtr	lastReplayedEndRecPtr;	/* end+1 position */
 	TimeLineID	lastReplayedTLI;	/* timeline */
+	ConditionVariable replayProgressCV; /* CV for waiters */
 
 	/*
 	 * When we're currently replaying a record, ie. in a redo function,
@@ -465,6 +466,7 @@ XLogRecoveryShmemInit(void)
 
 	SpinLockInit(&XLogRecoveryCtl->info_lck);
 	InitSharedLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+	ConditionVariableInit(&XLogRecoveryCtl->replayProgressCV);
 	ConditionVariableInit(&XLogRecoveryCtl->recoveryNotPausedCV);
 }
 
@@ -484,6 +486,64 @@ EnableStandbyMode(void)
 	 * startup_progress_timeout_handler() unnecessarily.
 	 */
 	disable_startup_progress_timeout();
+}
+
+/*
+ * Wait for recovery to complete replaying all WAL up to and including
+ * redoEndRecPtr.
+ *
+ * This gets woken up for every WAL record replayed, so make sure you're not
+ * trying to wait an LSN that is too far in the future.
+ */
+void
+XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
+{
+	static XLogRecPtr replayRecPtr = 0;
+
+	if (!RecoveryInProgress())
+		return;
+
+	/*
+	 * Check the backend-local variable first, we may be able to skip accessing
+	 * shared memory (which requires locking)
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+	/*
+	 * Check again if we're going to need to wait, now that we've updated
+	 * the local cached variable.
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	/*
+	 * We need to wait for the variable, so prepare for that.
+	 * 
+	 * Note: This wakes up every time a WAL record is replayed, so this can
+	 * be expensive.
+	 */
+	ConditionVariablePrepareToSleep(&XLogRecoveryCtl->replayProgressCV);
+
+	while (redoEndRecPtr > replayRecPtr)
+	{
+		bool timeout;
+		timeout = ConditionVariableTimedSleep(&XLogRecoveryCtl->replayProgressCV,
+											  10000000, /* 10 seconds */
+											  WAIT_EVENT_RECOVERY_WAL_STREAM);
+
+		replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+		if (timeout)
+			ereport(LOG,
+					(errmsg("Waiting for recovery to catch up to %X/%X (currently %X/%X)",
+							LSN_FORMAT_ARGS(redoEndRecPtr),
+							LSN_FORMAT_ARGS(replayRecPtr))));
+	}
+
+	ConditionVariableCancelSleep();
 }
 
 /*
@@ -2051,6 +2111,8 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 		/* Reset the prefetcher. */
 		XLogPrefetchReconfigure();
 	}
+
+	ConditionVariableBroadcast(&XLogRecoveryCtl->replayProgressCV);
 }
 
 /*
