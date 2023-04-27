@@ -52,6 +52,11 @@ static ParamListInfo EvaluateParams(ParseState *pstate,
 									EState *estate);
 static Datum build_regtype_array(Oid *param_types, int num_params);
 
+
+void  (*save_prepared_statement_hook)(char const* stmt_name, char const* stmt_body, bool from_sql);
+char* (*load_prepared_statement_hook)(char const* stmt_name, bool* from_sql);
+bool  (*drop_prepared_statement_hook)(char const* stmt_name);
+
 /*
  * Implements the 'PREPARE' utility statement.
  */
@@ -419,8 +424,119 @@ StorePreparedStatement(const char *stmt_name,
 	entry->from_sql = from_sql;
 	entry->prepare_time = cur_ts;
 
+	if (save_prepared_statement_hook)
+		save_prepared_statement_hook(stmt_name, plansource->query_string, from_sql);
+
 	/* Now it's safe to move the CachedPlanSource to permanent memory */
 	SaveCachedPlan(plansource);
+}
+
+
+/*
+ * Parse stored prepared statement text and store built plan
+ */
+static PreparedStatement *
+RestorePreparedStatement(char const* stmt_name, char const* query_string, bool from_sql)
+{
+	bool		snapshot_set = false;
+	List	   *parsetree_list;
+	RawStmt    *raw_parse_tree;
+	List	   *querytree_list;
+	CachedPlanSource *psrc;
+	MemoryContext oldcontext;
+	Oid		   *paramTypes = NULL;
+	int			numParams = 0;
+	PreparedStatement *pstmt;
+
+	/* Named prepared statement --- parse in MessageContext */
+	oldcontext = MemoryContextSwitchTo(MessageContext);
+
+	/*
+	 * Do basic parsing of the query or queries (this should be safe even if
+	 * we are in aborted transaction state!)
+	 */
+	parsetree_list = pg_parse_query(query_string);
+	if (list_length(parsetree_list) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("cannot insert multiple commands into a prepared statement")));
+
+	raw_parse_tree = linitial_node(RawStmt, parsetree_list);
+	if (from_sql)
+	{
+		Assert(IsA(raw_parse_tree->stmt, PrepareStmt));
+		raw_parse_tree->stmt = ((PrepareStmt*)raw_parse_tree->stmt)->query;
+	}
+
+	/*
+	 * Create the CachedPlanSource before we do parse analysis, since it
+	 * needs to see the unmodified raw parse tree.
+	 */
+	psrc = CreateCachedPlan(raw_parse_tree, query_string,
+							CreateCommandTag(raw_parse_tree->stmt));
+	/*
+	 * Set up a snapshot if parse analysis will need one.
+	 */
+	if (analyze_requires_snapshot(raw_parse_tree))
+	{
+		PushActiveSnapshot(GetTransactionSnapshot());
+		snapshot_set = true;
+	}
+	/*
+	 * Analyze and rewrite the query.  Note that the originally specified
+	 * parameter set is not required to be complete, so we have to use
+	 * pg_analyze_and_rewrite_varparams().
+	 */
+	querytree_list = pg_analyze_and_rewrite_varparams(raw_parse_tree,
+													  query_string,
+													  &paramTypes,
+													  &numParams,
+													  NULL);
+	/* Done with the snapshot used for parsing */
+	if (snapshot_set)
+		PopActiveSnapshot();
+
+	/* Finish filling in the CachedPlanSource */
+	CompleteCachedPlan(psrc,
+					   querytree_list,
+					   NULL,
+					   paramTypes,
+					   numParams,
+					   NULL,
+					   NULL,
+					   CURSOR_OPT_PARALLEL_OK,	/* allow parallel mode */
+					   true);	/* fixed result */
+
+	/* If we got a cancel signal during analysis, quit */
+	CHECK_FOR_INTERRUPTS();
+
+	/* Initialize the hash table, if necessary */
+	if (!prepared_queries)
+		InitQueryHashTable();
+
+	pstmt = (PreparedStatement *) hash_search(prepared_queries,
+											  stmt_name,
+											  HASH_ENTER,
+											  NULL);
+
+	/* Fill in the hash table entry */
+	pstmt->plansource = psrc;
+	pstmt->from_sql = from_sql;
+	pstmt->prepare_time = GetCurrentStatementStartTimestamp();
+
+	/* Now it's safe to move the CachedPlanSource to permanent memory */
+	SaveCachedPlan(psrc);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * We do NOT close the open transaction command here; that only happens
+	 * when the client sends Sync.  Instead, do CommandCounterIncrement just
+	 * in case something happened during parse/plan.
+	 */
+	CommandCounterIncrement();
+
+	return pstmt;
 }
 
 /*
@@ -448,11 +564,23 @@ FetchPreparedStatement(const char *stmt_name, bool throwError)
 		entry = NULL;
 
 	if (!entry && throwError)
+	{
+		if (load_prepared_statement_hook)
+		{
+			bool from_sql;
+			char* query_string = load_prepared_statement_hook(stmt_name, &from_sql);
+			if (query_string != NULL)
+			{
+				entry = RestorePreparedStatement(stmt_name, query_string, from_sql);
+				pfree(query_string);
+				return entry;
+			}
+		}
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_PSTATEMENT),
 				 errmsg("prepared statement \"%s\" does not exist",
 						stmt_name)));
-
+	}
 	return entry;
 }
 
@@ -519,6 +647,15 @@ void
 DropPreparedStatement(const char *stmt_name, bool showError)
 {
 	PreparedStatement *entry;
+
+	if (drop_prepared_statement_hook)
+	{
+		if (drop_prepared_statement_hook(stmt_name))
+		{
+			/* Do not treate lack of prepared statement as error */
+			showError = false;
+		}
+	}
 
 	/* Find the query's hash table entry; raise error if wanted */
 	entry = FetchPreparedStatement(stmt_name, showError);

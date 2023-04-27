@@ -17,6 +17,10 @@
 #include "datatype/timestamp.h"
 #include "utils/plancache.h"
 
+extern void (*save_prepared_statement_hook)(char const* stmt_name, char const* stmt_body, bool from_sql);
+extern char* (*load_prepared_statement_hook)(char const* stmt_name, bool* from_sql);
+extern bool  (*drop_prepared_statement_hook)(char const* stmt_name);
+
 /*
  * The data structure representing a prepared statement.  This is now just
  * a thin veneer over a plancache entry --- the main addition is that of
