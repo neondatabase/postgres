@@ -1161,7 +1161,7 @@ readRecoverySignalFile(void)
 	if (standby_signal_file_found)
 	{
 		StandbyModeRequested = true;
-		ArchiveRecoveryRequested = XLogRecPtrIsInvalid(zenithLastRec); /* no need to perform WAL recovery in Neon */
+		ArchiveRecoveryRequested = true;
 	}
 	else if (recovery_signal_file_found)
 	{
@@ -1812,7 +1812,10 @@ PerformWalRecovery(void)
 	else
 	{
 		/* just have to read next record after CheckPoint */
-		Assert(xlogreader->ReadRecPtr == CheckPointLoc);
+		if (ZenithRecoveryRequested)
+			xlogreader->ReadRecPtr = CheckPointLoc;
+		else
+			Assert(xlogreader->ReadRecPtr == CheckPointLoc);
 		replayTLI = CheckPointTLI;
 		record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
 	}
