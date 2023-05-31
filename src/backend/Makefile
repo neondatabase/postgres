@@ -44,6 +44,12 @@ OBJS = \
 	$(top_builddir)/src/common/libpgcommon_srv.a \
 	$(top_builddir)/src/port/libpgport_srv.a
 
+LIBOBJS = \
+	$(LOCALOBJS) \
+	$(SUBDIROBJS)
+
+LIBOBJS := $(filter-out main/objfiles.txt, $(LIBOBJS))
+
 # We put libpgport and libpgcommon into OBJS, so remove it from LIBS; also add
 # libldap and ICU
 LIBS := $(filter-out -lpgport -lpgcommon, $(LIBS)) $(LDAP_LIBS_BE) $(ICU_LIBS)
@@ -324,3 +330,11 @@ maintainer-clean: distclean
 .PHONY: quick
 quick: $(OBJS)
 	$(CC) $(CFLAGS) $(call expand_subsys,$^) $(LDFLAGS) $(LDFLAGS_EX) $(export_dynamic) $(LIBS) -o postgres
+
+
+
+postgres-lib: $(LIBOBJS)
+	rm -rf libpostgres.a
+	echo $(LIBOBJS)
+	echo $(LIBS)
+	ar rcs libpostgres.a $(call expand_subsys,$(LIBOBJS))
