@@ -774,4 +774,10 @@ extern PGDLLIMPORT fmgr_hook_type fmgr_hook;
 #define FmgrHookIsNeeded(fn_oid)							\
 	(!needs_fmgr_hook ? false : (*needs_fmgr_hook)(fn_oid))
 
+
+
+// download_extension_file_hook (filename, is_library)
+typedef bool (*download_extension_file_hook_type) (const char *, bool);
+extern PGDLLIMPORT download_extension_file_hook_type download_extension_file_hook;
+
 #endif							/* FMGR_H */
