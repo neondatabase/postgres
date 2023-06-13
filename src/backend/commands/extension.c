@@ -399,6 +399,7 @@ get_extension_script_directory(ExtensionControlFile *control)
 {
 	char		sharepath[MAXPGPATH];
 	char	   *result;
+	struct stat fst;
 
 	/*
 	 * The directory parameter can be omitted, absolute, or relative to the
@@ -413,6 +414,16 @@ get_extension_script_directory(ExtensionControlFile *control)
 	get_share_path(my_exec_path, sharepath);
 	result = (char *) palloc(MAXPGPATH);
 	snprintf(result, MAXPGPATH, "%s/%s", sharepath, control->directory);
+
+	// If directory does not exist, check remote extension storage
+	if (stat(result, &fst) < 0)
+	{
+		// request download of extension files from for control->directory
+		if (download_extension_file_hook != NULL)
+		{
+			download_extension_file_hook(control->directory, false);
+		}
+	}
 
 	return result;
 }
@@ -1453,6 +1464,13 @@ CreateExtensionInternal(char *extensionName,
 	 * will get us there.
 	 */
 	filename = get_extension_script_filename(pcontrol, NULL, versionName);
+
+	// request download of extension files from compute_ctl
+	if (download_extension_file_hook != NULL)
+	{
+		download_extension_file_hook(extensionName, false);
+	}
+
 	if (stat(filename, &fst) == 0)
 	{
 		/* Easy, no extra scripts */
