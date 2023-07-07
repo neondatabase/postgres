@@ -54,7 +54,8 @@ static void AddRoleMems(const char *rolename, Oid roleid,
 static void DelRoleMems(const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
 						bool admin_opt);
-
+static void check_role_membership_authorization(Oid currentUserId, Oid roleid,
+												bool is_grant);
 
 /* Check if current user has createrole privileges */
 static bool
@@ -1475,6 +1476,8 @@ AddRoleMems(const char *rolename, Oid roleid,
 	if (!memberIds)
 		return;
 
+	check_role_membership_authorization(grantorId, roleid, true);
+
 	/*
 	 * Check permissions: must have createrole or admin option on the role to
 	 * be changed.  To mess with a superuser role, you gotta be superuser.
@@ -1653,6 +1656,8 @@ DelRoleMems(const char *rolename, Oid roleid,
 	if (!memberIds)
 		return;
 
+	check_role_membership_authorization(GetUserId(), roleid, false);
+
 	/*
 	 * Check permissions: must have createrole or admin option on the role to
 	 * be changed.  To mess with a superuser role, you gotta be superuser.
@@ -1734,4 +1739,72 @@ DelRoleMems(const char *rolename, Oid roleid,
 	 * Close pg_authmem, but keep lock till commit.
 	 */
 	table_close(pg_authmem_rel, NoLock);
+}
+
+/*
+ * Check that currentUserId has permission to modify the membership list for
+ * roleid. Throw an error if not.
+ */
+static void
+check_role_membership_authorization(Oid currentUserId, Oid roleid,
+									bool is_grant)
+{
+	/*
+	 * The charter of pg_database_owner is to have exactly one, implicit,
+	 * situation-dependent member.  There's no technical need for this
+	 * restriction.  (One could lift it and take the further step of making
+	 * object_ownercheck(DatabaseRelationId, ...) equivalent to
+	 * has_privs_of_role(roleid, ROLE_PG_DATABASE_OWNER), in which case
+	 * explicit, situation-independent members could act as the owner of any
+	 * database.)
+	 */
+	if (is_grant && roleid == ROLE_PG_DATABASE_OWNER)
+		ereport(ERROR,
+				errmsg("role \"%s\" cannot have explicit members",
+					   GetUserNameFromId(roleid, false)));
+
+	/* To mess with a superuser role, you gotta be superuser. */
+	if (superuser_arg(roleid))
+	{
+		if (!superuser_arg(currentUserId))
+		{
+			if (is_grant)
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to grant role \"%s\"",
+								GetUserNameFromId(roleid, false)),
+						 errdetail("Only roles with the %s attribute may grant roles with the %s attribute.",
+								   "SUPERUSER", "SUPERUSER")));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to revoke role \"%s\"",
+								GetUserNameFromId(roleid, false)),
+						 errdetail("Only roles with the %s attribute may revoke roles with the %s attribute.",
+								   "SUPERUSER", "SUPERUSER")));
+		}
+	}
+	else
+	{
+		/*
+		 * Otherwise, must have admin option on the role to be changed.
+		 */
+		if (!is_admin_of_role(currentUserId, roleid))
+		{
+			if (is_grant)
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to grant role \"%s\"",
+								GetUserNameFromId(roleid, false)),
+						 errdetail("Only roles with the %s option on role \"%s\" may grant this role.",
+								   "ADMIN", GetUserNameFromId(roleid, false))));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to revoke role \"%s\"",
+								GetUserNameFromId(roleid, false)),
+						 errdetail("Only roles with the %s option on role \"%s\" may revoke this role.",
+								   "ADMIN", GetUserNameFromId(roleid, false))));
+		}
+	}
 }
