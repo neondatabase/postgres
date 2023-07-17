@@ -1023,6 +1023,7 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * process any libraries that should be preloaded at postmaster start
 	 */
+	ereport(LOG, (errmsg("postgres processing shared_preload_libraries")));
 	process_shared_preload_libraries();
 
 	/*
@@ -1045,7 +1046,9 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Give preloaded libraries a chance to request additional shared memory.
 	 */
+	ereport(LOG, (errmsg("postgres processing shmem request")));
 	process_shmem_requests();
+	ereport(LOG, (errmsg("postgres done processing shmem request")));
 
 	/*
 	 * Now that loadable modules have had their chance to request additional
@@ -1083,7 +1086,9 @@ PostmasterMain(int argc, char *argv[])
 	/*
 	 * Set up shared memory and semaphores.
 	 */
+	ereport(LOG, (errmsg("postgres setting up shared memory")));
 	reset_shared();
+	ereport(LOG, (errmsg("postgres done setting up shared memory")));
 
 	/*
 	 * Estimate number of openable files.  This must happen after setting up
