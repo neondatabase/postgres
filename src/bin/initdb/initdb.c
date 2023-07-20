@@ -3097,6 +3097,7 @@ main(int argc, char *argv[])
 		{"locale-provider", required_argument, NULL, 15},
 		{"icu-locale", required_argument, NULL, 16},
 		{"icu-rules", required_argument, NULL, 17},
+		{"sysid", required_argument, NULL, 18},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3275,6 +3276,9 @@ main(int argc, char *argv[])
 				break;
 			case 17:
 				icu_rules = pg_strdup(optarg);
+				break;
+			case 18:
+				boot_options = psprintf("%s -s %s", boot_options, optarg);
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

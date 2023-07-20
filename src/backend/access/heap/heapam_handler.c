@@ -637,7 +637,7 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 {
 	SMgrRelation dstrel;
 
-	dstrel = smgropen(*newrlocator, rel->rd_backend);
+	dstrel = smgropen(*newrlocator, rel->rd_backend, rel->rd_rel->relpersistence);
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,

@@ -1081,3 +1081,47 @@ item is irrelevant, and need not be stored at all.  This arrangement
 corresponds to the fact that an L&Y non-leaf page has one more pointer
 than key.  Suffix truncation's negative infinity attributes behave in
 the same way.
+
+Notes About Index Scan Prefetch
+-------------------------------
+
+Prefetch can significantly improve the speed of OLAP queries.
+To be able to perform prefetch, we need to know which pages will
+be accessed during the scan. It is trivial for heap- and bitmap scans,
+but requires more effort for index scans: to implement prefetch for
+index scans, we need to find out subsequent leaf pages. 
+
+Postgres links all pages at the same level of the B-Tree in a doubly linked list and uses this list for
+forward and backward iteration. This list, however, can not trivially be used for prefetching because to locate the next page because we need first to load the current page. To prefetch more than only the next page, we can utilize the parent page's downlinks instead, as it contains references to most of the target page's sibling pages.
+
+Because Postgres' nbtree pages have no reference to their parent page, we need to remember the parent page when descending the btree and use it to prefetch subsequent pages. We will utilize the parent's linked list to improve the performance of this prefetch system past the key range of the parent page.
+
+We should prefetch not only leaf pages, but also the next parent page.
+The trick is to correctly calculate the moment when it will be needed:
+We should not issue the prefetch request when prefetch requests for all children from the current parent page have already been issued, but when there are only effective_io_concurrency line pointers left to prefetch from the page.
+
+Currently there are two different prefetch implementations for
+index-only scan and index scan. Index-only scan doesn't need to access heap tuples so it prefetches
+only B-Tree leave pages (and their parents). Prefetch of index-only scan is performed only
+if parallel plan is not used. Parallel index scan is using critical section for obtaining next
+page by parallel worker. Leaf page is loaded in this critical section.
+And if most of time is spent in loading the page, then it actually eliminates any concurrency
+and makes prefetch useless. For relatively small tables Postgres will not choose parallel plan in
+any case. And for large tables it can be enforced by setting max_parallel_workers_per_gather=0.
+
+Prefetch for normal (not index-only) index tries to prefetch heap tuples
+referenced from leaf page. Average number of items per page
+is about 100 which is comparable with default value of effective_io_concurrency.
+So there is not so much sense trying to prefetch also next leaf page.
+
+As far as it is difficult to estimate number of entries traversed by index scan,
+we prefer not to prefetch  large number of pages from the very beginning.
+Such useless prefetch can reduce the performance of point lookups.
+Instead of it we start with smallest prefetch distance and increase it
+by INCREASE_PREFETCH_DISTANCE_STEP after processing each item
+until it reaches effective_io_concurrency. In case of index-only
+scan we increase prefetch distance after processing each leaf pages
+and for index scan - after processing each tuple.
+The only exception is case when no key bounds are specified.
+In this case we traverse the whole relation and it makes sense
+to start with the largest possible prefetch distance from the very beginning.
