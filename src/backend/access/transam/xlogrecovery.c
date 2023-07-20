@@ -338,6 +338,7 @@ typedef struct XLogRecoveryCtlData
 	XLogRecPtr	lastReplayedReadRecPtr; /* start position */
 	XLogRecPtr	lastReplayedEndRecPtr;	/* end+1 position */
 	TimeLineID	lastReplayedTLI;	/* timeline */
+	ConditionVariable replayProgressCV; /* CV for waiters */
 
 	/*
 	 * When we're currently replaying a record, ie. in a redo function,
@@ -467,6 +468,7 @@ XLogRecoveryShmemInit(void)
 
 	SpinLockInit(&XLogRecoveryCtl->info_lck);
 	InitSharedLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+	ConditionVariableInit(&XLogRecoveryCtl->replayProgressCV);
 	ConditionVariableInit(&XLogRecoveryCtl->recoveryNotPausedCV);
 }
 
@@ -486,6 +488,64 @@ EnableStandbyMode(void)
 	 * startup_progress_timeout_handler() unnecessarily.
 	 */
 	disable_startup_progress_timeout();
+}
+
+/*
+ * Wait for recovery to complete replaying all WAL up to and including
+ * redoEndRecPtr.
+ *
+ * This gets woken up for every WAL record replayed, so make sure you're not
+ * trying to wait an LSN that is too far in the future.
+ */
+void
+XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
+{
+	static XLogRecPtr replayRecPtr = 0;
+
+	if (!RecoveryInProgress())
+		return;
+
+	/*
+	 * Check the backend-local variable first, we may be able to skip accessing
+	 * shared memory (which requires locking)
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+	/*
+	 * Check again if we're going to need to wait, now that we've updated
+	 * the local cached variable.
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return;
+
+	/*
+	 * We need to wait for the variable, so prepare for that.
+	 * 
+	 * Note: This wakes up every time a WAL record is replayed, so this can
+	 * be expensive.
+	 */
+	ConditionVariablePrepareToSleep(&XLogRecoveryCtl->replayProgressCV);
+
+	while (redoEndRecPtr > replayRecPtr)
+	{
+		bool timeout;
+		timeout = ConditionVariableTimedSleep(&XLogRecoveryCtl->replayProgressCV,
+											  10000000, /* 10 seconds */
+											  WAIT_EVENT_RECOVERY_WAL_STREAM);
+
+		replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+		if (timeout)
+			ereport(LOG,
+					(errmsg("Waiting for recovery to catch up to %X/%X (currently %X/%X)",
+							LSN_FORMAT_ARGS(redoEndRecPtr),
+							LSN_FORMAT_ARGS(replayRecPtr))));
+	}
+
+	ConditionVariableCancelSleep();
 }
 
 /*
@@ -564,6 +624,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		else if (recoveryTarget == RECOVERY_TARGET_IMMEDIATE)
 			ereport(LOG,
 					(errmsg("starting point-in-time recovery to earliest consistent point")));
+		else if (ZenithRecoveryRequested)
+			ereport(LOG,
+					(errmsg("starting zenith recovery")));
 		else
 			ereport(LOG,
 					(errmsg("starting archive recovery")));
@@ -704,6 +767,33 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		/* tell the caller to delete it later */
 		haveBackupLabel = true;
 	}
+	else if (ZenithRecoveryRequested)
+	{
+		/*
+		 * Zenith hacks to spawn compute node without WAL.  Pretend that we
+		 * just finished reading the record that started at 'zenithLastRec'
+		 * and ended at checkpoint.redo
+		 */
+		elog(LOG, "starting with zenith basebackup at LSN %X/%X, prev %X/%X",
+			 LSN_FORMAT_ARGS(ControlFile->checkPointCopy.redo),
+			 LSN_FORMAT_ARGS(zenithLastRec));
+
+		CheckPointLoc = zenithLastRec;
+		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
+		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		// FIXME needs review. rebase of ff41b709abea6a9c42100a4fcb0ff434b2c846c9
+		// Is it still relevant?
+		/* make basebackup LSN available for walproposer */
+		SetRedoStartLsn(RedoStartLSN);
+		//EndRecPtr = ControlFile->checkPointCopy.redo;
+
+		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
+		wasShutdown = true;
+
+		/* Initialize expectedTLEs, like ReadRecord() does */
+		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
+		XLogPrefetcherBeginRead(xlogprefetcher, ControlFile->checkPointCopy.redo);
+	}
 	else
 	{
 		/*
@@ -765,6 +855,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		CheckPointLoc = ControlFile->checkPoint;
 		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
+		SetRedoStartLsn(RedoStartLSN);
 		RedoStartTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		record = ReadCheckpointRecord(xlogprefetcher, CheckPointLoc,
 									  CheckPointTLI);
@@ -854,7 +945,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 				(errmsg("invalid next transaction ID")));
 
 	/* sanity check */
-	if (checkPoint.redo > CheckPointLoc)
+	if (checkPoint.redo > CheckPointLoc && !ZenithRecoveryRequested)
 		ereport(PANIC,
 				(errmsg("invalid redo in checkpoint record")));
 
@@ -1452,8 +1543,13 @@ FinishWalRecovery(void)
 		lastRec = XLogRecoveryCtl->lastReplayedReadRecPtr;
 		lastRecTLI = XLogRecoveryCtl->lastReplayedTLI;
 	}
-	XLogPrefetcherBeginRead(xlogprefetcher, lastRec);
-	(void) ReadRecord(xlogprefetcher, PANIC, false, lastRecTLI);
+
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherBeginRead(xlogprefetcher, lastRec);
+		(void) ReadRecord(xlogprefetcher, PANIC, false, lastRecTLI);
+	}
+
 	endOfLog = xlogreader->EndRecPtr;
 
 	/*
@@ -1488,10 +1584,54 @@ FinishWalRecovery(void)
 	}
 
 	/*
+	 * When starting from a zenith base backup, we don't have WAL. Initialize
+	 * the WAL page where we will start writing new records from scratch,
+	 * instead.
+	 */
+	if (ZenithRecoveryRequested)
+	{
+		if (!zenithWriteOk)
+		{
+			/*
+			 * We cannot start generating new WAL if we don't have a valid prev-LSN
+			 * to use for the first new WAL record. (Shouldn't happen.)
+			 */
+			ereport(ERROR,
+					(errmsg("cannot start in read-write mode from this base backup")));
+		}
+		else
+		{
+			int offs = endOfLog % XLOG_BLCKSZ;
+			char *page = palloc0(offs);
+			XLogRecPtr pageBeginPtr = endOfLog - offs;
+			int lastPageSize = ((pageBeginPtr % wal_segment_size) == 0) ? SizeOfXLogLongPHD : SizeOfXLogShortPHD;
+
+			XLogPageHeader xlogPageHdr = (XLogPageHeader) (page);
+
+			xlogPageHdr->xlp_pageaddr = pageBeginPtr;
+			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+			xlogPageHdr->xlp_tli = recoveryTargetTLI;
+			/*
+			 * If we start writing with offset from page beginning, pretend in
+			 * page header there is a record ending where actual data will
+			 * start.
+			 */
+			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
+
+			result->lastPageBeginPtr = pageBeginPtr;
+			result->lastPage = page;
+			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(xlogreader->EndRecPtr));
+
+			// FIXME: should we unlink zenith.signal?
+		}
+	}
+	/*
 	 * Copy the last partial block to the caller, for initializing the WAL
 	 * buffer for appending new WAL.
 	 */
-	if (endOfLog % XLOG_BLCKSZ != 0)
+	else if (endOfLog % XLOG_BLCKSZ != 0)
 	{
 		char	   *page;
 		int			len;
@@ -1543,7 +1683,10 @@ ShutdownWalRecovery(void)
 	char		recoveryPath[MAXPGPATH];
 
 	/* Final update of pg_stat_recovery_prefetch. */
-	XLogPrefetcherComputeStats(xlogprefetcher);
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherComputeStats(xlogprefetcher);
+	}
 
 	/* Shut down xlogreader */
 	if (readFile >= 0)
@@ -1552,7 +1695,11 @@ ShutdownWalRecovery(void)
 		readFile = -1;
 	}
 	XLogReaderFree(xlogreader);
-	XLogPrefetcherFree(xlogprefetcher);
+
+	if (!ZenithRecoveryRequested)
+	{
+		XLogPrefetcherFree(xlogprefetcher);
+	}
 
 	if (ArchiveRecoveryRequested)
 	{
@@ -1642,7 +1789,10 @@ PerformWalRecovery(void)
 	else
 	{
 		/* just have to read next record after CheckPoint */
-		Assert(xlogreader->ReadRecPtr == CheckPointLoc);
+		if (ZenithRecoveryRequested)
+			xlogreader->ReadRecPtr = CheckPointLoc;
+		else
+			Assert(xlogreader->ReadRecPtr == CheckPointLoc);
 		replayTLI = CheckPointTLI;
 		record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
 	}
@@ -1986,6 +2136,8 @@ ApplyWalRecord(XLogReaderState *xlogreader, XLogRecord *record, TimeLineID *repl
 		/* Reset the prefetcher. */
 		XLogPrefetchReconfigure();
 	}
+
+	ConditionVariableBroadcast(&XLogRecoveryCtl->replayProgressCV);
 }
 
 /*

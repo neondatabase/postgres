@@ -32,6 +32,7 @@
 
 #include "bootstrap/bootstrap.h"
 #include "common/username.h"
+#include "miscadmin.h"
 #include "port/atomics.h"
 #include "postmaster/postmaster.h"
 #include "storage/spin.h"
@@ -51,6 +52,41 @@ static void init_locale(const char *categoryname, int category, const char *loca
 static void help(const char *progname);
 static void check_root(const char *progname);
 
+typedef int (*MainFunc) (int argc, char *argv[]);
+
+static int
+CallExtMain(char *library_name, char *main_func_name, int argc, char *argv[], bool load_config)
+{
+	MainFunc main_func;
+
+	/*
+	 * Perform just enough initialization that we can load external libraries
+	 */
+	InitStandaloneProcess(argv[0]);
+
+	SetProcessingMode(InitProcessing);
+
+	/*
+	 * Set default values for command-line options.
+	 */
+	InitializeGUCOptions();
+
+	/* Acquire configuration parameters */
+	if (load_config && !SelectConfigFiles(NULL, progname))
+		exit(1);
+
+	/*
+	 * Imitate we are early in bootstrap loading shared_preload_libraries;
+	 * neon extension sets PGC_POSTMASTER gucs requiring this.
+	 */
+	process_shared_preload_libraries_in_progress = true;
+
+	main_func = load_external_function(library_name, main_func_name, true, NULL);
+
+	process_shared_preload_libraries_in_progress = false;
+
+	return main_func(argc, argv);
+}
 
 /*
  * Any Postgres server process begins execution here.
@@ -194,6 +230,10 @@ main(int argc, char *argv[])
 	else if (argc > 1 && strcmp(argv[1], "--single") == 0)
 		PostgresSingleUserMain(argc, argv,
 							   strdup(get_user_name_or_exit(progname)));
+	else if (argc > 1 && strcmp(argv[1], "--wal-redo") == 0)
+		CallExtMain("neon_walredo", "WalRedoMain", argc, argv, false);
+	else if (argc > 1 && strcmp(argv[1], "--sync-safekeepers") == 0)
+		CallExtMain("neon", "WalProposerSync", argc, argv, true);
 	else
 		PostmasterMain(argc, argv);
 	/* the functions above should not return */
