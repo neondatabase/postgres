@@ -12,6 +12,7 @@
 #ifndef _WALSENDER_H
 #define _WALSENDER_H
 
+#include "access/xlog.h"
 #include <signal.h>
 
 /*
@@ -47,6 +48,25 @@ extern void WalSndInitStopping(void);
 extern void WalSndWaitStopping(void);
 extern void HandleWalSndInitStopping(void);
 extern void WalSndRqstFileReload(void);
+
+/*
+ * Hook to check for WAL receiving backpressure.
+ * Return value in microseconds
+ */
+extern uint64 (*delay_backend_us)(void);
+
+/* expose these so that they can be reused by the neon walproposer extension */
+extern void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
+extern TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
+extern void ProcessStandbyReply(XLogRecPtr writePtr, XLogRecPtr flushPtr,
+								XLogRecPtr applyPtr, TimestampTz replyTime,
+								bool replyRequested);
+extern void PhysicalConfirmReceivedLocation(XLogRecPtr lsn);
+extern void ProcessStandbyHSFeedback(TimestampTz   replyTime,
+									 TransactionId feedbackXmin,
+									 uint32		feedbackEpoch,
+									 TransactionId feedbackCatalogXmin,
+									 uint32		feedbackCatalogEpoch);
 
 /*
  * Remember that we want to wakeup walsenders later

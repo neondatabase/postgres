@@ -3783,7 +3783,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 		 * fails at this stage, the new cluster will need to be recreated
 		 * anyway.
 		 */
-		srel = smgropen(relation->rd_locator, relation->rd_backend);
+		srel = smgropen(relation->rd_locator, relation->rd_backend, persistence);
 		smgrdounlinkall(&srel, 1, false);
 		smgrclose(srel);
 	}

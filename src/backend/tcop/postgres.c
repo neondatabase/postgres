@@ -169,6 +169,8 @@ static ProcSignalReason RecoveryConflictReason;
 static MemoryContext row_description_context = NULL;
 static StringInfoData row_description_buf;
 
+process_interrupts_callback_t ProcessInterruptsCallback;
+
 /* ----------------------------------------------------------------
  *		decls for routines only used in this file
  * ----------------------------------------------------------------
@@ -3200,6 +3202,7 @@ ProcessInterrupts(void)
 		return;
 	InterruptPending = false;
 
+retry:
 	if (ProcDiePending)
 	{
 		ProcDiePending = false;
@@ -3447,6 +3450,13 @@ ProcessInterrupts(void)
 
 	if (ParallelApplyMessagePending)
 		HandleParallelApplyMessages();
+
+	/* Call registered callback if any */
+	if (ProcessInterruptsCallback)
+	{
+		if (ProcessInterruptsCallback())
+			goto retry;
+	}
 }
 
 /*

@@ -94,3 +94,6 @@ select box(point(i,j))
   from generate_series(1,100,5) i,
        generate_series(1,10,5) j;
 -- leave this table around, to help in testing dump/restore
+-- NEON: In Neon unlogged tables are wiped away on node restart
+-- so drop the table to keep Neon tests clean.
+drop table spgist_unlogged_tbl;
