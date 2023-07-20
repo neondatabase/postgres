@@ -145,7 +145,7 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 			return NULL;		/* placate compiler */
 	}
 
-	srel = smgropen(rlocator, backend);
+	srel = smgropen(rlocator, backend, relpersistence);
 	smgrcreate(srel, MAIN_FORKNUM, false);
 
 	if (needs_wal)
@@ -185,6 +185,7 @@ void
 log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 {
 	xl_smgr_create xlrec;
+	XLogRecPtr lsn;
 
 	/*
 	 * Make an XLOG entry reporting the file creation.
@@ -194,7 +195,8 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-	XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+	lsn = XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+	SetLastWrittenLSNForRelation(lsn, *rlocator, forkNum);
 }
 
 /*
@@ -678,7 +680,7 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				srel = smgropen(pending->rlocator, pending->backend);
+				srel = smgropen(pending->rlocator, pending->backend, 0);
 
 				/* allocate the initial array, or extend it, if needed */
 				if (maxrels == 0)
@@ -759,7 +761,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		BlockNumber total_blocks = 0;
 		SMgrRelation srel;
 
-		srel = smgropen(pendingsync->rlocator, InvalidBackendId);
+		srel = smgropen(pendingsync->rlocator, InvalidBackendId, 0);
 
 		/*
 		 * We emit newpage WAL records for smaller relations.
@@ -968,7 +970,7 @@ smgr_redo(XLogReaderState *record)
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
 		SMgrRelation reln;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId);
+		reln = smgropen(xlrec->rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
 	else if (info == XLOG_SMGR_TRUNCATE)
@@ -981,7 +983,7 @@ smgr_redo(XLogReaderState *record)
 		int			nforks = 0;
 		bool		need_fsm_vacuum = false;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId);
+		reln = smgropen(xlrec->rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 
 		/*
 		 * Forcibly create relation if it doesn't exist (which suggests that

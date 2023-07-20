@@ -2165,7 +2165,7 @@ _bt_insert_parent(Relation rel,
 					 BlockNumberIsValid(RelationGetTargetBlock(rel))));
 
 			/* Find the leftmost page at the next level up */
-			pbuf = _bt_get_endpoint(rel, opaque->btpo_level + 1, false, NULL);
+			pbuf = _bt_get_endpoint(rel, opaque->btpo_level + 1, false, NULL, NULL);
 			/* Set up a phony stack entry pointing there */
 			stack = &fakestack;
 			stack->bts_blkno = BufferGetBlockNumber(pbuf);

@@ -18,12 +18,14 @@
 #include "access/relation.h"
 #include "fmgr.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 PG_MODULE_MAGIC;
 
@@ -183,14 +185,26 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
+		BlockNumber prefetch_block = first_block;
+		Oid			nspOid;
+		int			io_concurrency;
+
+		nspOid = rel->rd_rel->reltablespace;
+		io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
+
 		/*
 		 * In buffer mode, we actually pull the data into shared_buffers.
 		 */
 		for (block = first_block; block <= last_block; ++block)
 		{
-			Buffer		buf;
-
+			Buffer buf;
+			BlockNumber prefetch_stop = block + Min(last_block - block + 1,
+													io_concurrency);
 			CHECK_FOR_INTERRUPTS();
+			while (prefetch_block < prefetch_stop)
+			{
+				PrefetchBuffer(rel, forkNumber, prefetch_block++);
+			}
 			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
 			ReleaseBuffer(buf);
 			++blocks_done;

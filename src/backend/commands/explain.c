@@ -47,7 +47,6 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
-
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
 #define X_CLOSING 1
@@ -121,6 +120,7 @@ static void show_eval_params(Bitmapset *bms_params, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
+static void show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
@@ -186,6 +186,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->costs = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "buffers") == 0)
 			es->buffers = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "prefetch") == 0)
+			es->prefetch = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -543,7 +545,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	else if (es->analyze)
 		instrument_option |= INSTRUMENT_ROWS;
 
-	if (es->buffers)
+	if (es->buffers || es->prefetch)
 		instrument_option |= INSTRUMENT_BUFFERS;
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
@@ -2102,6 +2104,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
+	/* Show prefetch usage */
+	if (es->prefetch && planstate->instrument)
+		show_prefetch_info(es, &planstate->instrument->bufusage.prefetch);
+
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
 	{
@@ -3534,6 +3540,34 @@ explain_get_index_name(Oid indexId)
 			elog(ERROR, "cache lookup failed for index %u", indexId);
 	}
 	return result;
+}
+
+/*
+ * Show prefetch statistics
+ */
+static void
+show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld expired=%lld duplicates=%lld\n",
+							 (long long) prefetch_info->hits,
+							 (long long) prefetch_info->misses,
+							 (long long) prefetch_info->expired,
+							 (long long) prefetch_info->duplicates);
+	}
+	else
+	{
+		ExplainPropertyInteger("Prefetch Hits", NULL,
+							   prefetch_info->hits, es);
+		ExplainPropertyInteger("Prefetch Misses", NULL,
+							   prefetch_info->misses, es);
+		ExplainPropertyInteger("Prefetch Expired Requests", NULL,
+							   prefetch_info->expired, es);
+		ExplainPropertyInteger("Prefetch Duplicated Requests", NULL,
+							   prefetch_info->duplicates, es);
+	}
 }
 
 /*

@@ -271,7 +271,7 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 	{
 		DecodedBkpBlock *blk;
 		BlockNumber blkno;
-		RelFileLocator rnode;
+		RelFileLocator rlocator;
 		ForkNumber	forknum;
 		Datum		values[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
 		bool		nulls[PG_GET_WAL_BLOCK_INFO_COLS] = {0};
@@ -286,7 +286,7 @@ GetWALBlockInfo(FunctionCallInfo fcinfo, XLogReaderState *record,
 		blk = XLogRecGetBlock(record, block_id);
 
 		(void) XLogRecGetBlockTagExtended(record, block_id,
-										  &rnode, &forknum, &blkno, NULL);
+										  &rlocator, &forknum, &blkno, NULL);
 
 		/* Save block_data_len */
 		if (blk->has_data)

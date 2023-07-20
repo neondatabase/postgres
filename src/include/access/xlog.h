@@ -16,6 +16,8 @@
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
+#include "storage/block.h"
+#include "storage/relfilelocator.h"
 
 
 /* Sync methods */
@@ -29,6 +31,15 @@ extern PGDLLIMPORT int sync_method;
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
 extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
+
+/*
+ * Pseudo block number used to associate LSN with relation metadata (relation size)
+ */
+#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
+
+extern bool			ZenithRecoveryRequested;
+extern XLogRecPtr	zenithLastRec;
+extern bool			zenithWriteOk;
 
 /* these variables are GUC parameters related to XLOG */
 extern PGDLLIMPORT int wal_segment_size;
@@ -53,6 +64,8 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
+extern int  lastWrittenLsnCacheSize;
+
 
 /* Archive modes */
 typedef enum ArchiveMode
@@ -246,6 +259,21 @@ extern XLogRecPtr GetFlushRecPtr(TimeLineID *insertTLI);
 extern TimeLineID GetWALInsertionTimeLine(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 
+/* neon specifics */
+
+extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
+extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+
+extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
+extern XLogRecPtr GetRedoStartLsn(void);
+
+extern void SetZenithCurrentClusterSize(uint64 size);
+extern uint64 GetZenithCurrentClusterSize(void);
+
+
 extern void SetWalWriterSleeping(bool sleeping);
 
 /*
@@ -295,6 +323,8 @@ extern SessionBackupState get_backup_status(void);
 
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
+
+#define ZENITH_SIGNAL_FILE		"zenith.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
