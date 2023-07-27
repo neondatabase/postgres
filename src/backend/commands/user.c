@@ -461,6 +461,37 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	}
 
 	/*
+	 * If the current user isn't a superuser, make them an admin of the new
+	 * role so that they can administer the new object they just created.
+	 * Superusers will be able to do that anyway.
+	 *
+	 * The grantor of record for this implicit grant is the bootstrap
+	 * superuser, which means that the CREATEROLE user cannot revoke the
+	 * grant. They can however grant the created role back to themselves with
+	 * different options, since they enjoy ADMIN OPTION on it.
+	 */
+	if (!superuser())
+	{
+		RoleSpec   *current_role = makeNode(RoleSpec);
+		List	   *memberSpecs;
+		List	   *memberIds = list_make1_oid(GetUserId());
+
+		current_role->roletype = ROLESPEC_CURRENT_ROLE;
+		current_role->location = -1;
+		memberSpecs = list_make1(current_role);
+
+		AddRoleMems(stmt->role, roleid,
+					memberSpecs, memberIds,
+					BOOTSTRAP_SUPERUSERID, true);
+
+		/*
+		 * We must make the implicit grant visible to the code below, else the
+		 * additional grants will fail.
+		 */
+		CommandCounterIncrement();
+	}
+
+	/*
 	 * Add the specified members to this new role. adminmembers get the admin
 	 * option, rolemembers don't.
 	 */
@@ -1429,7 +1460,7 @@ AddRoleMems(const char *rolename, Oid roleid,
 	 * present.  Nonetheless, inasmuch as users might look to it for a crude
 	 * audit trail, let only superusers impute the grant to a third party.
 	 */
-	if (grantorId != GetUserId() && !superuser())
+	if (grantorId != GetUserId() && grantorId != BOOTSTRAP_SUPERUSERID && !superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to set grantor")));
