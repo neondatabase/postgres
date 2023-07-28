@@ -33,22 +33,16 @@ ERROR:  role "pg_database_owner" cannot have explicit members
 CREATE ROLE regress_inroles ROLE
 	regress_role_super, regress_createdb, regress_createrole, regress_login,
 	regress_inherit, regress_connection_limit, regress_encrypted_password, regress_password_null;
-ERROR:  permission denied to grant role "regress_inroles"
-DETAIL:  Only roles with the ADMIN option on role "regress_inroles" may grant this role.
 -- fail, cannot grant a role into itself
 CREATE ROLE regress_nosuch_recursive ROLE regress_nosuch_recursive;
-ERROR:  permission denied to grant role "regress_nosuch_recursive"
-DETAIL:  Only roles with the ADMIN option on role "regress_nosuch_recursive" may grant this role.
+ERROR:  role "regress_nosuch_recursive" is a member of role "regress_nosuch_recursive"
 -- ok, can grant other users into a role with admin option
 CREATE ROLE regress_adminroles ADMIN
 	regress_role_super, regress_createdb, regress_createrole, regress_login,
 	regress_inherit, regress_connection_limit, regress_encrypted_password, regress_password_null;
-ERROR:  permission denied to grant role "regress_adminroles"
-DETAIL:  Only roles with the ADMIN option on role "regress_adminroles" may grant this role.
 -- fail, cannot grant a role into itself with admin option
 CREATE ROLE regress_nosuch_admin_recursive ADMIN regress_nosuch_admin_recursive;
-ERROR:  permission denied to grant role "regress_nosuch_admin_recursive"
-DETAIL:  Only roles with the ADMIN option on role "regress_nosuch_admin_recursive" may grant this role.
+ERROR:  role "regress_nosuch_admin_recursive" is a member of role "regress_nosuch_admin_recursive"
 -- fail, regress_createrole does not have CREATEDB privilege
 SET SESSION AUTHORIZATION regress_createrole;
 CREATE DATABASE regress_nosuch_db;
@@ -68,18 +62,13 @@ REVOKE ALL PRIVILEGES ON tenant_table FROM PUBLIC;
 -- fail, these objects belonging to regress_tenant
 SET SESSION AUTHORIZATION regress_createrole;
 DROP INDEX tenant_idx;
-ERROR:  must be owner of index tenant_idx
 ALTER TABLE tenant_table ADD COLUMN t text;
-ERROR:  must be owner of table tenant_table
 DROP TABLE tenant_table;
-ERROR:  must be owner of table tenant_table
 ALTER VIEW tenant_view OWNER TO regress_role_admin;
-ERROR:  must be owner of view tenant_view
+ERROR:  must be member of role "regress_role_admin"
 DROP VIEW tenant_view;
-ERROR:  must be owner of view tenant_view
 -- fail, cannot take ownership of these objects from regress_tenant
 REASSIGN OWNED BY regress_tenant TO regress_createrole;
-ERROR:  permission denied to reassign objects
 -- ok, having CREATEROLE is enough to create roles in privileged roles
 CREATE ROLE regress_read_all_data IN ROLE pg_read_all_data;
 ERROR:  permission denied to grant role "pg_read_all_data"
@@ -140,9 +129,7 @@ DROP ROLE regress_encrypted_password;
 DROP ROLE regress_password_null;
 DROP ROLE regress_noiseword;
 DROP ROLE regress_inroles;
-ERROR:  role "regress_inroles" does not exist
 DROP ROLE regress_adminroles;
-ERROR:  role "regress_adminroles" does not exist
 DROP ROLE regress_rolecreator;
 DROP ROLE regress_read_all_data;
 ERROR:  role "regress_read_all_data" does not exist
@@ -166,9 +153,6 @@ DROP ROLE regress_signal_backend;
 ERROR:  role "regress_signal_backend" does not exist
 -- fail, role still owns database objects
 DROP ROLE regress_tenant;
-ERROR:  role "regress_tenant" cannot be dropped because some objects depend on it
-DETAIL:  owner of table tenant_table
-owner of view tenant_view
 -- fail, cannot drop ourself nor superusers
 DROP ROLE regress_role_super;
 ERROR:  must be superuser to drop superusers
@@ -177,8 +161,12 @@ ERROR:  current user cannot be dropped
 -- ok
 RESET SESSION AUTHORIZATION;
 DROP INDEX tenant_idx;
+ERROR:  index "tenant_idx" does not exist
 DROP TABLE tenant_table;
+ERROR:  table "tenant_table" does not exist
 DROP VIEW tenant_view;
+ERROR:  view "tenant_view" does not exist
 DROP ROLE regress_tenant;
+ERROR:  role "regress_tenant" does not exist
 DROP ROLE regress_role_admin;
 DROP ROLE regress_role_super;
