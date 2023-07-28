@@ -167,6 +167,9 @@ XLogBeginInsert(void)
 	if (begininsert_called)
 		elog(ERROR, "XLogBeginInsert was already called");
 
+	if (delay_backend_us != NULL && delay_backend_us() > 0)
+		InterruptPending = true;
+
 	begininsert_called = true;
 }
 
