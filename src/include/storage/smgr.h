@@ -21,6 +21,12 @@
 struct f_smgr;
 
 /*
+ * Neon: extended SMGR API.
+ * This define can be used by extensions to determine that them are built for Neon.
+ */
+#define NEON_SMGR 1
+
+/*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
  * by smgropen(), and destroyed by smgrclose().  Note that neither of these
