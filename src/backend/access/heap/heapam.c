@@ -112,6 +112,7 @@ static XLogRecPtr log_heap_new_cid(Relation relation, HeapTuple tup);
 static HeapTuple ExtractReplicaIdentity(Relation rel, HeapTuple tup, bool key_required,
 										bool *copy);
 
+bool heap_xlog_store_cid;
 
 /*
  * Each tuple lock mode has a corresponding heavyweight lock, and one or two
@@ -2246,7 +2247,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		}
 
 		xlrec.offnum = ItemPointerGetOffsetNumber(&heaptup->t_self);
-		xlrec.flags = 0;
+		xlrec.flags = XLH_INSERT_STORE_CID;
 		if (all_visible_cleared)
 			xlrec.flags |= XLH_INSERT_ALL_VISIBLE_CLEARED;
 		if (options & HEAP_INSERT_SPECULATIVE)
@@ -2578,7 +2579,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			/* check that the mutually exclusive flags are not both set */
 			Assert(!(all_visible_cleared && all_frozen_set));
 
-			xlrec->flags = 0;
+			xlrec->flags = XLH_INSERT_STORE_CID;
 			if (all_visible_cleared)
 				xlrec->flags = XLH_INSERT_ALL_VISIBLE_CLEARED;
 			if (all_frozen_set)
@@ -3108,7 +3109,7 @@ l1:
 		if (RelationIsAccessibleInLogicalDecoding(relation))
 			log_heap_new_cid(relation, &tp);
 
-		xlrec.flags = 0;
+		xlrec.flags = XLH_DELETE_STORE_CID;
 		if (all_visible_cleared)
 			xlrec.flags |= XLH_DELETE_ALL_VISIBLE_CLEARED;
 		if (changingPart)
@@ -3844,8 +3845,8 @@ l2:
 			xlrec.locking_xid = xmax_lock_old_tuple;
 			xlrec.infobits_set = compute_infobits(oldtup.t_data->t_infomask,
 												  oldtup.t_data->t_infomask2);
-			xlrec.flags =
-				cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0;
+			xlrec.flags = XLH_LOCK_STORE_CID |
+				(cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0);
 			xlrec.t_cid = HeapTupleHeaderGetRawCommandId(oldtup.t_data);
 			XLogRegisterData((char *) &xlrec, SizeOfHeapLock);
 			recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_LOCK);
@@ -5033,7 +5034,7 @@ failed:
 		xlrec.locking_xid = xid;
 		xlrec.infobits_set = compute_infobits(new_infomask,
 											  tuple->t_data->t_infomask2);
-		xlrec.flags = cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0;
+		xlrec.flags =  XLH_LOCK_STORE_CID | (cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0);
 		xlrec.t_cid = HeapTupleHeaderGetRawCommandId(tuple->t_data);
 		XLogRegisterData((char *) &xlrec, SizeOfHeapLock);
 
@@ -6090,7 +6091,7 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 		xl_heap_delete xlrec;
 		XLogRecPtr	recptr;
 
-		xlrec.flags = XLH_DELETE_IS_SUPER;
+		xlrec.flags = XLH_DELETE_STORE_CID|XLH_DELETE_IS_SUPER;
 		xlrec.infobits_set = compute_infobits(tp.t_data->t_infomask,
 											  tp.t_data->t_infomask2);
 		xlrec.offnum = ItemPointerGetOffsetNumber(&tp.t_self);
@@ -8457,7 +8458,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	}
 
 	/* Prepare main WAL data chain */
-	xlrec.flags = 0;
+	xlrec.flags = XLH_UPDATE_STORE_CID;
 	if (all_visible_cleared)
 		xlrec.flags |= XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED;
 	if (new_all_visible_cleared)
@@ -9177,6 +9178,12 @@ heap_xlog_delete(XLogReaderState *record)
 	RelFileNode target_node;
 	ItemPointerData target_tid;
 
+	if ((heap_xlog_store_cid || (xlrec->flags & XLH_DELETE_STORE_CID)) ? 4 : 0)
+	{
+		int cid_offs = offsetof(xl_heap_delete, t_cid);
+		memcpy((char*)xlrec + offsetof(xl_heap_delete, offnum) + 2,  (char*)xlrec + cid_offs + 4, SizeOfHeapDelete - cid_offs - 4);
+	}
+
 	XLogRecGetBlockTag(record, 0, &target_node, NULL, &blkno);
 	ItemPointerSetBlockNumber(&target_tid, blkno);
 	ItemPointerSetOffsetNumber(&target_tid, xlrec->offnum);
@@ -9294,6 +9301,7 @@ heap_xlog_insert(XLogReaderState *record)
 	{
 		Size		datalen;
 		char	   *data;
+		Size        hdrsize;
 
 		page = BufferGetPage(buffer);
 
@@ -9302,10 +9310,13 @@ heap_xlog_insert(XLogReaderState *record)
 
 		data = XLogRecGetBlockData(record, 0, &datalen);
 
-		newlen = datalen - SizeOfHeapHeader;
-		Assert(datalen > SizeOfHeapHeader && newlen <= MaxHeapTupleSize);
-		memcpy((char *) &xlhdr, data, SizeOfHeapHeader);
-		data += SizeOfHeapHeader;
+		hdrsize = SizeOfHeapHeader - ((heap_xlog_store_cid || (xlrec->flags & XLH_INSERT_STORE_CID)) ? 4 : 0);
+
+		newlen = datalen - hdrsize;
+		Assert(datalen > hdrsize && newlen <= MaxHeapTupleSize);
+		memcpy((char *) &xlhdr, data, hdrsize);
+		xlhdr.t_hoff = *((uint8*)&xlhdr + hdrsize - 1);
+		data += hdrsize;
 
 		htup = &tbuf.hdr;
 		MemSet((char *) htup, 0, SizeofHeapTupleHeader);
@@ -9430,6 +9441,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 		{
 			OffsetNumber offnum;
 			xl_multi_insert_tuple *xlhdr;
+			Size tupsize;
 
 			/*
 			 * If we're reinitializing the page, the tuples are stored in
@@ -9443,8 +9455,10 @@ heap_xlog_multi_insert(XLogReaderState *record)
 			if (PageGetMaxOffsetNumber(page) + 1 < offnum)
 				elog(PANIC, "invalid max offset number");
 
+			tupsize = SizeOfMultiInsertTuple - ((heap_xlog_store_cid || (xlrec->flags & XLH_INSERT_STORE_CID)) ? 6 /* alignment! */ : 0);
 			xlhdr = (xl_multi_insert_tuple *) SHORTALIGN(tupdata);
-			tupdata = ((char *) xlhdr) + SizeOfMultiInsertTuple;
+			xlhdr->t_hoff = *((uint8*)xlhdr + tupsize - 1);
+			tupdata = ((char *) xlhdr) + tupsize;
 
 			newlen = xlhdr->datalen;
 			Assert(newlen <= MaxHeapTupleSize);
@@ -9534,6 +9548,11 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	XLogRedoAction oldaction;
 	XLogRedoAction newaction;
 
+	if ((heap_xlog_store_cid || (xlrec->flags & XLH_UPDATE_STORE_CID)) ? 4 : 0)
+	{
+		int cid_offs = offsetof(xl_heap_update, t_cid);
+		memcpy((char*)xlrec + cid_offs,  (char*)xlrec + cid_offs + 4, SizeOfHeapUpdate - cid_offs - 4);
+	}
 	/* initialize to keep the compiler quiet */
 	oldtup.t_data = NULL;
 	oldtup.t_len = 0;
@@ -9655,6 +9674,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		char	   *recdata_end;
 		Size		datalen;
 		Size		tuplen;
+		Size        hdrsize;
 
 		recdata = XLogRecGetBlockData(record, 0, &datalen);
 		recdata_end = recdata + datalen;
@@ -9678,8 +9698,11 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 			recdata += sizeof(uint16);
 		}
 
-		memcpy((char *) &xlhdr, recdata, SizeOfHeapHeader);
-		recdata += SizeOfHeapHeader;
+		hdrsize = SizeOfHeapHeader - ((heap_xlog_store_cid || (xlrec->flags & XLH_UPDATE_STORE_CID)) ? 4 : 0);
+
+		memcpy((char *) &xlhdr, recdata, hdrsize);
+		xlhdr.t_hoff = *((uint8*)&xlhdr + hdrsize - 1);
+		recdata += hdrsize;
 
 		tuplen = recdata_end - recdata;
 		Assert(tuplen <= MaxHeapTupleSize);
@@ -9822,6 +9845,12 @@ heap_xlog_lock(XLogReaderState *record)
 	OffsetNumber offnum;
 	ItemId		lp = NULL;
 	HeapTupleHeader htup;
+
+	if ((heap_xlog_store_cid || (xlrec->flags & XLH_LOCK_STORE_CID)) ? 4 : 0)
+	{
+		int cid_offs = offsetof(xl_heap_lock, t_cid);
+		memcpy((char*)xlrec + offsetof(xl_heap_lock, offnum) + 2,  (char*)xlrec + cid_offs + 4, SizeOfHeapLock - cid_offs - 4);
+	}
 
 	/*
 	 * The visibility map may need to be fixed even if the heap page is
