@@ -9349,8 +9349,14 @@ heap_xlog_multi_insert(XLogReaderState *record)
 			if (PageGetMaxOffsetNumber(page) + 1 < offnum)
 				elog(PANIC, "invalid max offset number");
 
-			tupsize = heap_xlog_store_cid ? SizeOfMultiInsertTupleWithCid : SizeOfMultiInsertTuple;
 			xlhdr = (xl_multi_insert_tuple *) SHORTALIGN(tupdata);
+			if (heap_xlog_store_cid && !(xlrec->flags & XLH_INSERT_STORE_CID)) {
+				/* Originally Neon stored CID in xl_multi_insert_tuple but then it was moved to xl_multi_insert */
+				tupsize = SizeOfMultiInsertTupleWithCid;
+				xlrec->t_cid = ((xl_multi_insert_tuple_with_cid*)xlhdr)->t_cid;
+			} else {
+				tupsize = SizeOfMultiInsertTuple;
+			}
 			tupdata = ((char *) xlhdr) + tupsize;
 
 			newlen = xlhdr->datalen;
@@ -9368,9 +9374,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 			htup->t_infomask = xlhdr->t_infomask;
 			htup->t_hoff = xlhdr->t_hoff;
 			HeapTupleHeaderSetXmin(htup, XLogRecGetXid(record));
-			HeapTupleHeaderSetCmin(htup, heap_xlog_store_cid
-								   ? ((xl_multi_insert_tuple_with_cid*)xlhdr)->t_cid
-								   : xlrec->t_cid);
+			HeapTupleHeaderSetCmin(htup, xlrec->t_cid);
 			ItemPointerSetBlockNumber(&htup->t_ctid, blkno);
 			ItemPointerSetOffsetNumber(&htup->t_ctid, offnum);
 
