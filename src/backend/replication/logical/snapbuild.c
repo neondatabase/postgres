@@ -126,6 +126,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/logical.h"
+#include "replication/message.h"
 #include "replication/reorderbuffer.h"
 #include "replication/snapbuild.h"
 #include "storage/block.h"		/* debugging output */
@@ -1599,6 +1600,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 	int			fd;
 	char		tmppath[MAXPGPATH];
 	char		path[MAXPGPATH];
+	char		prefix[MAXPGPATH];
 	int			ret;
 	struct stat stat_buf;
 	Size		sz;
@@ -1720,6 +1722,10 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 		ereport(ERROR,
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", tmppath)));
+
+	/* NEON specific: persist snapshot in storage using logical message */
+	sprintf(prefix, "neon-file:%s", path);
+	LogLogicalMessage(prefix, ondisk, needed_length, false);
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
@@ -2027,6 +2033,7 @@ CheckPointSnapBuild(void)
 	DIR		   *snap_dir;
 	struct dirent *snap_de;
 	char		path[MAXPGPATH + 21];
+	char		prefix[MAXPGPATH + 31];
 
 	/*
 	 * We start off with a minimum of the last redo pointer. No new
@@ -2084,6 +2091,10 @@ CheckPointSnapBuild(void)
 		if (lsn < cutoff || cutoff == InvalidXLogRecPtr)
 		{
 			elog(DEBUG1, "removing snapbuild snapshot %s", path);
+
+			/* NEON specific: delete file from storage using logical message */
+			sprintf(prefix, "neon-file:%s", path);
+			LogLogicalMessage(prefix, NULL, 0, false);
 
 			/*
 			 * It's not particularly harmful, though strange, if we can't
