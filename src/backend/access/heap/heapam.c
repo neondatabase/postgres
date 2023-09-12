@@ -4926,7 +4926,7 @@ failed:
 											  tuple->t_data->t_infomask2);
 		xlrec.flags = cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0;
 		xlrec.t_cid = HeapTupleHeaderGetRawCommandId(tuple->t_data);
-		XLogRegisterData((char *) &xlrec, SizeOfHeapLock);
+		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapLock);
 
 		/* we don't decode row locks atm, so no need to log the origin */
 
