@@ -670,11 +670,14 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not write to file \"%s\": %m",
 						tmppath)));
 	}
-	memcpy(buf + chkp_size, &crc, sizeof crc);
-	chkp_size += sizeof(crc);
+	if (chkp_size != sizeof(magic)) /* has some valid origins */
+	{
+		memcpy(buf + chkp_size, &crc, sizeof crc);
+		chkp_size += sizeof(crc);
 
-	/* NEON specific: persist snapshot in storage using logical message */
-	LogLogicalMessage("neon-file:pg_logical/replorigin_checkpoint", buf, chkp_size, false);
+		/* NEON specific: persist snapshot in storage using logical message */
+		LogLogicalMessage("neon-file:pg_logical/replorigin_checkpoint", buf, chkp_size, false);
+	}
 	pfree(buf);
 
 	if (CloseTransientFile(tmpfd) != 0)
