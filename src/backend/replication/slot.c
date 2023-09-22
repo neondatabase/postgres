@@ -672,7 +672,6 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
-	char		prefix[MAXPGPATH];
 
 	/*
 	 * If some other backend ran this code concurrently with us, we might try
@@ -685,9 +684,13 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	sprintf(path, "pg_replslot/%s", NameStr(slot->data.name));
 	sprintf(tmppath, "pg_replslot/%s.tmp", NameStr(slot->data.name));
 
-	/* NEON specific: delete slot from storage using logical message */
-	sprintf(prefix, "neon-file:%s", path);
-	LogLogicalMessage(prefix, NULL, 0, false);
+	if (SlotIsLogical(slot))
+	{
+		/* NEON specific: delete slot from storage using logical message */
+		char		prefix[MAXPGPATH];
+		sprintf(prefix, "neon-file:%s", path);
+		LogLogicalMessage(prefix, NULL, 0, false);
+	}
 
 	/*
 	 * Rename the slot directory on disk, so that we'll no longer recognize
@@ -1597,7 +1600,6 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 {
 	char		tmppath[MAXPGPATH];
 	char		path[MAXPGPATH];
-	char		prefix[MAXPGPATH];
 	int			fd;
 	ReplicationSlotOnDisk cp;
 	bool		was_dirty;
@@ -1656,9 +1658,13 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 				ReplicationSlotOnDiskChecksummedSize);
 	FIN_CRC32C(cp.checksum);
 
-	/* NEON specific: persist slot in storage using logical message */
-	sprintf(prefix, "neon-file:%s", path);
-	LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false);
+	if (SlotIsLogical(slot))
+	{
+		/* NEON specific: persist slot in storage using logical message */
+		char		prefix[MAXPGPATH];
+		sprintf(prefix, "neon-file:%s", path);
+		LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false);
+	}
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_REPLICATION_SLOT_WRITE);
