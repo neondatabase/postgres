@@ -793,7 +793,7 @@ static void
 wallog_mapping_file(char const* path, int fd)
 {
 	char	prefix[MAXPGPATH];
-	sprintf(prefix, "neon-file:%s", path);
+	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 	if (fd < 0)
 	{
 		/* unlink file */

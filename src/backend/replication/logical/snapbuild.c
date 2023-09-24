@@ -1724,7 +1724,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 				 errmsg("could not open file \"%s\": %m", tmppath)));
 
 	/* NEON specific: persist snapshot in storage using logical message */
-	sprintf(prefix, "neon-file:%s", path);
+	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 	LogLogicalMessage(prefix, (char*)ondisk, needed_length, false);
 
 	errno = 0;
@@ -2093,7 +2093,7 @@ CheckPointSnapBuild(void)
 			elog(DEBUG1, "removing snapbuild snapshot %s", path);
 
 			/* NEON specific: delete file from storage using logical message */
-			sprintf(prefix, "neon-file:%s", path);
+			snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 			LogLogicalMessage(prefix, NULL, 0, false);
 
 			/*
