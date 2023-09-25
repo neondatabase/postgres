@@ -523,7 +523,6 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	if (!isRedo)
 	{
 		xl_dbase_create_wal_log_rec xlrec;
-		XLogRecPtr	lsn;
 
 		START_CRIT_SECTION();
 
@@ -534,9 +533,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 		XLogRegisterData((char *) (&xlrec),
 						 sizeof(xl_dbase_create_wal_log_rec));
 
-		lsn = XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
-
-		SetLastWrittenLSNForDatabase(lsn);
+		(void) XLogInsert(RM_DBASE_ID, XLOG_DBASE_CREATE_WAL_LOG);
 
 		END_CRIT_SECTION();
 	}
@@ -617,7 +614,6 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 		/* Record the filesystem change in XLOG */
 		{
 			xl_dbase_create_file_copy_rec xlrec;
-			XLogRecPtr lsn;
 
 			xlrec.db_id = dst_dboid;
 			xlrec.tablespace_id = dsttablespace;
@@ -628,10 +624,8 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			lsn = XLogInsert(RM_DBASE_ID,
-							 XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
-
-			SetLastWrittenLSNForDatabase(lsn);
+			(void) XLogInsert(RM_DBASE_ID,
+							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
 		}
 		pfree(srcpath);
 		pfree(dstpath);
@@ -1466,6 +1460,11 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		else
 			CreateDatabaseUsingFileCopy(src_dboid, dboid, src_deftablespace,
 										dst_deftablespace);
+
+		/*
+		 * Update global last written LSN after wal-logging create database command
+		 */
+		SetLastWrittenLSNForDatabase(XactLastRecEnd);
 
 		/*
 		 * Close pg_database, but keep lock till commit.
