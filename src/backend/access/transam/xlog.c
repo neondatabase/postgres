@@ -7204,7 +7204,14 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointReplicationSlots();
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
-	CheckPointReplicationOrigin();
+
+	/*
+	 * NEON: FIXME: we use logical recortds to persist information of about origins,
+	 * but writting in WAL during checkpoint at shutdown cause PANIC:
+	 * "concurrent write-ahead log activity while database system is shutting down"
+	 */
+	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
+		CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
