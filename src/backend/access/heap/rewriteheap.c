@@ -117,6 +117,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "replication/logical.h"
+#include "replication/message.h"
 #include "replication/slot.h"
 #include "storage/bufmgr.h"
 #include "storage/fd.h"
@@ -786,6 +787,33 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  */
 
 /*
+ * NEON: we need to persist mapping file in WAL
+ */
+static void
+wallog_mapping_file(char const* path, int fd)
+{
+	char	prefix[MAXPGPATH];
+	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
+	if (fd < 0)
+	{
+		/* unlink file */
+		LogLogicalMessage(prefix, NULL, 0, false);
+	}
+	else
+	{
+		off_t size = lseek(fd, 0, SEEK_END);
+		char* buf;
+		if (size < 0)
+			elog(ERROR, "Failed to get size of mapping file: %m");
+		buf = palloc((size_t)size);
+		lseek(fd, 0, SEEK_SET);
+		if (read(fd, buf, (size_t)size) != size)
+			elog(ERROR, "Failed to read mapping file: %m");
+		LogLogicalMessage(prefix, buf, (size_t)size, false);
+	}
+}
+
+/*
  * Do preparations for logging logical mappings during a rewrite if
  * necessary. If we detect that we don't need to log anything we'll prevent
  * any further action by the various logical rewrite functions.
@@ -1172,6 +1200,8 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 				 errmsg("could not fsync file \"%s\": %m", path)));
 	pgstat_report_wait_end();
 
+	wallog_mapping_file(path, fd);
+
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
 				(errcode_for_file_access(),
@@ -1247,6 +1277,7 @@ CheckPointLogicalRewriteHeap(void)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m", path)));
+			wallog_mapping_file(path, -1);
 		}
 		else
 		{
@@ -1274,6 +1305,8 @@ CheckPointLogicalRewriteHeap(void)
 						(errcode_for_file_access(),
 						 errmsg("could not fsync file \"%s\": %m", path)));
 			pgstat_report_wait_end();
+
+			wallog_mapping_file(path, fd);
 
 			if (CloseTransientFile(fd) != 0)
 				ereport(ERROR,
