@@ -37,6 +37,61 @@ Customization of header
 
 (overrides html/chunk-common.xsl)
 -->
+
+<!-- begin tree nav additions -->
+<xsl:template match="book|preface|part|chapter|appendix|sect1[title]|sect2[title]|sect3[title]|sect4[title]|refentry" mode="tree-nav">
+  <xsl:param name="source-node" select="/" />
+  <xsl:variable name="self-id" select="generate-id()" />
+  <xsl:variable name="source-id" select="generate-id($source-node)" />
+  <li>
+    <xsl:choose>
+      <xsl:when test="$source-id = $self-id">
+        <xsl:attribute name="class">current</xsl:attribute>
+      </xsl:when>
+      <xsl:when test="$source-node/ancestor-or-self::*[generate-id() = $self-id]">
+        <xsl:attribute name="class">ancestor</xsl:attribute>
+      </xsl:when>
+    </xsl:choose>
+    <a>
+      <xsl:attribute name="href">
+        <xsl:call-template name="href.target">
+          <xsl:with-param name="object" select="." />
+        </xsl:call-template>
+      </xsl:attribute>
+      <xsl:choose>
+        <xsl:when test="name() = 'book'">
+          PostgreSQL docs
+        </xsl:when>
+        <xsl:when test="name() = 'refentry'">
+          <xsl:copy-of select="refmeta/refentrytitle" />
+        </xsl:when>
+        <xsl:otherwise>
+          <xsl:apply-templates select="title" mode="title.markup" />
+        </xsl:otherwise>
+      </xsl:choose>
+    </a>
+    <xsl:if test="name() = 'book'">
+      <div class="pg-v-switch">
+        <span class="pg-v pg-v-selected" href="#">16</span>
+        <xsl:text xml:space="preserve"> </xsl:text>
+        <a class="pg-v" href="#">15</a>
+        <xsl:text xml:space="preserve"> </xsl:text>
+        <a class="pg-v" href="#">14</a>
+      </div>
+    </xsl:if>
+  </li>
+  <xsl:if test="$source-node/ancestor-or-self::*[generate-id() = $self-id]">  
+    <ul>
+      <xsl:apply-templates mode="tree-nav">
+        <xsl:with-param name="source-node" select="$source-node" />
+      </xsl:apply-templates>
+    </ul>
+  </xsl:if>
+</xsl:template>
+
+<xsl:template match="text()|@*" mode="tree-nav"></xsl:template>
+<!-- end tree nav additions -->
+
 <xsl:template name="header.navigation">
   <xsl:param name="prev" select="/foo"/>
   <xsl:param name="next" select="/foo"/>
@@ -50,6 +105,22 @@ Customization of header
                                     or (count($up) &gt; 0
                                         and $navig.showtitles != 0)
                                     or count($next) &gt; 0"/>
+  
+  <!-- begin tree nav additions -->
+  <ul id="tree-nav">
+    <xsl:apply-templates select="/" mode="tree-nav">
+      <xsl:with-param name="source-node" select="." />
+    </xsl:apply-templates>
+
+    <!-- https://stackoverflow.com/questions/14389566/stop-css-transition-from-firing-on-page-load -->
+    <script><xsl:text xml:space="preserve"> </xsl:text></script>
+  </ul>
+  <script>
+    const tn = document.getElementById('tree-nav');
+    addEventListener('beforeunload', function () { sessionStorage.setItem('tny', String(tn.scrollTop)); });
+    addEventListener('load', function () { tn.scrollTop = parseInt(sessionStorage.getItem('tny') || '0', 10); });
+  </script>
+  <!-- end tree nav additions -->
 
   <xsl:if test="$suppress.navigation = '0' and $suppress.header.navigation = '0'">
     <div class="navheader">

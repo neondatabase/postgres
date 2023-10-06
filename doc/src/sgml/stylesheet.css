@@ -2,10 +2,221 @@
 
 /* color scheme similar to www.postgresql.org */
 
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,600;1,400;1,700&amp;family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400;1,700&amp;display=swap');
+
+body:before {
+	content: url(data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22128%22%20height%3D%2236%22%20fill%3D%22none%22%3E%3Cpath%20fill%3D%22%2300E0D9%22%20fill-rule%3D%22evenodd%22%20d%3D%22M0%206.207A6.207%206.207%200%200%201%206.207%200h23.586A6.207%206.207%200%200%201%2036%206.207v20.06c0%203.546-4.488%205.085-6.664%202.286l-6.805-8.754v10.615A5.586%205.586%200%200%201%2016.945%2036H6.207A6.207%206.207%200%200%201%200%2029.793V6.207Zm6.207-1.241c-.686%200-1.241.555-1.241%201.24v23.587c0%20.686.555%201.242%201.24%201.242h10.925c.343%200%20.434-.278.434-.621V16.18c0-3.547%204.488-5.086%206.665-2.286l6.805%208.753V6.207c0-.686.064-1.241-.621-1.241H6.207Z%22%20clip-rule%3D%22evenodd%22%2F%3E%3Cpath%20fill%3D%22url%28%23a%29%22%20fill-rule%3D%22evenodd%22%20d%3D%22M0%206.207A6.207%206.207%200%200%201%206.207%200h23.586A6.207%206.207%200%200%201%2036%206.207v20.06c0%203.546-4.488%205.085-6.664%202.286l-6.805-8.754v10.615A5.586%205.586%200%200%201%2016.945%2036H6.207A6.207%206.207%200%200%201%200%2029.793V6.207Zm6.207-1.241c-.686%200-1.241.555-1.241%201.24v23.587c0%20.686.555%201.242%201.24%201.242h10.925c.343%200%20.434-.278.434-.621V16.18c0-3.547%204.488-5.086%206.665-2.286l6.805%208.753V6.207c0-.686.064-1.241-.621-1.241H6.207Z%22%20clip-rule%3D%22evenodd%22%2F%3E%3Cpath%20fill%3D%22url%28%23b%29%22%20fill-opacity%3D%22.4%22%20fill-rule%3D%22evenodd%22%20d%3D%22M0%206.207A6.207%206.207%200%200%201%206.207%200h23.586A6.207%206.207%200%200%201%2036%206.207v20.06c0%203.546-4.488%205.085-6.664%202.286l-6.805-8.754v10.615A5.586%205.586%200%200%201%2016.945%2036H6.207A6.207%206.207%200%200%201%200%2029.793V6.207Zm6.207-1.241c-.686%200-1.241.555-1.241%201.24v23.587c0%20.686.555%201.242%201.24%201.242h10.925c.343%200%20.434-.278.434-.621V16.18c0-3.547%204.488-5.086%206.665-2.286l6.805%208.753V6.207c0-.686.064-1.241-.621-1.241H6.207Z%22%20clip-rule%3D%22evenodd%22%2F%3E%3Cpath%20fill%3D%22%2363F655%22%20d%3D%22M29.793%200A6.207%206.207%200%200%201%2036%206.207v20.06c0%203.546-4.488%205.085-6.664%202.286l-6.805-8.754v10.615A5.586%205.586%200%200%201%2016.945%2036a.62.62%200%200%200%20.62-.62v-19.2c0-3.547%204.488-5.086%206.665-2.286l6.805%208.753V1.241C31.035.556%2030.479%200%2029.793%200Z%22%2F%3E%3Cpath%20fill%3D%22%231A1A1A%22%20d%3D%22M60.686%2010.6v9.416l-9.13-9.416h-4.752V26h4.334V15.88L61.082%2026h3.938V10.6h-4.334ZM73.054%2022.568V19.84h9.702v-3.278h-9.702v-2.53h11.77V10.6H68.632V26h16.434v-3.432H73.054ZM96.583%2026.506c6.094%200%2010.054-2.992%2010.054-8.206%200-5.214-3.96-8.206-10.054-8.206S86.551%2013.086%2086.551%2018.3c0%205.214%203.938%208.206%2010.032%208.206Zm0-3.652c-3.388%200-5.478-1.65-5.478-4.554%200-2.904%202.112-4.554%205.478-4.554%203.388%200%205.478%201.65%205.478%204.554%200%202.904-2.09%204.554-5.478%204.554ZM123.249%2010.6v9.416l-9.13-9.416h-4.752V26h4.334V15.88L123.645%2026h3.938V10.6h-4.334Z%22%2F%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22a%22%20x1%3D%2236%22%20x2%3D%224.345%22%20y1%3D%2236%22%20y2%3D%220%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20stop-color%3D%22%2362F755%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%238FF986%22%20stop-opacity%3D%220%22%2F%3E%3C%2FlinearGradient%3E%3ClinearGradient%20id%3D%22b%22%20x1%3D%2236%22%20x2%3D%2214.617%22%20y1%3D%2236%22%20y2%3D%2227.683%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20stop-opacity%3D%22.9%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%231A1A1A%22%20stop-opacity%3D%220%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3C%2Fsvg%3E);
+	display: block;
+	margin-bottom: 20px;
+}
+
+dl {
+	margin-top: 10px;
+	margin-bottom: 10px;
+}
+
+table.table, table.informaltable {
+	border-style: solid;
+	border-spacing: 0;
+	border-collapse: collapse;
+	box-sizing: border-box;
+}
+
+table.table td, table.table th, table.informaltable td, table.informaltable th {
+	padding: 5px 10px;
+	line-height: 1.3;
+}
+
+div.tip, div.note, div.caution, div.warning {
+	background: rgb(245, 245, 245);
+	border-left: 4px solid rgb(76, 151, 255);
+	padding: 1px 30px 5px;
+	margin: 10px 0;
+}
+
+div.tip .title, div.note .title, div.caution .title, div.warning .title {
+	text-transform: uppercase;
+	color: rgb(76, 151, 255);
+	font-size: 80%;
+	letter-spacing: 1px;
+}
+
+div.warning, div.caution {
+	border-color: #f60;
+}
+
+div.warning .title, div.caution .title {
+	color: #f60;
+}
+
+ul.itemizedlist {
+	margin-left: 0;
+}
+
+.pg-v-switch {
+	position: absolute;
+	top: 3px;
+	right: 0;
+}
+
+#tree-nav .pg-v {
+	display: inline-block;
+	padding: 1px 5px;
+	border-radius: 5px;
+	border: 1px solid #dddddf;
+	font-weight: normal;
+	color: inherit;
+	color: #333;
+}
+
+#tree-nav .pg-v a {
+	color: #333;
+}
+
+.pg-v-selected {
+	background: #dddddf;
+}
+
+.navheader, .navfooter, #tree-nav {
+	font-size: 85%;
+}
+
+.navheader {
+	margin-bottom: 20px;
+}
+
+.navfooter {
+	margin-top: 40px;
+}
+
+#tree-nav {
+	display: none;
+	background-color: rgb(245, 245, 245);
+	position: fixed;
+	overflow-y: scroll;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: 275px;
+	padding: 30px 20px 30px 40px;
+	margin: 0;
+}
+
+#tree-nav ul {
+	padding: 0 0 0 20px;
+	margin: 0;
+	border-left: 1px solid #d0d0d0;
+}
+
+#tree-nav li {
+	list-style-type: none;
+	position: relative;
+}
+
+#tree-nav li.ancestor a {
+	color: #000;
+}
+
+#tree-nav a {
+	display: block;
+	padding: 5px 8px 5px 0;
+	color: #888;
+	text-decoration: none;
+}
+
+#tree-nav li.current {
+	font-weight: bold;
+}
+
+#tree-nav li.current a {
+	color: #333;
+}
+
+#tree-nav a:hover {
+	color: #000;
+	text-decoration: none;
+}
+
+a {
+	text-decoration: underline;
+	transition: text-decoration-color .5s;
+	text-underline-offset: 4px;
+	text-decoration-color: rgba(0, 85, 255, 0);
+}
+
+a, body a:link {
+	color: rgb(0, 85, 255);
+}
+
+body a:hover {
+	text-decoration-color: rgba(0, 85, 255, 1);
+}
+
+body a:visited {
+	color: rgb(121, 166, 255);
+}
+
+body a:visited:hover {
+	text-decoration-color: rgba(121, 166, 255, 1);
+}
+
+body a:visited {
+	color: rgb(121, 166, 255);
+}
+
+pre, code {
+	font-family: 'IBM Plex Mono', monospace;
+	font-size: 96%;
+}
+
+pre {
+	padding: 5px 10px;
+	background: rgb(245, 245, 245);;
+}
+
+.navheader th[colspan="5"] {
+	display: none;
+}
+
+hr {
+	border: none;
+	border-top: 1px solid #d0d0d0;
+}
+
+html {
+	margin: 0;
+	padding: 0;
+}
+
 body {
-	color: #000000;
+	padding: 30px 40px;
+	margin: 0;
+	color: #333;
 	background: #FFFFFF;
-	font-family: verdana, sans-serif;
+	font: 16px/1.5 'IBM Plex Sans', sans-serif;
+}
+
+@media (min-width: 800px) {
+	.toc * {
+    display: none;
+  }
+
+	.book .toc * {
+    display: revert;
+  }
+
+	.chapter:not(:has(> p)) div.toc::after {
+		display: block;
+		content: "Please navigate this chapter using the menu on the left."
+	}
+
+	#tree-nav {
+		display: block;
+	}
+
+	body {
+		padding: 30px 40px 30px 375px;
+	}
 }
 
 a:link		{ color:#0066A2; }
@@ -16,35 +227,35 @@ a:hover		{ color:#000000; }
 h1 {
 	font-size: 1.4em;
 	font-weight: bold;
-	margin-top: 0em;
+	margin-top: 1em;
 	margin-bottom: 0em;
-	color: #EC5800;
+	color: inherit;
 }
 
 h2 {
 	font-size: 1.2em;
 	margin: 1.2em 0em 1.2em 0em;
 	font-weight: bold;
-	color: #666;
+	color: inherit;
 }
 
 .titlepage h2.title,
 .refnamediv h2 {
-	color: #EC5800;
+	color: inherit;
 }
 
 h3 {
 	font-size: 1.1em;
 	margin: 1.2em 0em 1.2em 0em;
 	font-weight: bold;
-	color: #666;
+	color: inherit;
 }
 
 h4 {
 	font-size: 0.95em;
 	margin: 1.2em 0em 1.2em 0em;
 	font-weight: normal;
-	color: #666;
+	color: inherit;
 }
 
 h5 {
@@ -57,6 +268,10 @@ h6 {
 	font-size: 0.85em;
 	margin: 1.2em 0em 1.2em 0em;
 	font-weight: normal;
+}
+
+h4, h5, h6 {
+	margin-left: 5ex;
 }
 
 /* center some titles */
@@ -149,10 +364,6 @@ td.catalog_table_entry pre.programlisting {
 
 pre.literallayout, .screen, .synopsis, .programlisting {
 	margin-left: 4ex;
-}
-
-ul.itemizedlist {
-	margin-left: 2.5rem;
 }
 
 .comment	{ color: red; }
