@@ -121,6 +121,7 @@ static const char *explain_get_index_name(Oid indexId);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage,
 							  bool planning);
 static void show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info);
+static void show_file_cache_info(ExplainState *es, const FileCacheInfo* file_cache_info);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void ExplainIndexScanDetails(Oid indexid, ScanDirection indexorderdir,
 									ExplainState *es);
@@ -188,6 +189,8 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->buffers = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "prefetch") == 0)
 			es->prefetch = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "filecache") == 0)
+			es->file_cache = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -536,7 +539,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	else if (es->analyze)
 		instrument_option |= INSTRUMENT_ROWS;
 
-	if (es->buffers || es->prefetch)
+	if (es->buffers || es->prefetch || es->file_cache)
 		instrument_option |= INSTRUMENT_BUFFERS;
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
@@ -2072,6 +2075,10 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->prefetch && planstate->instrument)
 		show_prefetch_info(es, &planstate->instrument->bufusage.prefetch);
 
+	/* Show file cache usage */
+	if (es->file_cache && planstate->instrument)
+		show_file_cache_info(es, &planstate->instrument->bufusage.file_cache);
+
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
 	{
@@ -3532,6 +3539,28 @@ show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
 							   prefetch_info->expired, es);
 		ExplainPropertyInteger("Prefetch Duplicated Requests", NULL,
 							   prefetch_info->duplicates, es);
+	}
+}
+
+/*
+ * Show local file cache statistics
+ */
+static void
+show_file_cache_info(ExplainState *es, const FileCacheInfo* file_cache_info)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "File cache: hits=%lld misses=%lld\n",
+							 (long long) file_cache_info->hits,
+							 (long long) file_cache_info->misses);
+	}
+	else
+	{
+		ExplainPropertyInteger("File Cache Hits", NULL,
+							   file_cache_info->hits, es);
+		ExplainPropertyInteger("File Cache Misses", NULL,
+							   file_cache_info->misses, es);
 	}
 }
 
