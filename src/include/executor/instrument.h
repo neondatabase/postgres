@@ -24,6 +24,13 @@ typedef struct
 	int64 duplicates;
 } PrefetchInfo;
 
+/* Local file cache statistics */
+typedef struct
+{
+	int64 hits;
+	int64 misses;
+} FileCacheInfo;
+
 /*
  * BufferUsage and WalUsage counters keep being incremented infinitely,
  * i.e., must never be reset to zero, so that we can calculate how much
@@ -43,7 +50,8 @@ typedef struct BufferUsage
 	int64		temp_blks_written;	/* # of temp blocks written */
 	instr_time	blk_read_time;	/* time spent reading */
 	instr_time	blk_write_time; /* time spent writing */
-	PrefetchInfo prefetch; /* prefetch statistics */ 
+	PrefetchInfo prefetch; /* prefetch statistics */
+	FileCacheInfo file_cache; /* local file cache statistics */
 } BufferUsage;
 
 /*
