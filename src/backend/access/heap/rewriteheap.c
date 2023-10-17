@@ -796,6 +796,7 @@ wallog_mapping_file(char const* path, int fd)
 	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 	if (fd < 0)
 	{
+		elog(DEBUG1, "neon: deleting contents of rewrite file %s", path);
 		/* unlink file */
 		LogLogicalMessage(prefix, NULL, 0, false);
 	}
@@ -803,6 +804,7 @@ wallog_mapping_file(char const* path, int fd)
 	{
 		off_t size = lseek(fd, 0, SEEK_END);
 		char* buf;
+		elog(DEBUG1, "neon: writing contents of rewrite file %s, size %ld", path, size);
 		if (size < 0)
 			elog(ERROR, "Failed to get size of mapping file: %m");
 		buf = palloc((size_t)size);
@@ -810,6 +812,7 @@ wallog_mapping_file(char const* path, int fd)
 		if (read(fd, buf, (size_t)size) != size)
 			elog(ERROR, "Failed to read mapping file: %m");
 		LogLogicalMessage(prefix, buf, (size_t)size, false);
+		pfree(buf);
 	}
 }
 
@@ -948,6 +951,7 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 					 errmsg("could not write to file \"%s\", wrote %d of %d: %m", src->path,
 							written, len)));
 		src->off += len;
+		wallog_mapping_file(src->path, FileGetRawDesc(src->vfd));
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&xlrec), sizeof(xlrec));
@@ -1034,7 +1038,7 @@ logical_rewrite_log_mapping(RewriteState state, TransactionId xid,
 		src->off = 0;
 		memcpy(src->path, path, sizeof(path));
 		src->vfd = PathNameOpenFile(path,
-									O_CREAT | O_EXCL | O_WRONLY | PG_BINARY);
+									O_CREAT | O_EXCL | O_RDWR | PG_BINARY);
 		if (src->vfd < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
