@@ -2087,13 +2087,6 @@ ProcessStandbyReplyMessage(void)
 						applyPtr,
 						replyTime,
 						replyRequested);
-
-	elog(LOG, "ProcessStandbyReplyMessage: writelsn %X/%X",
-					LSN_FORMAT_ARGS(writePtr));
-	elog(LOG, "ProcessStandbyReplyMessage: flushlsn %X/%X",
-					LSN_FORMAT_ARGS(flushPtr));
-	elog(LOG, "ProcessStandbyReplyMessage: applylsn %X/%X",
-					LSN_FORMAT_ARGS(applyPtr));
 }
 
 void
