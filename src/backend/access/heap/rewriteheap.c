@@ -803,7 +803,7 @@ wallog_mapping_file(char const* path, int fd)
 	{
 		off_t size = lseek(fd, 0, SEEK_END);
 		char* buf;
-		elog(DEBUG1, "neon: writing contents of rewrite file %s, size %ld", path, size);
+		elog(DEBUG1, "neon: writing contents of rewrite file %s, size %ld", path, (long)size);
 		if (size < 0)
 			elog(ERROR, "Failed to get size of mapping file: %m");
 		buf = palloc((size_t)size);
