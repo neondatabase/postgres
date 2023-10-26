@@ -1589,6 +1589,8 @@ FinishWalRecovery(void)
 	 * the WAL page where we will start writing new records from scratch,
 	 * instead.
 	 */
+	result->lastPageBeginPtr = endOfLog;
+	result->lastPage = NULL;
 	if (ZenithRecoveryRequested)
 	{
 		if (!zenithWriteOk)
@@ -1600,7 +1602,7 @@ FinishWalRecovery(void)
 			ereport(ERROR,
 					(errmsg("cannot start in read-write mode from this base backup")));
 		}
-		else
+		else if (((XLogPageHeader)xlogreader->readBuf)->xlp_magic != XLOG_PAGE_MAGIC)
 		{
 			int offs = endOfLog % XLOG_BLCKSZ;
 			char *page = palloc0(offs);
@@ -1628,7 +1630,7 @@ FinishWalRecovery(void)
 			// FIXME: should we unlink zenith.signal?
 		}
 	}
-	else if (endOfLog % XLOG_BLCKSZ != 0)
+	if (result->lastPage == NULL && endOfLog % XLOG_BLCKSZ != 0)
 	{
 		char	   *page;
 		int			len;
@@ -1644,12 +1646,6 @@ FinishWalRecovery(void)
 
 		result->lastPageBeginPtr = pageBeginPtr;
 		result->lastPage = page;
-	}
-	else
-	{
-		/* There is no partial block to copy. */
-		result->lastPageBeginPtr = endOfLog;
-		result->lastPage = NULL;
 	}
 
 	/*
