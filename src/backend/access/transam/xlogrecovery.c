@@ -1602,7 +1602,7 @@ FinishWalRecovery(void)
 			ereport(ERROR,
 					(errmsg("cannot start in read-write mode from this base backup")));
 		}
-		else if (((XLogPageHeader)xlogreader->readBuf)->xlp_magic != XLOG_PAGE_MAGIC)
+		else
 		{
 			int offs = endOfLog % XLOG_BLCKSZ;
 			char *page = palloc0(offs);
@@ -1611,16 +1611,24 @@ FinishWalRecovery(void)
 
 			XLogPageHeader xlogPageHdr = (XLogPageHeader) (page);
 
-			xlogPageHdr->xlp_pageaddr = pageBeginPtr;
-			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
-			xlogPageHdr->xlp_tli = recoveryTargetTLI;
-			/*
-			 * If we start writing with offset from page beginning, pretend in
-			 * page header there is a record ending where actual data will
-			 * start.
-			 */
-			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
-			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			if (ReadPageInternal(xlogreader, pageBeginPtr, SizeOfXLogShortPHD) != SizeOfXLogShortPHD)
+			{
+				elog(LOG, "Intialize page header %X/%X xlp_rem_len=%d", LSN_FORMAT_ARGS(pageBeginPtr), offs - lastPageSize);
+				xlogPageHdr->xlp_pageaddr = pageBeginPtr;
+				xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+				xlogPageHdr->xlp_tli = recoveryTargetTLI;
+				/*
+				 * If we start writing with offset from page beginning, pretend in
+				 * page header there is a record ending where actual data will
+				 * start.
+				 */
+				xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+				xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			}
+			else
+			{
+				memcpy(xlogPageHdr, xlogreader->readBuf, SizeOfXLogShortPHD);
+			}
 			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
 
 			result->lastPageBeginPtr = pageBeginPtr;
