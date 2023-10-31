@@ -13741,3 +13741,26 @@ XLogRequestWalReceiverReply(void)
 {
 	doRequestWalReceiverReply = true;
 }
+
+void
+XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len)
+{
+	XLogRecPtr end;
+	int idx;
+	XLogRecPtr pagebegptr;
+
+	LWLockAcquire(WALBufMappingLock, LW_EXCLUSIVE);
+
+	end = start + len;
+	idx = XLogRecPtrToBufIdx(end);
+	pagebegptr = XLogCtl->xlblocks[idx] - XLOG_BLCKSZ;
+
+	if (pagebegptr + XLOG_BLCKSZ >= end && pagebegptr < end)
+	{
+		/* Last page of the segment is present in WAL buffers */
+		char* page = &XLogCtl->pages[idx * XLOG_BLCKSZ];
+		size_t overlap = end - pagebegptr;
+		memcpy(page, data + len - overlap, overlap);
+	}
+	LWLockRelease(WALBufMappingLock);
+}
