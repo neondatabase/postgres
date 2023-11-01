@@ -9306,7 +9306,10 @@ XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len)
 		/* Last page of the segment is present in WAL buffers */
 		char* page = &XLogCtl->pages[idx * XLOG_BLCKSZ];
 		size_t overlap = end - pagebegptr;
-		memcpy(page, data + len - overlap, overlap);
+		if (overlap <= len)
+			memcpy(page, data + len - overlap, overlap);
+		else
+			memcpy(page + overlap - len, data, len);
 	}
 	LWLockRelease(WALBufMappingLock);
 }
