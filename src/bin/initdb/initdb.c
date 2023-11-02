@@ -172,6 +172,7 @@ static bool caught_signal = false;
 static bool output_failed = false;
 static int	output_errno = 0;
 static char *pgdata_native;
+static const char *wal_level = "replica";
 
 /* defaults */
 static int	n_connections = 10;
@@ -1196,6 +1197,9 @@ setup_config(void)
 								  "password_encryption = md5");
 	}
 
+	snprintf(repltok, sizeof(repltok), "wal_level = %s", wal_level);
+	conflines = replace_token(conflines, "#wal_level = replica", repltok);
+
 	/*
 	 * If group access has been enabled for the cluster then it makes sense to
 	 * ensure that the log files also allow group access.  Otherwise a backup
@@ -1251,7 +1255,6 @@ setup_config(void)
 #endif
 
 #ifdef HAVE_IPV6
-
 	/*
 	 * Probe to see if there is really any platform support for IPv6, and
 	 * comment out the relevant pg_hba line if not.  This avoids runtime
@@ -2990,7 +2993,7 @@ main(int argc, char *argv[])
 
 	/* process command-line options */
 
-	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:nNsST:U:WX:", long_options, &option_index)) != -1)
+	while ((c = getopt_long(argc, argv, "A:dD:E:gkL:nNsST:U:WX:l:", long_options, &option_index)) != -1)
 	{
 		switch (c)
 		{
@@ -3041,6 +3044,9 @@ main(int argc, char *argv[])
 				break;
 			case 'k':
 				data_checksums = true;
+				break;
+			case 'l':
+				wal_level = pg_strdup(optarg);
 				break;
 			case 'L':
 				share_path = pg_strdup(optarg);
