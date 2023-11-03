@@ -9368,3 +9368,29 @@ SetWalWriterSleeping(bool sleeping)
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
 }
+
+void
+XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len)
+{
+	XLogRecPtr end;
+	int idx;
+	XLogRecPtr pagebegptr;
+
+	LWLockAcquire(WALBufMappingLock, LW_EXCLUSIVE);
+
+	end = start + len;
+	idx = XLogRecPtrToBufIdx(end);
+	pagebegptr = XLogCtl->xlblocks[idx] - XLOG_BLCKSZ;
+
+	if (pagebegptr + XLOG_BLCKSZ >= end && pagebegptr < end)
+	{
+		/* Last page of the segment is present in WAL buffers */
+		char* page = &XLogCtl->pages[idx * XLOG_BLCKSZ];
+		size_t overlap = end - pagebegptr;
+		if (overlap <= len)
+			memcpy(page, data + len - overlap, overlap);
+		else
+			memcpy(page + overlap - len, data, len);
+	}
+	LWLockRelease(WALBufMappingLock);
+}
