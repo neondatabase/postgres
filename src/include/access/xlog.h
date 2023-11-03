@@ -377,6 +377,8 @@ extern void SetWalWriterSleeping(bool sleeping);
 extern void StartupRequestWalReceiverRestart(void);
 extern void XLogRequestWalReceiverReply(void);
 
+extern void XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len);
+
 extern void assign_max_wal_size(int newval, void *extra);
 extern void assign_checkpoint_completion_target(double newval, void *extra);
 
