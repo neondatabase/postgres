@@ -156,4 +156,6 @@ extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, 
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 
+extern void XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len);
+
 #endif							/* XLOGRECOVERY_H */
