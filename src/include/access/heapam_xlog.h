@@ -22,6 +22,12 @@
 #include "storage/relfilenode.h"
 #include "utils/relcache.h"
 
+/*
+ * NEON: forcing Neon format of insert/update/delete WAL records, storing information about CID.
+ * It is also indicating by correspendent bit XLH_*_STORE_CID in flags field,
+ * but old versions of Neon didn't set it. This is why we need this flag which is set by neon extension.
+ */
+extern bool heap_xlog_store_cid;
 
 /*
  * WAL record definitions for heapam.c's WAL operations
@@ -71,6 +77,12 @@
 
 /* all_frozen_set always implies all_visible_set */
 #define XLH_INSERT_ALL_FROZEN_SET				(1<<5)
+
+/* NEON: use Neon WAL record format extension: store T_CID */
+#define XLH_INSERT_STORE_CID                    (1<<7)
+#define XLH_UPDATE_STORE_CID                    (1<<7)
+#define XLH_DELETE_STORE_CID                    (1<<7)
+#define XLH_LOCK_STORE_CID                      (1<<7)
 
 /*
  * xl_heap_update flag values, 8 bits are available.
@@ -151,6 +163,7 @@ typedef struct xl_heap_header
 } xl_heap_header;
 
 #define SizeOfHeapHeader	(offsetof(xl_heap_header, t_hoff) + sizeof(uint8))
+#define SizeOfHeapHeaderWithoutCid	(offsetof(xl_heap_header, t_hoff) + sizeof(uint8) - sizeof(uint32))
 
 /* This is what we need to know about insert */
 typedef struct xl_heap_insert
@@ -178,17 +191,32 @@ typedef struct xl_heap_multi_insert
 {
 	uint8		flags;
 	uint16		ntuples;
+	uint32      t_cid;
 	OffsetNumber offsets[FLEXIBLE_ARRAY_MEMBER];
 } xl_heap_multi_insert;
 
 #define SizeOfHeapMultiInsert	offsetof(xl_heap_multi_insert, offsets)
+
+/* NEON: provide backward compatibility. For some historical reasons in Neon t_cid was added not
+ * to xl_heap_multi_insert, but to xl_multi_insert_tuple.
+ */
+typedef struct xl_multi_insert_tuple_with_cid
+{
+	uint16		datalen;		/* size of tuple data that follows */
+	uint16		t_infomask2;
+	uint16		t_infomask;
+	uint32      t_cid;
+	uint8		t_hoff;
+	/* TUPLE DATA FOLLOWS AT END OF STRUCT */
+} xl_multi_insert_tuple_with_cid;
+
+#define SizeOfMultiInsertTupleWithCid  (offsetof(xl_multi_insert_tuple_with_cid, t_hoff) + sizeof(uint8))
 
 typedef struct xl_multi_insert_tuple
 {
 	uint16		datalen;		/* size of tuple data that follows */
 	uint16		t_infomask2;
 	uint16		t_infomask;
-	uint32      t_cid;
 	uint8		t_hoff;
 	/* TUPLE DATA FOLLOWS AT END OF STRUCT */
 } xl_multi_insert_tuple;
