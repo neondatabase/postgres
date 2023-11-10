@@ -354,6 +354,9 @@ extern void XLogRecGetBlockRefInfo(XLogReaderState *record, bool pretty,
 								   bool detailed_format, StringInfo buf,
 								   uint32 *fpi_len);
 
+extern int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
+							 int reqLen);
+
 /*
  * Exported for the functions in timeline.c and xlogarchive.c.  Only valid
  * in the startup process.

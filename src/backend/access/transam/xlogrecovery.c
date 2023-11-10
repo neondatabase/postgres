@@ -1589,6 +1589,8 @@ FinishWalRecovery(void)
 	 * the WAL page where we will start writing new records from scratch,
 	 * instead.
 	 */
+	result->lastPageBeginPtr = endOfLog;
+	result->lastPage = NULL;
 	if (ZenithRecoveryRequested)
 	{
 		if (!zenithWriteOk)
@@ -1609,16 +1611,24 @@ FinishWalRecovery(void)
 
 			XLogPageHeader xlogPageHdr = (XLogPageHeader) (page);
 
-			xlogPageHdr->xlp_pageaddr = pageBeginPtr;
-			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
-			xlogPageHdr->xlp_tli = recoveryTargetTLI;
-			/*
-			 * If we start writing with offset from page beginning, pretend in
-			 * page header there is a record ending where actual data will
-			 * start.
-			 */
-			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
-			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			if (ReadPageInternal(xlogreader, pageBeginPtr, SizeOfXLogShortPHD) != SizeOfXLogShortPHD)
+			{
+				elog(LOG, "Intialize page header %X/%X xlp_rem_len=%d", LSN_FORMAT_ARGS(pageBeginPtr), offs - lastPageSize);
+				xlogPageHdr->xlp_pageaddr = pageBeginPtr;
+				xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+				xlogPageHdr->xlp_tli = recoveryTargetTLI;
+				/*
+				 * If we start writing with offset from page beginning, pretend in
+				 * page header there is a record ending where actual data will
+				 * start.
+				 */
+				xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+				xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			}
+			else
+			{
+				memcpy(xlogPageHdr, xlogreader->readBuf, SizeOfXLogShortPHD);
+			}
 			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
 
 			result->lastPageBeginPtr = pageBeginPtr;
@@ -1628,7 +1638,7 @@ FinishWalRecovery(void)
 			// FIXME: should we unlink zenith.signal?
 		}
 	}
-	else if (endOfLog % XLOG_BLCKSZ != 0)
+	if (result->lastPage == NULL && endOfLog % XLOG_BLCKSZ != 0)
 	{
 		char	   *page;
 		int			len;
@@ -1644,12 +1654,6 @@ FinishWalRecovery(void)
 
 		result->lastPageBeginPtr = pageBeginPtr;
 		result->lastPage = page;
-	}
-	else
-	{
-		/* There is no partial block to copy. */
-		result->lastPageBeginPtr = endOfLog;
-		result->lastPage = NULL;
 	}
 
 	/*

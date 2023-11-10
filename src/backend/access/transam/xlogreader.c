@@ -44,8 +44,6 @@
 static void report_invalid_record(XLogReaderState *state, const char *fmt,...)
 			pg_attribute_printf(2, 3);
 static bool allocate_recordbuf(XLogReaderState *state, uint32 reclength);
-static int	ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr,
-							 int reqLen);
 static void XLogReaderInvalReadState(XLogReaderState *state);
 static XLogPageReadResult XLogDecodeNextRecord(XLogReaderState *state, bool non_blocking);
 static bool ValidXLogRecordHeader(XLogReaderState *state, XLogRecPtr RecPtr,
@@ -1039,7 +1037,7 @@ XLogReadAhead(XLogReaderState *state, bool nonblocking)
  * We fetch the page from a reader-local cache if we know we have the required
  * data and if there hasn't been any error since caching the data.
  */
-static int
+int
 ReadPageInternal(XLogReaderState *state, XLogRecPtr pageptr, int reqLen)
 {
 	int			readLen;
