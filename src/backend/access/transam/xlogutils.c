@@ -33,6 +33,8 @@
 #include "utils/rel.h"
 
 
+bool	(*redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id);
+
 /* GUC variable */
 bool		ignore_invalid_pages = false;
 
@@ -373,6 +375,21 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 			 block_id);
 	}
 
+	if (redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
+	{
+		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		{
+			*buf = ReadBufferWithoutRelcache(rlocator, forknum,
+											 blkno, mode, NULL, true);
+			return BLK_DONE;
+		}
+		else
+		{
+			*buf = InvalidBuffer;
+			return BLK_DONE;
+		}
+	}
+
 	/*
 	 * Make sure that if the block is marked with WILL_INIT, the caller is
 	 * going to initialize it. And vice versa.
@@ -491,7 +508,7 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 	}
 
 	/* Open the relation at smgr level */
-	smgr = smgropen(rlocator, InvalidBackendId);
+	smgr = smgropen(rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
 
 	/*
 	 * Create the target file if it doesn't already exist.  This lets us cope

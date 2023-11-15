@@ -37,6 +37,7 @@
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 
 
 /*
@@ -368,6 +369,7 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
+	so->prefetch_maximum = 0;   /* disable prefetch */
 
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
@@ -909,6 +911,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	BTVacState	vstate;
 	BlockNumber num_pages;
 	BlockNumber scanblkno;
+	BlockNumber prefetch_blkno;
+	int			io_concurrency;
 	bool		needLock;
 
 	/*
@@ -948,6 +952,9 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	vstate.maxbufsize = 0;
 	vstate.pendingpages = NULL;
 	vstate.npendingpages = 0;
+
+	io_concurrency = get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
+
 	/* Consider applying _bt_pendingfsm_finalize optimization */
 	_bt_pendingfsm_init(rel, &vstate, (callback == NULL));
 
@@ -979,6 +986,8 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	needLock = !RELATION_IS_LOCAL(rel);
 
 	scanblkno = BTREE_METAPAGE + 1;
+	prefetch_blkno = scanblkno;
+
 	for (;;)
 	{
 		/* Get the current relation length */
@@ -995,9 +1004,19 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		/* Quit if we've scanned the whole relation */
 		if (scanblkno >= num_pages)
 			break;
+
+		if (prefetch_blkno < scanblkno)
+			prefetch_blkno = scanblkno;
+		for (; prefetch_blkno < num_pages &&
+			   prefetch_blkno < scanblkno + io_concurrency; prefetch_blkno++)
+			PrefetchBuffer(rel, MAIN_FORKNUM, prefetch_blkno);
+
 		/* Iterate over pages, then loop back to recheck length */
 		for (; scanblkno < num_pages; scanblkno++)
 		{
+			if (io_concurrency > 0 && prefetch_blkno < num_pages)
+				PrefetchBuffer(rel, MAIN_FORKNUM, prefetch_blkno++);
+
 			btvacuumpage(&vstate, scanblkno);
 			if (info->report_progress)
 				pgstat_progress_update_param(PROGRESS_SCAN_BLOCKS_DONE,

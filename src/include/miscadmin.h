@@ -107,6 +107,10 @@ extern PGDLLIMPORT volatile uint32 CritSectionCount;
 /* in tcop/postgres.c */
 extern void ProcessInterrupts(void);
 
+/* Callback called by ProcessInterrupts in the loop while it is returning true. */
+typedef bool (*process_interrupts_callback_t)(void);
+extern process_interrupts_callback_t ProcessInterruptsCallback;
+
 /* Test whether an interrupt is pending */
 #ifndef WIN32
 #define INTERRUPTS_PENDING_CONDITION() \
@@ -503,5 +507,8 @@ extern void RestoreClientConnectionInfo(char *conninfo);
 
 /* in executor/nodeHash.c */
 extern size_t get_hash_memory_limit(void);
+
+/* in storage/buffer/buf_init.c */
+extern bool am_wal_redo_postgres;
 
 #endif							/* MISCADMIN_H */

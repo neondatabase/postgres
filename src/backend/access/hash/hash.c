@@ -32,6 +32,7 @@
 #include "utils/builtins.h"
 #include "utils/index_selfuncs.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 /* Working state for hashbuild and its callback */
 typedef struct
@@ -467,12 +468,16 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	Bucket		orig_maxbucket;
 	Bucket		cur_maxbucket;
 	Bucket		cur_bucket;
+	Bucket		prf_bucket;
 	Buffer		metabuf = InvalidBuffer;
 	HashMetaPage metap;
 	HashMetaPage cachedmetap;
+	int			io_concurrency;
 
 	tuples_removed = 0;
 	num_index_tuples = 0;
+
+	io_concurrency = get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
 
 	/*
 	 * We need a copy of the metapage so that we can use its hashm_spares[]
@@ -488,9 +493,14 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 	/* Scan the buckets that we know exist */
 	cur_bucket = 0;
+	prf_bucket = cur_bucket;
 	cur_maxbucket = orig_maxbucket;
 
 loop_top:
+	for (; prf_bucket <= cur_maxbucket &&
+		   prf_bucket < cur_bucket + io_concurrency; prf_bucket++)
+		PrefetchBuffer(rel, MAIN_FORKNUM, BUCKET_TO_BLKNO(cachedmetap, prf_bucket));
+
 	while (cur_bucket <= cur_maxbucket)
 	{
 		BlockNumber bucket_blkno;
@@ -500,6 +510,12 @@ loop_top:
 		HashPageOpaque bucket_opaque;
 		Page		page;
 		bool		split_cleanup = false;
+
+		if (io_concurrency > 0 && prf_bucket <= cur_maxbucket)
+		{
+			PrefetchBuffer(rel, MAIN_FORKNUM, BUCKET_TO_BLKNO(cachedmetap, prf_bucket));
+			prf_bucket++;
+		}
 
 		/* Get address of bucket's start page */
 		bucket_blkno = BUCKET_TO_BLKNO(cachedmetap, cur_bucket);

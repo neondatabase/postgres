@@ -18,6 +18,7 @@
 #include "access/parallel.h"
 #include "catalog/catalog.h"
 #include "executor/instrument.h"
+#include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
@@ -25,6 +26,8 @@
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
 
+/* NEON: prevent eviction of the buffer of target page */
+extern Buffer wal_redo_buffer;
 
 /*#define LBDEBUG*/
 
@@ -198,6 +201,12 @@ GetLocalVictimBuffer(void)
 
 		if (LocalRefCount[victim_bufid] == 0)
 		{
+			if (-victim_bufid - 1 == wal_redo_buffer)
+			{
+				/* ZENITH: Prevent eviction of the buffer with target wal redo page */
+				continue;
+			}
+
 			buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 			if (BUF_STATE_GET_USAGECOUNT(buf_state) > 0)
@@ -239,7 +248,10 @@ GetLocalVictimBuffer(void)
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId);
+		if (am_wal_redo_postgres && MyBackendId == InvalidBackendId)
+			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId, RELPERSISTENCE_PERMANENT);
+		else
+			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId, RELPERSISTENCE_TEMP);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 

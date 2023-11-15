@@ -54,7 +54,9 @@
  * so we pre-log a few fetches in advance. In the event of
  * crash we can lose (skip over) as many values as we pre-logged.
  */
-#define SEQ_LOG_VALS	32
+/* NEON XXX: to ensure sequence order of sequence in Zenith we need to WAL log each sequence update. */
+/* #define SEQ_LOG_VALS	32 */
+#define SEQ_LOG_VALS	0
 
 /*
  * The "special area" of a sequence's buffer page looks like this.
@@ -355,7 +357,7 @@ fill_seq_with_data(Relation rel, HeapTuple tuple)
 	{
 		SMgrRelation srel;
 
-		srel = smgropen(rel->rd_locator, InvalidBackendId);
+		srel = smgropen(rel->rd_locator, InvalidBackendId, rel->rd_rel->relpersistence);
 		smgrcreate(srel, INIT_FORKNUM, false);
 		log_smgrcreate(&rel->rd_locator, INIT_FORKNUM);
 		fill_seq_fork_with_data(rel, tuple, INIT_FORKNUM);
