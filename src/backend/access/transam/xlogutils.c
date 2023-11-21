@@ -386,6 +386,22 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 	if (!willinit && zeromode)
 		elog(PANIC, "block to be initialized in redo routine must be marked with WILL_INIT flag in the WAL record");
 
+	/* NEON: Wal redo postgres recovers only target page */
+	if (am_wal_redo_postgres && redo_read_buffer_filter(record, block_id))
+	{
+		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		{
+			*buf = ReadBufferWithoutRelcache(rlocator, forknum,
+											 blkno, mode, NULL, true);
+			return BLK_DONE;
+		}
+		else
+		{
+			*buf = InvalidBuffer;
+			return BLK_DONE;
+		}
+	}
+
 	/* If it has a full-page image and it should be restored, do it. */
 	if (XLogRecBlockImageApply(record, block_id))
 	{
@@ -421,7 +437,8 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 
 		return BLK_RESTORED;
 	}
-	if (redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
+	/* If it is not wal redo process then always perform recovery for wal records with FPI */
+	if (!am_wal_redo_postgres && redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
 	{
 		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 		{
