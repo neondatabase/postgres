@@ -375,21 +375,6 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 			 block_id);
 	}
 
-	if (redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
-	{
-		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
-		{
-			*buf = ReadBufferWithoutRelcache(rlocator, forknum,
-											 blkno, mode, NULL, true);
-			return BLK_DONE;
-		}
-		else
-		{
-			*buf = InvalidBuffer;
-			return BLK_DONE;
-		}
-	}
-
 	/*
 	 * Make sure that if the block is marked with WILL_INIT, the caller is
 	 * going to initialize it. And vice versa.
@@ -435,6 +420,20 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 			FlushOneBuffer(*buf);
 
 		return BLK_RESTORED;
+	}
+	if (redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
+	{
+		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		{
+			*buf = ReadBufferWithoutRelcache(rlocator, forknum,
+											 blkno, mode, NULL, true);
+			return BLK_DONE;
+		}
+		else
+		{
+			*buf = InvalidBuffer;
+			return BLK_DONE;
+		}
 	}
 	else
 	{
