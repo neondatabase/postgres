@@ -1868,7 +1868,9 @@ DecodeXLogRecord(XLogReaderState *state,
 				if ((blk->bimg_info & BKPIMAGE_HAS_HOLE) &&
 					(blk->hole_offset == 0 ||
 					 blk->hole_length == 0 ||
-					 blk->bimg_len == BLCKSZ))
+					 blk->bimg_len == BLCKSZ) &&
+					!(blk->hole_offset == 0 &&
+					  blk->hole_length == BLCKSZ)) /* null page */
 				{
 					report_invalid_record(state,
 										  "BKPIMAGE_HAS_HOLE set, but hole offset %u length %u block image length %u at %X/%X",
