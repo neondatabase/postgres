@@ -270,7 +270,7 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 		{
 			while (++idx < REVMAP_PAGE_MAXITEMS)
 			{
-				*prefetch_blocks++ = ItemPointerGetOffsetNumber(&contents->rm_tids[idx]);
+				*prefetch_blocks++ = ItemPointerGetBlockNumber(&contents->rm_tids[idx]);
 			}
 			*prefetch_blocks = InvalidBlockNumber;
 		}
