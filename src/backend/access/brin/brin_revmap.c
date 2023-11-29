@@ -196,7 +196,7 @@ brinSetHeapBlockItemptr(Buffer buf, BlockNumber pagesPerRange,
 BrinTuple *
 brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 						 Buffer *buf, OffsetNumber *off, Size *size, int mode,
-						 Snapshot snapshot)
+						 Snapshot snapshot, BlockNumber* prefetch_blocks)
 {
 	Relation	idxRel = revmap->rm_irel;
 	BlockNumber mapBlk;
@@ -205,6 +205,7 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 	BlockNumber blk;
 	Page		page;
 	ItemId		lp;
+	int         idx;
 	BrinTuple  *tup;
 	ItemPointerData previptr;
 
@@ -242,8 +243,8 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 
 		contents = (RevmapContents *)
 			PageGetContents(BufferGetPage(revmap->rm_currBuf));
-		iptr = contents->rm_tids;
-		iptr += HEAPBLK_TO_REVMAP_INDEX(revmap->rm_pagesPerRange, heapBlk);
+		idx = HEAPBLK_TO_REVMAP_INDEX(revmap->rm_pagesPerRange, heapBlk);
+		iptr = &contents->rm_tids[idx];
 
 		if (!ItemPointerIsValid(iptr))
 		{
@@ -265,6 +266,14 @@ brinGetTupleForHeapBlock(BrinRevmap *revmap, BlockNumber heapBlk,
 
 		blk = ItemPointerGetBlockNumber(iptr);
 		*off = ItemPointerGetOffsetNumber(iptr);
+		if (prefetch_blocks)
+		{
+			while (++idx < REVMAP_PAGE_MAXITEMS)
+			{
+				*prefetch_blocks++ = ItemPointerGetOffsetNumber(&contents->rm_tids[idx]);
+			}
+			*prefetch_blocks = InvalidBlockNumber;
+		}
 
 		LockBuffer(revmap->rm_currBuf, BUFFER_LOCK_UNLOCK);
 
