@@ -25,10 +25,12 @@
 #include "access/table.h"
 #include "access/tableam.h"
 #include "access/xloginsert.h"
+#include "catalog/catalog.h"
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "pgstat.h"
 #include "postmaster/autovacuum.h"
 #include "storage/bufmgr.h"
@@ -39,6 +41,7 @@
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+#include "utils/spccache.h"
 
 
 /*
@@ -361,6 +364,8 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	BrinOpaque *opaque;
 	BlockNumber nblocks;
 	BlockNumber heapBlk;
+	BlockNumber maxPrefetch = 0;
+	BlockNumber lastPrefetched = 0;
 	int			totalpages = 0;
 	FmgrInfo   *consistentFn;
 	MemoryContext oldcxt;
@@ -376,6 +381,18 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	char	   *ptr;
 	Size		len;
 	char	   *tmp PG_USED_FOR_ASSERTS_ONLY;
+
+	if (enable_seqscan_prefetch)
+	{
+		/*
+		 * Do not use tablespace setting for catalog scans, as we might have
+		 * the tablespace settings in the catalogs locked already, which
+		 * might result in a deadlock.
+		 */
+		maxPrefetch = IsCatalogRelation(scan->indexRelation)
+			? effective_io_concurrency
+			: get_tablespace_io_concurrency(scan->indexRelation->rd_rel->reltablespace);
+	}
 
 	opaque = (BrinOpaque *) scan->opaque;
 	bdesc = opaque->bo_bdesc;
@@ -538,6 +555,16 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		tup = brinGetTupleForHeapBlock(opaque->bo_rmAccess, heapBlk, &buf,
 									   &off, &size, BUFFER_LOCK_SHARE,
 									   scan->xs_snapshot);
+		if (maxPrefetch != 0 && buf != InvalidBuffer)
+		{
+			BlockNumber currBlock = BufferGetBlockNumber(buf);
+			BlockNumber prefetchBlock = Max(lastPrefetched, currBlock);
+			while (prefetchBlock < currBlock + maxPrefetch)
+			{
+				PrefetchBuffer(scan->indexRelation, MAIN_FORKNUM, ++prefetchBlock);
+			}
+			lastPrefetched = prefetchBlock;
+		}
 		if (tup)
 		{
 			gottuple = true;
