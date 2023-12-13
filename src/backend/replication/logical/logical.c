@@ -1236,7 +1236,7 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	if (ctx->callbacks.message_cb == NULL)
 		return;
-	if (strstr(prefix, "neon-file") != NULL)
+	if (strncmp(prefix, "neon-file", sizeof("neon-file") == 0)
 		return;
 
 	/* Push callback + info on the error context stack */
@@ -1553,7 +1553,7 @@ stream_message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 	/* this callback is optional */
 	if (ctx->callbacks.stream_message_cb == NULL)
 		return;
-	if (strstr(prefix, "neon-file") != NULL)
+	if (strncmp(prefix, "neon-file", sizeof("neon-file")) == 0)
 		return;
 
 	/* Push callback + info on the error context stack */
