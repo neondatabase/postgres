@@ -103,6 +103,13 @@ typedef struct SlruSharedData
 
 typedef SlruSharedData *SlruShared;
 
+typedef enum {
+	SLRU_CLOG,
+	SLRU_MULTIXACT_MEMBERS,
+	SLRU_MULTIXACT_OFFSETS,
+	SLRU_OTHER
+} SlruKind;
+
 /*
  * SlruCtlData is an unshared structure that points to the active information
  * in shared memory.
@@ -134,6 +141,7 @@ typedef struct SlruCtlData
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
 	char		Dir[64];
+	SlruKind    kind;
 } SlruCtlData;
 
 typedef SlruCtlData *SlruCtl;

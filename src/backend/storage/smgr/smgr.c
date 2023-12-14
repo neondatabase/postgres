@@ -748,6 +748,13 @@ smgr_end_unlogged_build(SMgrRelation reln)
 		(*reln->smgr).smgr_end_unlogged_build(reln);
 }
 
+int
+smgr_read_slru_segment(SMgrRelation reln, SlruKind kind, int segno, void* buffer)
+{
+	return (*reln->smgr).smgr_read_slru_segment && (*reln->smgr).smgr_read_slru_segment(reln, kind, segno, buffer);
+}
+
+
 
 /*
  * AtEOXact_SMgr
