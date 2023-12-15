@@ -636,25 +636,24 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 	int n_blocks;
 	char* buffer;
 
-	static SMgrRelation dummy_smgr_rel = NULL;
+	static SMgrRelationData dummy_smgr_rel = {0};
 
 	if (ctl->kind == SLRU_OTHER) /* Only CLOG/multixact can be downloaded from page server */
 		return -1;
 
-	/* If page is beyond latest written page, then do not try to download segment from server */
-	if (pageno < ctl->shared->latest_page_number)
+	/* If page is greather than latest written page, then do not try to download segment from server */
+	if (pageno > ctl->shared->latest_page_number)
 		return -1;
 
-	if (dummy_smgr_rel == NULL)
+	if (!dummy_smgr_rel.smgr)
 	{
 		RelFileLocator rlocator = {0};
-		dummy_smgr_rel = calloc(sizeof(SMgrRelation), 1);
-		dummy_smgr_rel->smgr = smgr(InvalidBackendId, rlocator);
+		dummy_smgr_rel.smgr = smgr(InvalidBackendId, rlocator);
 	}
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
 	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
-	n_blocks = smgr_read_slru_segment(dummy_smgr_rel, ctl->kind, segno, buffer);
+	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, ctl->kind, segno, buffer);
 	if (n_blocks > 0)
 	{
 		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
@@ -667,7 +666,7 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 		}
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
-		if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks)
+		if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
 		{
 			pgstat_report_wait_end();
 			/* if write didn't set errno, assume problem is no disk space */
@@ -778,7 +777,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
-		if (errno != ENOENT || !InRecovery)
+		if (errno != ENOENT)
 		{
 			slru_errcause = SLRU_OPEN_FAILED;
 			slru_errno = errno;
@@ -787,11 +786,20 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 		fd = SimpleLruDownloadSegment(ctl, pageno, path);
 		if (fd < 0)
 		{
-			ereport(LOG,
-					(errmsg("file \"%s\" doesn't exist, reading as zeroes",
-							path)));
-			MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
-			return true;
+			if (!InRecovery)
+			{
+				slru_errcause = SLRU_OPEN_FAILED;
+				slru_errno = errno;
+				return false;
+			}
+			else
+			{
+				ereport(LOG,
+						(errmsg("file \"%s\" doesn't exist, reading as zeroes",
+								path)));
+				MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+				return true;
+			}
 		}
 	}
 
