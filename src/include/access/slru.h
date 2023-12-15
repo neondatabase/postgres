@@ -16,6 +16,7 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
+#include "storage/smgr.h"
 
 
 /*
@@ -102,13 +103,6 @@ typedef struct SlruSharedData
 } SlruSharedData;
 
 typedef SlruSharedData *SlruShared;
-
-typedef enum {
-	SLRU_CLOG,
-	SLRU_MULTIXACT_MEMBERS,
-	SLRU_MULTIXACT_OFFSETS,
-	SLRU_OTHER
-} SlruKind;
 
 /*
  * SlruCtlData is an unshared structure that points to the active information

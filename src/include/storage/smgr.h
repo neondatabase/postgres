@@ -15,7 +15,6 @@
 #define SMGR_H
 
 #include "lib/ilist.h"
-#include "access/slru.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
@@ -88,6 +87,13 @@ typedef SMgrRelationData *SMgrRelation;
 
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
+
+typedef enum {
+	SLRU_CLOG,
+	SLRU_MULTIXACT_MEMBERS,
+	SLRU_MULTIXACT_OFFSETS,
+	SLRU_OTHER
+} SlruKind;
 
 /*
  * This struct of function pointers defines the API between smgr.c and
