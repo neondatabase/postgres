@@ -59,6 +59,7 @@
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/shmem.h"
+#include "storage/smgr.h"
 
 #define SlruFileName(ctl, path, seg) \
 	snprintf(path, MAXPGPATH, "%s/%04X", (ctl)->Dir, seg)
@@ -267,6 +268,15 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	ctl->shared = shared;
 	ctl->sync_handler = sync_handler;
 	strlcpy(ctl->Dir, subdir, sizeof(ctl->Dir));
+
+	if (strcmp(subdir, "pg_xact") == 0)
+		ctl->kind = SLRU_CLOG;
+	else if (strcmp(subdir, "pg_multixact/members") == 0)
+		ctl->kind = SLRU_MULTIXACT_MEMBERS;
+	else if (strcmp(subdir, "pg_multixact/offsets") == 0)
+		ctl->kind = SLRU_MULTIXACT_OFFSETS;
+	else
+		ctl->kind = SLRU_OTHER;
 }
 
 /*
@@ -617,6 +627,64 @@ SimpleLruWritePage(SlruCtl ctl, int slotno)
 	SlruInternalWritePage(ctl, slotno, NULL);
 }
 
+
+static int
+SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
+{
+	int segno;
+	int fd = -1;
+	int n_blocks;
+	char* buffer;
+
+	static SMgrRelationData dummy_smgr_rel = {0};
+
+	if (ctl->kind == SLRU_OTHER) /* Only CLOG/multixact can be downloaded from page server */
+		return -1;
+
+	/* If page is beyond latest written page, then do not try to download segment from server */
+	if (pageno > ctl->shared->latest_page_number)
+		return -1;
+
+	if (!dummy_smgr_rel.smgr)
+	{
+		RelFileNode rnode = {0};
+		dummy_smgr_rel.smgr = smgr(InvalidBackendId, rnode);
+	}
+	segno = pageno / SLRU_PAGES_PER_SEGMENT;
+
+	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
+	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, ctl->kind, segno, buffer);
+	if (n_blocks > 0)
+	{
+		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
+		if (fd < 0)
+		{
+			slru_errcause = SLRU_OPEN_FAILED;
+			slru_errno = errno;
+			pfree(buffer);
+			return -1;
+		}
+		errno = 0;
+		pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
+		if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
+		{
+			pgstat_report_wait_end();
+			/* if write didn't set errno, assume problem is no disk space */
+			if (errno == 0)
+				errno = ENOSPC;
+			slru_errcause = SLRU_WRITE_FAILED;
+			slru_errno = errno;
+
+			CloseTransientFile(fd);
+			pfree(buffer);
+			return -1;
+		}
+		pgstat_report_wait_end();
+	}
+	pfree(buffer);
+	return fd;
+}
+
 /*
  * Return whether the given page exists on disk.
  *
@@ -644,12 +712,18 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 	{
 		/* expected: file doesn't exist */
 		if (errno == ENOENT)
-			return false;
-
-		/* report error normally */
-		slru_errcause = SLRU_OPEN_FAILED;
-		slru_errno = errno;
-		SlruReportIOError(ctl, pageno, 0);
+		{
+			fd = SimpleLruDownloadSegment(ctl, pageno, path);
+			if (fd < 0)
+				return false;
+		}
+		else
+		{
+			/* report error normally */
+			slru_errcause = SLRU_OPEN_FAILED;
+			slru_errno = errno;
+			SlruReportIOError(ctl, pageno, 0);
+		}
 	}
 
 	if ((endpos = lseek(fd, 0, SEEK_END)) < 0)
@@ -703,18 +777,30 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
-		if (errno != ENOENT || !InRecovery)
+		if (errno != ENOENT)
 		{
 			slru_errcause = SLRU_OPEN_FAILED;
 			slru_errno = errno;
 			return false;
 		}
-
-		ereport(LOG,
-				(errmsg("file \"%s\" doesn't exist, reading as zeroes",
-						path)));
-		MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
-		return true;
+		fd = SimpleLruDownloadSegment(ctl, pageno, path);
+		if (fd < 0)
+		{
+			if (!InRecovery)
+			{
+				slru_errcause = SLRU_OPEN_FAILED;
+				slru_errno = errno;
+				return false;
+			}
+			else
+			{
+				ereport(LOG,
+						(errmsg("file \"%s\" doesn't exist, reading as zeroes",
+								path)));
+				MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+				return true;
+			}
+		}
 	}
 
 	errno = 0;
