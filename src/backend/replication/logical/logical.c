@@ -1236,8 +1236,11 @@ message_cb_wrapper(ReorderBuffer *cache, ReorderBufferTXN *txn,
 
 	if (ctx->callbacks.message_cb == NULL)
 		return;
+<<<<<<< HEAD
 	if (strncmp(prefix, "neon-file", strlen("neon-file")) == 0)
 		return;
+=======
+>>>>>>> ce3b15942c (Undo occcasional changes)
 
 	/* Push callback + info on the error context stack */
 	state.ctx = ctx;
