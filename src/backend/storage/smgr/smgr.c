@@ -573,7 +573,7 @@ smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 int
 smgr_read_slru_segment(SMgrRelation reln, SlruKind kind, int segno, void* buffer)
 {
-	return (*reln->smgr).smgr_read_slru_segment && (*reln->smgr).smgr_read_slru_segment(reln, kind, segno, buffer);
+	return (*reln->smgr).smgr_read_slru_segment ? (*reln->smgr).smgr_read_slru_segment(reln, kind, segno, buffer) : 0;
 }
 
 
