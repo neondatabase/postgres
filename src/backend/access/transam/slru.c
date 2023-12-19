@@ -641,7 +641,7 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 		return -1;
 
 	/* If page is beyond latest written page, then do not try to download segment from server */
-	if (pageno < ctl->shared->latest_page_number)
+	if (pageno > ctl->shared->latest_page_number)
 		return -1;
 
 	if (!dummy_smgr_rel.smgr)
