@@ -268,15 +268,6 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 	ctl->shared = shared;
 	ctl->sync_handler = sync_handler;
 	strlcpy(ctl->Dir, subdir, sizeof(ctl->Dir));
-
-	if (strcmp(subdir, "pg_xact") == 0)
-		ctl->kind = SLRU_CLOG;
-	else if (strcmp(subdir, "pg_multixact/members") == 0)
-		ctl->kind = SLRU_MULTIXACT_MEMBERS;
-	else if (strcmp(subdir, "pg_multixact/offsets") == 0)
-		ctl->kind = SLRU_MULTIXACT_OFFSETS;
-	else
-		ctl->kind = SLRU_OTHER;
 }
 
 /*
@@ -638,9 +629,6 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 
 	static SMgrRelationData dummy_smgr_rel = {0};
 
-	if (ctl->kind == SLRU_OTHER) /* Only CLOG/multixact can be downloaded from page server */
-		return -1;
-
 	/* If page is greather than latest written page, then do not try to download segment from server */
 	if (pageno > ctl->shared->latest_page_number)
 		return -1;
@@ -653,7 +641,7 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
 	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
-	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, ctl->kind, segno, buffer);
+	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, path, segno, buffer);
 	if (n_blocks > 0)
 	{
 		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
