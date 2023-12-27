@@ -16,7 +16,6 @@
 #include "access/xlogdefs.h"
 #include "storage/lwlock.h"
 #include "storage/sync.h"
-#include "storage/smgr.h"
 
 
 /*
@@ -135,7 +134,6 @@ typedef struct SlruCtlData
 	 * it's always the same, it doesn't need to be in shared memory.
 	 */
 	char		Dir[64];
-	SlruKind    kind;
 } SlruCtlData;
 
 typedef SlruCtlData *SlruCtl;
