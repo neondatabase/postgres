@@ -105,3 +105,18 @@ RoleidCallback(Datum arg, int cacheid, uint32 hashvalue)
 	/* Invalidate our local cache in case role's superuserness changed */
 	last_roleid = InvalidOid;
 }
+
+
+bool
+neon_superuser(void)
+{
+	char *rolname = GetUserNameFromId(GetUserId(), true);
+
+	if (rolname == NULL)
+		return false;
+	
+	if (strcmp(rolname, "neon_superuser"))
+		return true;
+			
+	return false;
+}

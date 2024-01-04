@@ -381,6 +381,7 @@ extern const char *GetSystemUser(void);
 extern bool superuser(void);	/* current user is superuser */
 extern bool superuser_arg(Oid roleid);	/* given user is superuser */
 
+extern bool neon_superuser(void);	/* current user is neon_superuser */
 
 /*****************************************************************************
  *	  pmod.h --																 *

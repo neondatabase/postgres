@@ -35,6 +35,20 @@ static char *flatten_set_variable_args(const char *name, List *args);
 static void ShowGUCConfigOption(const char *name, DestReceiver *dest);
 static void ShowAllGUCConfig(DestReceiver *dest);
 
+static bool
+neon_superuser_allowed_guc(const char *name)
+{
+	if (!neon_superuser())
+		return false;
+
+	static const char* allowed_gucs[] = {"anon.salt", "anon.sourceschema"};
+
+	for (int i = 0; i < sizeof(allowed_gucs); i++)
+	{
+		if (strcmp(name, allowed_gucs[i]) == 0)
+			return true;
+	}
+}
 
 /*
  * SET command
@@ -61,7 +75,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 				WarnNoTransactionBlock(isTopLevel, "SET LOCAL");
 			(void) set_config_option(stmt->name,
 									 ExtractSetVariableArgs(stmt),
-									 (superuser() ? PGC_SUSET : PGC_USERSET),
+									 ((superuser() || neon_superuser_allowed_guc(stmt->name)) ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
 			break;
@@ -143,12 +157,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		case VAR_RESET:
 			(void) set_config_option(stmt->name,
 									 NULL,
-									 // neon_superuser() is superuser too, so allow PGC_SUSET for this
-									 // This is not cool, because it allows neon_superuser() to set
-									 // many other GUC variables, we can filter them out (or rather whitelist)
-									 // in neon_superuser(stmt->name), but
-									 // it's still not a perfect solution. 
-									 (superuser() || neon_superuser(stmt->name) ? PGC_SUSET : PGC_USERSET),
+									 // neon_superuser() is superuser too, so allow PGC_SUSET for
+									 // some GUCs
+									 ((superuser() || neon_superuser_allowed_guc(stmt->name)) ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
 			break;
@@ -324,7 +335,7 @@ SetPGVariable(const char *name, List *args, bool is_local)
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
 	(void) set_config_option(name,
 							 argstring,
-							 (superuser() ? PGC_SUSET : PGC_USERSET),
+							((superuser() || neon_superuser_allowed_guc(name)) ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
 							 true, 0, false);
@@ -367,7 +378,7 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
 	(void) set_config_option(name,
 							 value,
-							 (superuser() ? PGC_SUSET : PGC_USERSET),
+							 ((superuser() || neon_superuser_allowed_guc(name)) ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
 							 true, 0, false);
