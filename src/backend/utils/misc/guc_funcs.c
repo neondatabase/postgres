@@ -35,6 +35,48 @@ static char *flatten_set_variable_args(const char *name, List *args);
 static void ShowGUCConfigOption(const char *name, DestReceiver *dest);
 static void ShowAllGUCConfig(DestReceiver *dest);
 
+// Check if the user is a database owner and if the guc is in the allowed list
+// If both of these are true then the user is allowed to set the guc in PGC_SUSET context
+//
+// TODO it would be nice to move this to neon extension. At least the allowed list.
+static bool
+neon_db_owner_allowed_guc(const char *name)
+{
+	bool allowed = false;
+
+	if (name == NULL)
+		return false;
+
+	elog(DEBUG1, "test neon_db_owner_allowed_guc: %s", name);
+
+	#define ALLOWED_GUCS_LEN 3
+	const char* allowed_gucs[ALLOWED_GUCS_LEN] = {"anon.salt", "anon.sourceschema", "anon.algorithm"};
+
+	// First check that the guc is in the allowed list
+	for (int i = 0; i < ALLOWED_GUCS_LEN; i++)
+	{
+		if (strcmp(name, allowed_gucs[i]) == 0)
+		{
+			elog(DEBUG1, "neon_db_owner_allowed_guc: %s is allowed", name);
+			allowed = true;
+			break;
+		}
+	}
+
+	if (!allowed) {
+		elog(DEBUG1, "neon_db_owner_allowed_guc: %s is NOT allowed", name);
+		return false;
+	}
+
+	// Check if the user is a database owner
+	if (pg_database_ownercheck(MyDatabaseId, GetUserId()))
+	{
+		elog(DEBUG1, "neon_db_owner_allowed_guc: %s is allowed for database owner", name);
+		return true;
+	}
+
+	return false;
+}
 
 /*
  * SET command
@@ -61,7 +103,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 				WarnNoTransactionBlock(isTopLevel, "SET LOCAL");
 			(void) set_config_option(stmt->name,
 									 ExtractSetVariableArgs(stmt),
-									 (superuser() ? PGC_SUSET : PGC_USERSET),
+									 ((superuser() || neon_db_owner_allowed_guc(stmt->name)) ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
 			break;
@@ -143,7 +185,7 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		case VAR_RESET:
 			(void) set_config_option(stmt->name,
 									 NULL,
-									 (superuser() ? PGC_SUSET : PGC_USERSET),
+									 ((superuser() || neon_db_owner_allowed_guc(stmt->name)) ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
 			break;
@@ -319,7 +361,7 @@ SetPGVariable(const char *name, List *args, bool is_local)
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
 	(void) set_config_option(name,
 							 argstring,
-							 (superuser() ? PGC_SUSET : PGC_USERSET),
+							((superuser() || neon_db_owner_allowed_guc(name)) ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
 							 true, 0, false);
@@ -362,7 +404,7 @@ set_config_by_name(PG_FUNCTION_ARGS)
 	/* Note SET DEFAULT (argstring == NULL) is equivalent to RESET */
 	(void) set_config_option(name,
 							 value,
-							 (superuser() ? PGC_SUSET : PGC_USERSET),
+							 ((superuser() || neon_db_owner_allowed_guc(name)) ? PGC_SUSET : PGC_USERSET),
 							 PGC_S_SESSION,
 							 is_local ? GUC_ACTION_LOCAL : GUC_ACTION_SET,
 							 true, 0, false);
