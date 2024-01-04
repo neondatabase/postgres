@@ -143,7 +143,12 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 		case VAR_RESET:
 			(void) set_config_option(stmt->name,
 									 NULL,
-									 (superuser() ? PGC_SUSET : PGC_USERSET),
+									 // neon_superuser() is superuser too, so allow PGC_SUSET for this
+									 // This is not cool, because it allows neon_superuser() to set
+									 // many other GUC variables, we can filter them out (or rather whitelist)
+									 // in neon_superuser(stmt->name), but
+									 // it's still not a perfect solution. 
+									 (superuser() || neon_superuser(stmt->name) ? PGC_SUSET : PGC_USERSET),
 									 PGC_S_SESSION,
 									 action, true, 0, false);
 			break;
