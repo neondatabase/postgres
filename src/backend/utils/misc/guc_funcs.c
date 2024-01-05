@@ -30,10 +30,16 @@
 #include "utils/builtins.h"
 #include "utils/guc_tables.h"
 #include "utils/snapmgr.h"
+#include "catalog/pg_database_d.h"
+
 
 static char *flatten_set_variable_args(const char *name, List *args);
 static void ShowGUCConfigOption(const char *name, DestReceiver *dest);
 static void ShowAllGUCConfig(DestReceiver *dest);
+
+#define ALLOWED_GUCS_LEN 3
+static const char *const allowed_gucs[] = {
+"anon.salt", "anon.sourceschema", "anon.algorithm"};
 
 // Check if the user is a database owner and if the guc is in the allowed list
 // If both of these are true then the user is allowed to set the guc in PGC_SUSET context
@@ -43,17 +49,15 @@ static bool
 neon_db_owner_allowed_guc(const char *name)
 {
 	bool allowed = false;
+	int i = 0;
 
 	if (name == NULL)
 		return false;
 
 	elog(DEBUG1, "test neon_db_owner_allowed_guc: %s", name);
 
-	#define ALLOWED_GUCS_LEN 3
-	const char* allowed_gucs[ALLOWED_GUCS_LEN] = {"anon.salt", "anon.sourceschema", "anon.algorithm"};
-
 	// First check that the guc is in the allowed list
-	for (int i = 0; i < ALLOWED_GUCS_LEN; i++)
+	for (i = 0; i < ALLOWED_GUCS_LEN; i++)
 	{
 		if (strcmp(name, allowed_gucs[i]) == 0)
 		{
@@ -69,7 +73,7 @@ neon_db_owner_allowed_guc(const char *name)
 	}
 
 	// Check if the user is a database owner
-	if (pg_database_ownercheck(MyDatabaseId, GetUserId()))
+	if (object_ownercheck(DatabaseRelationId, MyDatabaseId, GetUserId()))
 	{
 		elog(DEBUG1, "neon_db_owner_allowed_guc: %s is allowed for database owner", name);
 		return true;
