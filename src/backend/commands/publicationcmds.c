@@ -728,6 +728,13 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 	}
 }
 
+bool
+is_neon_superuser(void)
+{
+	char *name = GetUserNameFromId(GetCurrentRoleId(), true /*noerr*/);
+	return strcmp(name, "neon_superuser") == 0;
+}
+
 /*
  * Create new publication.
  */
@@ -755,7 +762,7 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 					   get_database_name(MyDatabaseId));
 
 	/* FOR ALL TABLES requires superuser */
-	if (stmt->for_all_tables && !superuser())
+	if (stmt->for_all_tables && !superuser() && !is_neon_superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to create FOR ALL TABLES publication")));
