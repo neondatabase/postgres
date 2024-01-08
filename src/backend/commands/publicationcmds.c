@@ -835,7 +835,7 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 								   &schemaidlist);
 
 		/* FOR TABLES IN SCHEMA requires superuser */
-		if (schemaidlist != NIL && !superuser())
+		if (schemaidlist != NIL && !superuser() && !neon_superuser())
 			ereport(ERROR,
 					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					errmsg("must be superuser to create FOR TABLES IN SCHEMA publication"));
