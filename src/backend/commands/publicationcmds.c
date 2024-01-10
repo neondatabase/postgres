@@ -731,10 +731,8 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 static bool
 is_neon_superuser(void)
 {
-	char *name = GetUserNameFromId(GetCurrentRoleId(), true /*noerr*/);
-	bool result = strcmp(name, "neon_superuser") == 0;
-	pfree(name);
-	return result;
+	Oid neon_superuser_oid = get_role_oid("neon_superuser", true /*missing_ok*/);
+	return neon_superuser_oid != InvalidOid && has_privs_of_role(GetCurrentRoleId(), neon_superuser_oid);
 }
 
 /*
@@ -835,7 +833,7 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 								   &schemaidlist);
 
 		/* FOR TABLES IN SCHEMA requires superuser */
-		if (schemaidlist != NIL && !superuser() && !neon_superuser())
+		if (schemaidlist != NIL && !superuser() && !is_neon_superuser())
 			ereport(ERROR,
 					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					errmsg("must be superuser to create FOR TABLES IN SCHEMA publication"));
