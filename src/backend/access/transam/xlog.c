@@ -1281,7 +1281,8 @@ CopyXLogRecordToWAL(int write_len, bool isLogSwitch, XLogRecData *rdata,
 		}
 
 		Assert(CurrPos % XLOG_BLCKSZ >= SizeOfXLogShortPHD || rdata_len == 0);
-		memcpy(currpos, rdata_data, rdata_len);
+		if (rdata_len > 0)
+			memcpy(currpos, rdata_data, rdata_len);
 		currpos += rdata_len;
 		CurrPos += rdata_len;
 		freespace -= rdata_len;
