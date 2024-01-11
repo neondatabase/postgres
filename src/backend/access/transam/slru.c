@@ -619,6 +619,11 @@ SimpleLruWritePage(SlruCtl ctl, int slotno)
 }
 
 
+/*
+ * NEON: we do not want to include large pg_xact/multixact files in basebackup and prefer
+ * to download them on demand to reduce startup time.
+ * If SLRU segment is not found, we try to download it from page server
+ */
 static int
 SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 {
@@ -629,8 +634,8 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 
 	static SMgrRelationData dummy_smgr_rel = {0};
 
-	/* If page is greather than latest written page, then do not try to download segment from server */
-	if (pageno > ctl->shared->latest_page_number)
+	/* If page is greater than latest written page, then do not try to download segment from server */
+	if (ctl->PagePrecedes(ctl->shared->latest_page_number, pageno))
 		return -1;
 
 	if (!dummy_smgr_rel.smgr)
