@@ -732,9 +732,7 @@ static bool
 is_neon_superuser(void)
 {
 	char *name = GetUserNameFromId(GetCurrentRoleId(), true /*noerr*/);
-	bool result = strcmp(name, "neon_superuser") == 0;
-	pfree(name);
-	return result;
+	return strcmp(name, "neon_superuser") == 0;
 }
 
 /*
