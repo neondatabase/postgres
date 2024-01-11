@@ -728,7 +728,7 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 	}
 }
 
-static bool
+bool
 is_neon_superuser(void)
 {
 	char *name = GetUserNameFromId(GetCurrentRoleId(), true /*noerr*/);
