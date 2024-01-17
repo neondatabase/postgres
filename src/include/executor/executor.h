@@ -14,6 +14,7 @@
 #ifndef EXECUTOR_H
 #define EXECUTOR_H
 
+#include "access/genam.h"
 #include "executor/execdesc.h"
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
@@ -676,5 +677,57 @@ extern ResultRelInfo *ExecLookupResultRelByOid(ModifyTableState *node,
 											   Oid resultoid,
 											   bool missing_ok,
 											   bool update_cache);
+
+/*
+ * prototypes from functions in execPrefetch.c
+ */
+
+typedef struct IndexPrefetchEntry
+{
+	ItemPointerData tid;
+
+	/* should we prefetch heap page for this TID? */
+	bool		prefetch;
+
+	/*
+	 * If a callback is specified, it may store per-tid information. The data
+	 * has to be a single palloc-ed piece of data, so that it can be easily
+	 * pfreed.
+	 *
+	 * XXX We could relax this by providing another cleanup callback, but that
+	 * seems unnecessarily complex - we expect the information to be very
+	 * simple, like bool flags or something. Easy to do in a simple struct,
+	 * and perhaps even reuse without pfree/palloc.
+	 */
+	void	   *data;
+} IndexPrefetchEntry;
+
+/*
+ * custom callback, allowing the user code to determine which TID to read
+ *
+ * If there is no TID to prefetch, the return value is expected to be NULL.
+ *
+ * Otherwise the "tid" field is expected to contain the TID to prefetch, and
+ * "data" may be set to custom information the callback needs to pass outside.
+ */
+typedef IndexPrefetchEntry *(*IndexPrefetchNextCB) (IndexScanDesc scan,
+													ScanDirection direction,
+													void *data);
+
+typedef void (*IndexPrefetchCleanupCB) (IndexScanDesc scan,
+										void *data);
+
+IndexPrefetch *IndexPrefetchAlloc(IndexPrefetchNextCB next_cb,
+								  IndexPrefetchCleanupCB cleanup_cb,
+								  int prefetch_max, bool skip_sequential, void *data);
+
+IndexPrefetchEntry *IndexPrefetchNext(IndexScanDesc scan, IndexPrefetch *state,
+									  ScanDirection direction);
+
+extern void IndexPrefetchReset(IndexScanDesc scan, IndexPrefetch *state);
+extern void IndexPrefetchStats(IndexScanDesc scan, IndexPrefetch *state);
+extern void IndexPrefetchEnd(IndexScanDesc scan, IndexPrefetch *state);
+
+extern int	IndexPrefetchComputeTarget(Relation heapRel, double plan_rows, bool prefetch);
 
 #endif							/* EXECUTOR_H  */

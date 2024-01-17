@@ -51,6 +51,8 @@ static bool _bt_endpoint(IndexScanDesc scan, ScanDirection dir);
 static inline void _bt_initialize_more_data(BTScanOpaque so, ScanDirection dir);
 
 #define INCREASE_PREFETCH_DISTANCE_STEP 1
+/* Do not prefetch too much leaves pages to avoid overflow of prefetch queue because it is also used to prefetch references heap paghes */
+#define MAX_IOS_PREFETCH_DISTANCE 8
 
 /*
  *	_bt_drop_lock_and_maybe_pin()
@@ -1174,32 +1176,25 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		}
 	}
 
-	/* Neon: initialize prefetch */
-	so->n_prefetch_requests = 0;
-	so->n_prefetch_blocks = 0;
-	so->last_prefetch_index = 0;
-	so->next_parent = P_NONE;
-	so->prefetch_maximum = IsCatalogRelation(rel)
-		? effective_io_concurrency
-		: get_tablespace_io_concurrency(rel->rd_rel->reltablespace);
-
-	if (scan->xs_want_itup) /* index only scan */
+	/* Neon: initialize prefetch of leaves pages for index-only scan.
+	 * Prefetching of references HEAP pages is done on executor.
+	 * We disable prefetch for parallel index-only scan.
+	 * Neon prefetch is efficient only if prefetched blocks are accessed by the same worker
+	 * which issued prefetch request. The logic of splitting pages between parallel workers in
+	 * index scan doesn't allow to satisfy this requirement.
+	 */
+	if (scan->xs_want_itup && enable_indexonlyscan_prefetch && !scan->parallel_scan)
 	{
-		if (enable_indexonlyscan_prefetch)
-		{
-			/* We disable prefetch for parallel index-only scan.
-			 * Neon prefetch is efficient only if prefetched blocks are accessed by the same worker
-			 * which issued prefetch request. The logic of splitting pages between parallel workers in
-			 * index scan doesn't allow to satisfy this requirement.
-			 * Also prefetch of leave pages will be useless if expected number of rows fits in one page.
-			 */
-			if (scan->parallel_scan)
-				so->prefetch_maximum = 0;  /* disable prefetch */
-		}
-		else
-			so->prefetch_maximum = 0; /* disable prefetch */
+		so->n_prefetch_requests = 0;
+		so->n_prefetch_blocks = 0;
+		so->last_prefetch_index = 0;
+		so->next_parent = P_NONE;
+		so->prefetch_maximum = IsCatalogRelation(rel)
+			? effective_io_concurrency
+			: get_tablespace_io_concurrency(rel->rd_rel->reltablespace);
+		so->prefetch_maximum = Min(so->prefetch_maximum, MAX_IOS_PREFETCH_DISTANCE);
 	}
-	else if (!enable_indexscan_prefetch || !scan->heapRelation)
+	else
 		so->prefetch_maximum = 0; /* disable prefetch */
 
 	/* If key bounds are not specified, then we will scan the whole relation and it make sense to start with the largest possible prefetch distance */
@@ -1631,62 +1626,7 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
 	scan->xs_heaptid = currItem->heapTid;
 
 	if (scan->xs_want_itup) /* index-only scan */
-	{
  		scan->xs_itup = (IndexTuple) (so->currTuples + currItem->tupleOffset);
-	}
-	else if (so->prefetch_maximum > 0)
-	{
-		int prefetchLimit, prefetchDistance;
-
-		/* Neon: prefetch referenced heap pages.
-		 * As far as it is difficult to predict how much items index scan will return
-		 * we do not want to prefetch many heap pages from the very beginning because
-		 * them may not be needed. So we are going to increase prefetch distance by INCREASE_PREFETCH_DISTANCE_STEP
-		 * at each index scan iteration until it reaches prefetch_maximum.
-		 */
-
-		/* Advance pefetch distance until it reaches prefetch_maximum */
-		if (so->current_prefetch_distance + INCREASE_PREFETCH_DISTANCE_STEP <= so->prefetch_maximum)
-			so->current_prefetch_distance += INCREASE_PREFETCH_DISTANCE_STEP;
-		else
-			so->current_prefetch_distance = so->prefetch_maximum;
-
-		/* How much we can prefetch */
-		prefetchLimit = Min(so->current_prefetch_distance, so->currPos.lastItem - so->currPos.firstItem + 1);
-
-		/* Active prefeth requests */
-		prefetchDistance = so->n_prefetch_requests;
- 
-		/*
-		 * Consume one prefetch request (if any)
-		 */
-		if (prefetchDistance != 0)
-			prefetchDistance -= 1;
-
-		/* Keep number of active prefetch requests equal to the current prefetch distance.
-		 * When prefetch distance reaches prefetch maximum, this loop performs at most one iteration,
-		 * but at the beginning of index scan it performs up to INCREASE_PREFETCH_DISTANCE_STEP+1 iterations
-		 */
-		if (ScanDirectionIsForward(dir))
-		{
-			while (prefetchDistance < prefetchLimit && so->currPos.itemIndex + prefetchDistance <= so->currPos.lastItem)
-			{
-				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex + prefetchDistance].heapTid.ip_blkid);
-				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-				prefetchDistance += 1;
-			}
-		}
-		else
-		{
-			while (prefetchDistance < prefetchLimit && so->currPos.itemIndex - prefetchDistance >= so->currPos.firstItem)
-			{
-				BlockNumber blkno = BlockIdGetBlockNumber(&so->currPos.items[so->currPos.itemIndex - prefetchDistance].heapTid.ip_blkid);
-				PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM, blkno);
-				prefetchDistance += 1;
-			}
-		}
-		so->n_prefetch_requests = prefetchDistance; /* update number of active prefetch requests */
-	}
 
 	return true;
 }

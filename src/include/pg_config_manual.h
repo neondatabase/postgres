@@ -158,9 +158,7 @@
  * If you change this, you probably need to adjust the error message in
  * check_effective_io_concurrency.)
  */
-#ifdef USE_POSIX_FADVISE
 #define USE_PREFETCH
-#endif
 
 /*
  * Default and maximum values for backend_flush_after, bgwriter_flush_after

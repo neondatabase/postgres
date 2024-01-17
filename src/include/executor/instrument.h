@@ -22,6 +22,7 @@ typedef struct
 	int64 misses;
 	int64 expired;
 	int64 duplicates;
+	int64 tids;
 } PrefetchInfo;
 
 /*

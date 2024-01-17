@@ -34,6 +34,7 @@
 #include "access/tableam.h"
 #include "catalog/pg_am.h"
 #include "executor/execdebug.h"
+#include "executor/executor.h"
 #include "executor/nodeIndexscan.h"
 #include "lib/pairingheap.h"
 #include "miscadmin.h"
@@ -69,6 +70,9 @@ static void reorderqueue_push(IndexScanState *node, TupleTableSlot *slot,
 							  Datum *orderbyvals, bool *orderbynulls);
 static HeapTuple reorderqueue_pop(IndexScanState *node);
 
+static IndexPrefetchEntry *IndexScanPrefetchNext(IndexScanDesc scan,
+												 ScanDirection direction,
+												 void *data);
 
 /* ----------------------------------------------------------------
  *		IndexNext
@@ -85,6 +89,8 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	IndexPrefetch *prefetch;
+	IndexPrefetchEntry *entry;
 
 	/*
 	 * extract necessary information from index scan node
@@ -98,11 +104,14 @@ IndexNext(IndexScanState *node)
 	direction = ScanDirectionCombine(estate->es_direction,
 									 ((IndexScan *) node->ss.ps.plan)->indexorderdir);
 	scandesc = node->iss_ScanDesc;
+	prefetch = node->iss_prefetch;
 	econtext = node->ss.ps.ps_ExprContext;
 	slot = node->ss.ss_ScanTupleSlot;
 
 	if (scandesc == NULL)
 	{
+		int prefetch_max;
+
 		/*
 		 * We reach here if the index scan is not parallel, or if we're
 		 * serially executing an index scan that was planned to be parallel.
@@ -123,14 +132,43 @@ IndexNext(IndexScanState *node)
 			index_rescan(scandesc,
 						 node->iss_ScanKeys, node->iss_NumScanKeys,
 						 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+
+		/*
+		 * Also initialize index prefetcher. We do this even when prefetching is
+		 * not done (see IndexPrefetchComputeTarget), because the prefetcher is
+		 * used for all index reads.
+		 *
+		 * XXX Maybe we should reduce the target in case this is a parallel index
+		 * scan. We don't want to issue a multiple of effective_io_concurrency.
+		 *
+		 * XXX Maybe rename the object to "index reader" or something?
+		 */
+		prefetch_max = IndexPrefetchComputeTarget(node->ss.ss_currentRelation,
+												  node->ss.ps.plan->plan_rows,
+												  estate->es_use_prefetching);
+
+		node->iss_prefetch = IndexPrefetchAlloc(IndexScanPrefetchNext,
+												NULL, /* no extra cleanup */
+												prefetch_max,
+												smgr_support_read_ahead(RelationGetSmgr(node->iss_RelationDesc)),
+												NULL);
 	}
 
 	/*
 	 * ok, now that we have what we need, fetch the next tuple.
 	 */
-	while (index_getnext_slot(scandesc, direction, slot))
+	while ((entry = IndexPrefetchNext(scandesc, prefetch, direction)) != NULL)
 	{
 		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Fetch the next (or only) visible heap tuple for this index entry.
+		 * If we don't find anything, loop around and grab the next TID from
+		 * the index.
+		 */
+		Assert(ItemPointerIsValid(&scandesc->xs_heaptid));
+		if (!index_fetch_heap(scandesc, slot))
+			continue;
 
 		/*
 		 * If the index was lossy, we have to recheck the index quals using
@@ -588,6 +626,9 @@ ExecReScanIndexScan(IndexScanState *node)
 					 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
 	node->iss_ReachedEnd = false;
 
+	/* also reset the prefetcher, so that we start from scratch */
+	IndexPrefetchReset(node->iss_ScanDesc, node->iss_prefetch);
+
 	ExecScanReScan(&node->ss);
 }
 
@@ -793,6 +834,9 @@ ExecEndIndexScan(IndexScanState *node)
 	 */
 	indexRelationDesc = node->iss_RelationDesc;
 	indexScanDesc = node->iss_ScanDesc;
+
+	/* XXX Print some debug stats. Should be removed. */
+	IndexPrefetchStats(indexScanDesc, node->iss_prefetch);
 
 	/*
 	 * Free the exprcontext(s) ... now dead code, see ExecFreeExprContext
@@ -1743,4 +1787,27 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 		index_rescan(node->iss_ScanDesc,
 					 node->iss_ScanKeys, node->iss_NumScanKeys,
 					 node->iss_OrderByKeys, node->iss_NumOrderByKeys);
+}
+
+/*
+ * XXX not sure this correctly handles xs_heap_continue - see index_getnext_slot,
+ * maybe nodeIndexscan needs to do something more to handle this?
+ */
+static IndexPrefetchEntry *
+IndexScanPrefetchNext(IndexScanDesc scan, ScanDirection direction, void *data)
+{
+	IndexPrefetchEntry *entry = NULL;
+	ItemPointer tid;
+
+	if ((tid = index_getnext_tid(scan, direction)) != NULL)
+	{
+		entry = palloc0(sizeof(IndexPrefetchEntry));
+
+		entry->tid = *tid;
+
+		/* prefetch always */
+		entry->prefetch = true;
+	}
+
+	return entry;
 }

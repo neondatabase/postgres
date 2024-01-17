@@ -24,6 +24,7 @@ OBJS = \
 	execMain.o \
 	execParallel.o \
 	execPartition.o \
+	execPrefetch.o \
 	execProcnode.o \
 	execReplication.o \
 	execSRF.o \

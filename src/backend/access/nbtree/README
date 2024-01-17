@@ -1100,19 +1100,8 @@ We should prefetch not only leaf pages, but also the next parent page.
 The trick is to correctly calculate the moment when it will be needed:
 We should not issue the prefetch request when prefetch requests for all children from the current parent page have already been issued, but when there are only effective_io_concurrency line pointers left to prefetch from the page.
 
-Currently there are two different prefetch implementations for
-index-only scan and index scan. Index-only scan doesn't need to access heap tuples so it prefetches
-only B-Tree leave pages (and their parents). Prefetch of index-only scan is performed only
-if parallel plan is not used. Parallel index scan is using critical section for obtaining next
-page by parallel worker. Leaf page is loaded in this critical section.
-And if most of time is spent in loading the page, then it actually eliminates any concurrency
-and makes prefetch useless. For relatively small tables Postgres will not choose parallel plan in
-any case. And for large tables it can be enforced by setting max_parallel_workers_per_gather=0.
-
-Prefetch for normal (not index-only) index tries to prefetch heap tuples
-referenced from leaf page. Average number of items per page
-is about 100 which is comparable with default value of effective_io_concurrency.
-So there is not so much sense trying to prefetch also next leaf page.
+Prefetching of referenced heap pages (TIDs) is performed by executor.
+Read explanation in execPrefetch.c
 
 As far as it is difficult to estimate number of entries traversed by index scan,
 we prefer not to prefetch  large number of pages from the very beginning.

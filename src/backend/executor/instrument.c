@@ -239,6 +239,7 @@ BufferUsageAdd(BufferUsage *dst, const BufferUsage *add)
 	dst->prefetch.misses += add->prefetch.misses;
 	dst->prefetch.expired += add->prefetch.expired;
 	dst->prefetch.duplicates += add->prefetch.duplicates;
+	dst->prefetch.tids += add->prefetch.tids;
 	INSTR_TIME_ADD(dst->blk_read_time, add->blk_read_time);
 	INSTR_TIME_ADD(dst->blk_write_time, add->blk_write_time);
 	INSTR_TIME_ADD(dst->temp_blk_read_time, add->temp_blk_read_time);
@@ -265,6 +266,7 @@ BufferUsageAccumDiff(BufferUsage *dst,
 	dst->prefetch.misses += add->prefetch.misses - sub->prefetch.misses;
 	dst->prefetch.expired += add->prefetch.expired - sub->prefetch.expired;
 	dst->prefetch.duplicates += add->prefetch.duplicates - sub->prefetch.duplicates;
+	dst->prefetch.tids += add->prefetch.duplicates - sub->prefetch.tids;
 	INSTR_TIME_ACCUM_DIFF(dst->blk_read_time,
 						  add->blk_read_time, sub->blk_read_time);
 	INSTR_TIME_ACCUM_DIFF(dst->blk_write_time,

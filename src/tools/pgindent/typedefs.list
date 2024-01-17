@@ -1173,6 +1173,9 @@ IndexOnlyScanState
 IndexOptInfo
 IndexOrderByDistance
 IndexPath
+IndexPrefetch
+IndexPrefetchCacheEntry
+IndexPrefetchEntry
 IndexRuntimeKeyInfo
 IndexScan
 IndexScanDesc
