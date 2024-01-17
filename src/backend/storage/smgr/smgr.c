@@ -47,6 +47,7 @@ static const f_smgr smgr_md = {
 	.smgr_nblocks = mdnblocks,
 	.smgr_truncate = mdtruncate,
 	.smgr_immedsync = mdimmedsync,
+	.smgr_support_read_ahead = mdreadahead,
 };
 
 /*
@@ -746,6 +747,13 @@ smgr_end_unlogged_build(SMgrRelation reln)
 {
 	if ((*reln->smgr).smgr_end_unlogged_build)
 		(*reln->smgr).smgr_end_unlogged_build(reln);
+}
+
+bool
+smgr_support_read_ahead(SMgrRelation reln)
+{
+	return (*reln->smgr).smgr_support_read_ahead
+		&& (*reln->smgr).smgr_support_read_ahead(reln);
 }
 
 

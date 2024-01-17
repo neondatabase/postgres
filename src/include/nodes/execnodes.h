@@ -692,6 +692,7 @@ typedef struct EState
 	struct EPQState *es_epq_active;
 
 	bool		es_use_parallel_mode;	/* can we use parallel workers? */
+	bool		es_use_prefetching; /* can we use prefetching? */
 
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;
@@ -1531,6 +1532,9 @@ typedef struct
 	bool	   *elem_nulls;		/* array of num_elems is-null flags */
 } IndexArrayKeyInfo;
 
+/* needs to be before IndexPrefetchCallback typedef */
+typedef struct IndexPrefetch IndexPrefetch;
+
 /* ----------------
  *	 IndexScanState information
  *
@@ -1582,6 +1586,9 @@ typedef struct IndexScanState
 	bool	   *iss_OrderByTypByVals;
 	int16	   *iss_OrderByTypLens;
 	Size		iss_PscanLen;
+
+	/* prefetching */
+	IndexPrefetch *iss_prefetch;
 } IndexScanState;
 
 /* ----------------
@@ -1620,6 +1627,9 @@ typedef struct IndexOnlyScanState
 	TupleTableSlot *ioss_TableSlot;
 	Buffer		ioss_VMBuffer;
 	Size		ioss_PscanLen;
+
+	/* prefetching */
+	IndexPrefetch *ioss_prefetch;
 } IndexOnlyScanState;
 
 /* ----------------

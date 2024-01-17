@@ -1621,3 +1621,12 @@ mdfiletagmatches(const FileTag *ftag, const FileTag *candidate)
 	 */
 	return ftag->rlocator.dbOid == candidate->rlocator.dbOid;
 }
+
+/*
+ * If underlying device support read ahead
+ */
+bool
+mdreadahead(SMgrRelation reln)
+{
+	return true; /* Assume read-ahead is supported by default */
+}

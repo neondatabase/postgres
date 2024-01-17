@@ -36,6 +36,7 @@
 #include "access/tupdesc.h"
 #include "access/visibilitymap.h"
 #include "executor/execdebug.h"
+#include "executor/executor.h"
 #include "executor/nodeIndexonlyscan.h"
 #include "executor/nodeIndexscan.h"
 #include "miscadmin.h"
@@ -44,11 +45,14 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
-
 static TupleTableSlot *IndexOnlyNext(IndexOnlyScanState *node);
 static void StoreIndexTuple(TupleTableSlot *slot, IndexTuple itup,
 							TupleDesc itupdesc);
-
+static IndexPrefetchEntry *IndexOnlyPrefetchNext(IndexScanDesc scan,
+												 ScanDirection direction,
+												 void *data);
+static void IndexOnlyPrefetchCleanup(IndexScanDesc scan,
+									 void *data);
 
 /* ----------------------------------------------------------------
  *		IndexOnlyNext
@@ -65,6 +69,8 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
 	ItemPointer tid;
+	IndexPrefetch *prefetch;
+	IndexPrefetchEntry *entry;
 
 	/*
 	 * extract necessary information from index scan node
@@ -78,11 +84,14 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	direction = ScanDirectionCombine(estate->es_direction,
 									 ((IndexOnlyScan *) node->ss.ps.plan)->indexorderdir);
 	scandesc = node->ioss_ScanDesc;
+	prefetch = node->ioss_prefetch;
 	econtext = node->ss.ps.ps_ExprContext;
 	slot = node->ss.ss_ScanTupleSlot;
 
 	if (scandesc == NULL)
 	{
+		int	prefetch_max;
+
 		/*
 		 * We reach here if the index only scan is not parallel, or if we're
 		 * serially executing an index only scan that was planned to be
@@ -111,14 +120,39 @@ IndexOnlyNext(IndexOnlyScanState *node)
 						 node->ioss_NumScanKeys,
 						 node->ioss_OrderByKeys,
 						 node->ioss_NumOrderByKeys);
+
+		/*
+		 * Also initialize index prefetcher. We do this even when prefetching is
+		 * not done (see IndexPrefetchComputeTarget), because the prefetcher is
+		 * used for all index reads.
+		 *
+		 * XXX Maybe we should reduce the target in case this is a parallel index
+		 * scan. We don't want to issue a multiple of effective_io_concurrency.
+		 *
+		 * XXX Maybe rename the object to "index reader" or something?
+		 */
+		prefetch_max = IndexPrefetchComputeTarget(node->ss.ss_currentRelation,
+												  node->ss.ps.plan->plan_rows,
+												  estate->es_use_prefetching);
+
+		node->ioss_prefetch = IndexPrefetchAlloc(IndexOnlyPrefetchNext,
+												 IndexOnlyPrefetchCleanup,
+												 prefetch_max,
+												 smgr_support_read_ahead(RelationGetSmgr(node->ioss_RelationDesc)),
+												 palloc0(sizeof(Buffer)));
 	}
 
 	/*
 	 * OK, now that we have what we need, fetch the next tuple.
 	 */
-	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
+	while ((entry = IndexPrefetchNext(scandesc, prefetch, direction)) != NULL)
 	{
+		bool	   *all_visible = NULL;
 		bool		tuple_from_heap = false;
+
+		/* unpack the entry */
+		tid = &entry->tid;
+		all_visible = (bool *) entry->data; /* result of visibility check */
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -155,8 +189,12 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 *
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
+		 *
+		 * XXX Skip if we already know the page is all visible from
+		 * prefetcher.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation,
+		if (!(all_visible && *all_visible) &&
+			!VM_ALL_VISIBLE(scandesc->heapRelation,
 							ItemPointerGetBlockNumber(tid),
 							&node->ioss_VMBuffer))
 		{
@@ -353,6 +391,9 @@ ExecReScanIndexOnlyScan(IndexOnlyScanState *node)
 					 node->ioss_ScanKeys, node->ioss_NumScanKeys,
 					 node->ioss_OrderByKeys, node->ioss_NumOrderByKeys);
 
+	/* also reset the prefetcher, so that we start from scratch */
+	IndexPrefetchReset(node->ioss_ScanDesc, node->ioss_prefetch);
+
 	ExecScanReScan(&node->ss);
 }
 
@@ -379,6 +420,12 @@ ExecEndIndexOnlyScan(IndexOnlyScanState *node)
 		ReleaseBuffer(node->ioss_VMBuffer);
 		node->ioss_VMBuffer = InvalidBuffer;
 	}
+
+	/* XXX Print some debug stats. Should be removed. */
+	IndexPrefetchStats(indexScanDesc, node->ioss_prefetch);
+
+	/* Release VM buffer pin from prefetcher, if any. */
+	IndexPrefetchEnd(indexScanDesc, node->ioss_prefetch);
 
 	/*
 	 * Free the exprcontext(s) ... now dead code, see ExecFreeExprContext
@@ -730,4 +777,63 @@ ExecIndexOnlyScanInitializeWorker(IndexOnlyScanState *node,
 		index_rescan(node->ioss_ScanDesc,
 					 node->ioss_ScanKeys, node->ioss_NumScanKeys,
 					 node->ioss_OrderByKeys, node->ioss_NumOrderByKeys);
+}
+
+/*
+ * When prefetching for IOS, we want to only prefetch pages that are not
+ * marked as all-visible (because not fetching all-visible pages is the
+ * point of IOS).
+ *
+ * The buffer used by the VM_ALL_VISIBLE() check is reused, similarly to
+ * ioss_VMBuffer (maybe we could/should use it here too?). We also keep
+ * the result of the all_visible flag, so that the main loop does not to
+ * do it again.
+ */
+static IndexPrefetchEntry *
+IndexOnlyPrefetchNext(IndexScanDesc scan, ScanDirection direction, void *data)
+{
+	IndexPrefetchEntry *entry = NULL;
+	ItemPointer tid;
+
+	Assert(data);
+
+	if ((tid = index_getnext_tid(scan, direction)) != NULL)
+	{
+		BlockNumber blkno = ItemPointerGetBlockNumber(tid);
+
+		bool		all_visible = VM_ALL_VISIBLE(scan->heapRelation,
+												 blkno,
+												 (Buffer *) data);
+
+		entry = palloc0(sizeof(IndexPrefetchEntry));
+
+		entry->tid = *tid;
+
+		/* prefetch only if not all visible */
+		entry->prefetch = !all_visible;
+
+		/* store the all_visible flag in the private part of the entry */
+		entry->data = palloc(sizeof(bool));
+		*(bool *) entry->data = all_visible;
+	}
+
+	return entry;
+}
+
+/*
+ * For IOS, we may have a VM buffer in the private data, so make sure to
+ * release it properly.
+ */
+static void
+IndexOnlyPrefetchCleanup(IndexScanDesc scan, void *data)
+{
+	Buffer	   *buffer = (Buffer *) data;
+
+	Assert(data);
+
+	if (*buffer != InvalidBuffer)
+	{
+		ReleaseBuffer(*buffer);
+		*buffer = InvalidBuffer;
+	}
 }

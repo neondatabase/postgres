@@ -3551,11 +3551,12 @@ show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
 	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 			ExplainIndentText(es);
-			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld expired=%lld duplicates=%lld\n",
+			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld expired=%lld duplicates=%lld tids=%lld\n",
 							 (long long) prefetch_info->hits,
 							 (long long) prefetch_info->misses,
 							 (long long) prefetch_info->expired,
-							 (long long) prefetch_info->duplicates);
+							 (long long) prefetch_info->duplicates,
+							 (long long) prefetch_info->tids);
 	}
 	else
 	{
@@ -3567,6 +3568,8 @@ show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
 							   prefetch_info->expired, es);
 		ExplainPropertyInteger("Prefetch Duplicated Requests", NULL,
 							   prefetch_info->duplicates, es);
+		ExplainPropertyInteger("Prefetch Index Tids", NULL,
+							   prefetch_info->tids, es);
 	}
 }
 
