@@ -66,7 +66,27 @@ LogLogicalMessage(const char *prefix, const char *message, size_t size,
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, SizeOfLogicalMessage);
 	XLogRegisterData(unconstify(char *, prefix), xlrec.prefix_size);
-	XLogRegisterData(unconstify(char *, message), size);
+	if (message != NULL)
+	{
+		/*
+		 * NEON: We require that replication slots be WAL-logged. In the
+		 * current implementation, we WAL-log it as a prefix without a message.
+		 * This causes issues with the undefined behavior sanitizer. When the
+		 * XLOG record has been constructed in memory as a NULL-terminated,
+		 * linked-list of data segments, we end up with an empty segment, which
+		 * has a length of 0 and points to NULL. memcpy(3), at least in glibc,
+		 * marks its two pointer arguments as nonnull. memcpy seems to handle
+		 * this fine given that we are copying 0 bytes, but let's just abide by
+		 * the API contract.
+		 *
+		 * See ReplicationSlotDropPtr() for the LogLogicalMessage() call which
+		 * contains a NULL message.
+		 *
+		 * See CopyXLogRecordToWAL() for the data copy loop in which the
+		 * memcpy occurs.
+		 */
+		XLogRegisterData(unconstify(char *, message), size);
+	}
 
 	/* allow origin filtering */
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
