@@ -1463,7 +1463,8 @@ pgstat_write_statsfile(void)
 						tmpfile, statfile)));
 		unlink(tmpfile);
 	}
-	wallog_file(statfile);
+	if (XLogInsertAllowed())
+		wallog_file(statfile);
 }
 
 /* helpers for pgstat_read_statsfile() */
