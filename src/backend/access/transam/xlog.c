@@ -7029,7 +7029,7 @@ StartupXLOG(void)
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
-		wasShutdown = true;
+		wasShutdown = StandbyModeRequested ? false : true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
