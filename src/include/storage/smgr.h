@@ -88,7 +88,6 @@ typedef SMgrRelationData *SMgrRelation;
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
 
-
 /*
  * This struct of function pointers defines the API between smgr.c and
  * any individual storage manager module.  Note that smgr subfunctions are
@@ -131,6 +130,8 @@ typedef struct f_smgr
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
+
+	int  		(*smgr_read_slru_segment) (SMgrRelation reln, const char *path, int segno, void* buffer);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -187,5 +188,7 @@ extern bool ProcessBarrierSmgrRelease(void);
 extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
+
+extern int  smgr_read_slru_segment(SMgrRelation reln, const char *path, int segno, void* buffer);
 
 #endif							/* SMGR_H */
