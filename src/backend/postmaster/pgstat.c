@@ -51,6 +51,7 @@
 #include "postmaster/fork_process.h"
 #include "postmaster/interrupt.h"
 #include "postmaster/postmaster.h"
+#include "replication/message.h"
 #include "replication/slot.h"
 #include "replication/walsender.h"
 #include "storage/backendid.h"
@@ -3757,6 +3758,9 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	 */
 	list_free(pending_write_requests);
 	pending_write_requests = NIL;
+
+	if (XLogInsertAllowed())
+		wallog_file(statfile);
 }
 
 /*
@@ -3890,6 +3894,9 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 		elog(DEBUG2, "removing temporary stats file \"%s\"", statfile);
 		unlink(statfile);
 	}
+
+	if (XLogInsertAllowed())
+		wallog_file(statfile);
 }
 
 /* ----------
