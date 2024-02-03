@@ -724,7 +724,7 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 *
 			 * Only permanent relations are WAL-logged, so RELPERSISTENCE_PERMANENT.
 			 */
-			reln = smgropen(block->rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
+			reln = smgropen(block->rlocator, InvalidBackendId);
 
 			/*
 			 * If the relation file doesn't exist on disk, for example because

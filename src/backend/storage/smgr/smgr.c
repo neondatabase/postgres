@@ -18,6 +18,7 @@
 #include "postgres.h"
 
 #include "access/xlogutils.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_tablespace.h"
 #include "lib/ilist.h"
 #include "storage/bufmgr.h"
@@ -127,6 +128,12 @@ smgr(BackendId backend, RelFileLocator rlocator)
 	return result;
 }
 
+SMgrRelation
+smgropen(RelFileLocator rlocator, BackendId backend)
+{
+	return smgropen_rp(rlocator, backend, backend == InvalidBackendId ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_TEMP);
+}
+
 /*
  * smgropen() -- Return an SMgrRelation object, creating it if need be.
  *
@@ -138,7 +145,7 @@ smgr(BackendId backend, RelFileLocator rlocator)
  * require it.
  */
 SMgrRelation
-smgropen(RelFileLocator rlocator, BackendId backend, char relpersistence)
+smgropen_rp(RelFileLocator rlocator, BackendId backend, char relpersistence)
 {
 	RelFileLocatorBackend brlocator;
 	SMgrRelation reln;

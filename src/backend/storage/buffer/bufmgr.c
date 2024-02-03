@@ -803,8 +803,7 @@ ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
 {
 	bool		hit;
 
-	SMgrRelation smgr = smgropen(rlocator, InvalidBackendId,
-								 RELPERSISTENCE_PERMANENT);
+	SMgrRelation smgr = smgropen(rlocator, InvalidBackendId);
 
 	return ReadBuffer_common(smgr, permanent ? RELPERSISTENCE_PERMANENT :
 							 RELPERSISTENCE_UNLOGGED, forkNum, blockNum,
@@ -3413,7 +3412,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), InvalidBackendId, 0);
+		reln = smgropen_rp(BufTagGetRelFileLocator(&buf->tag), InvalidBackendId, 0);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
 										buf->tag.blockNum,
@@ -4317,8 +4316,8 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	use_wal = XLogIsNeeded() && (permanent || forkNum == INIT_FORKNUM);
 
 	/* Get number of blocks in the source relation. */
-	nblocks = smgrnblocks(smgropen(srclocator, InvalidBackendId,
-								   permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
+	nblocks = smgrnblocks(smgropen_rp(srclocator, InvalidBackendId,
+									 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
 						  forkNum);
 
 	/* Nothing to copy; just return. */
@@ -4330,8 +4329,8 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * relation before starting to copy block by block.
 	 */
 	memset(buf.data, 0, BLCKSZ);
-	smgrextend(smgropen(dstlocator, InvalidBackendId,
-						permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
+	smgrextend(smgropen_rp(dstlocator, InvalidBackendId,
+						   permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
 			   forkNum, nblocks - 1, buf.data, true);
 
 	/* This is a bulk operation, so use buffer access strategies. */
@@ -4413,9 +4412,9 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	for (ForkNumber forkNum = MAIN_FORKNUM + 1;
 		 forkNum <= MAX_FORKNUM; forkNum++)
 	{
-		if (smgrexists(smgropen(src_rlocator, InvalidBackendId, relpersistence), forkNum))
+		if (smgrexists(smgropen_rp(src_rlocator, InvalidBackendId, relpersistence), forkNum))
 		{
-			smgrcreate(smgropen(dst_rlocator, InvalidBackendId, relpersistence), forkNum, false);
+			smgrcreate(smgropen_rp(dst_rlocator, InvalidBackendId, relpersistence), forkNum, false);
 
 			/*
 			 * WAL log creation if the relation is persistent, or this is the
@@ -5604,7 +5603,7 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(currlocator, InvalidBackendId, 0);
+		reln = smgropen_rp(currlocator, InvalidBackendId, 0);
 		smgrwriteback(reln, BufTagGetForkNum(&tag), tag.blockNum, nblocks);
 	}
 

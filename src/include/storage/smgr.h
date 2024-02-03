@@ -152,7 +152,8 @@ extern const f_smgr *smgr_standard(BackendId backend, RelFileLocator rlocator);
 extern const f_smgr *smgr(BackendId backend, RelFileLocator rlocator);
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend, char relpersistence);
+extern SMgrRelation smgropen_rp(RelFileLocator rlocator, BackendId backend, char relpersistence);
+extern SMgrRelation smgropen(RelFileLocator rlocator, BackendId backend);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrsetowner(SMgrRelation *owner, SMgrRelation reln);
 extern void smgrclearowner(SMgrRelation *owner, SMgrRelation reln);

@@ -248,10 +248,7 @@ GetLocalVictimBuffer(void)
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		if (am_wal_redo_postgres && MyBackendId == InvalidBackendId)
-			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId, RELPERSISTENCE_PERMANENT);
-		else
-			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId, RELPERSISTENCE_TEMP);
+		oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyBackendId);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 

@@ -508,7 +508,7 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 	}
 
 	/* Open the relation at smgr level */
-	smgr = smgropen(rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
+	smgr = smgropen(rlocator, InvalidBackendId);
 
 	/*
 	 * Create the target file if it doesn't already exist.  This lets us cope

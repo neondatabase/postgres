@@ -14787,7 +14787,7 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 {
 	SMgrRelation dstrel;
 
-	dstrel = smgropen(newrlocator, rel->rd_backend, rel->rd_rel->relpersistence);
+	dstrel = smgropen_rp(newrlocator, rel->rd_backend, rel->rd_rel->relpersistence);
 
 	/*
 	 * Since we copy the file directly without looking at the shared buffers,
