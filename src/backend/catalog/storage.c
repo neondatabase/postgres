@@ -145,7 +145,7 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 			return NULL;		/* placate compiler */
 	}
 
-	srel = smgropen(rlocator, backend, relpersistence);
+	srel = smgropen_rp(rlocator, backend, relpersistence);
 	smgrcreate(srel, MAIN_FORKNUM, false);
 
 	if (needs_wal)
@@ -680,7 +680,7 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				srel = smgropen(pending->rlocator, pending->backend, 0);
+				srel = smgropen_rp(pending->rlocator, pending->backend, 0);
 
 				/* allocate the initial array, or extend it, if needed */
 				if (maxrels == 0)
@@ -761,7 +761,7 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		BlockNumber total_blocks = 0;
 		SMgrRelation srel;
 
-		srel = smgropen(pendingsync->rlocator, InvalidBackendId, 0);
+		srel = smgropen_rp(pendingsync->rlocator, InvalidBackendId, 0);
 
 		/*
 		 * We emit newpage WAL records for smaller relations.
@@ -970,7 +970,7 @@ smgr_redo(XLogReaderState *record)
 		xl_smgr_create *xlrec = (xl_smgr_create *) XLogRecGetData(record);
 		SMgrRelation reln;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
+		reln = smgropen(xlrec->rlocator, InvalidBackendId);
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
 	else if (info == XLOG_SMGR_TRUNCATE)
@@ -983,7 +983,7 @@ smgr_redo(XLogReaderState *record)
 		int			nforks = 0;
 		bool		need_fsm_vacuum = false;
 
-		reln = smgropen(xlrec->rlocator, InvalidBackendId, RELPERSISTENCE_PERMANENT);
+		reln = smgropen(xlrec->rlocator, InvalidBackendId);
 
 		/*
 		 * Forcibly create relation if it doesn't exist (which suggests that

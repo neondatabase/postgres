@@ -319,7 +319,7 @@ static int64
 calculate_relation_size(RelFileLocator *rfn, BackendId backend,
 						ForkNumber forknum, char relpersistence)
 {
-	SMgrRelation srel = smgropen(*rfn, backend, relpersistence);
+	SMgrRelation srel = smgropen_rp(*rfn, backend, relpersistence);
 
 	if (smgrexists(srel, forknum))
 	{
