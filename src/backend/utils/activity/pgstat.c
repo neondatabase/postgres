@@ -98,6 +98,7 @@
 #include "lib/dshash.h"
 #include "pgstat.h"
 #include "port/atomics.h"
+#include "replication/message.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -1465,6 +1466,8 @@ pgstat_write_statsfile(void)
 						tmpfile, statfile)));
 		unlink(tmpfile);
 	}
+	if (XLogInsertAllowed())
+		wallog_file(statfile);
 }
 
 /* helpers for pgstat_read_statsfile() */
