@@ -38,4 +38,7 @@ void		logicalmsg_redo(XLogReaderState *record);
 void		logicalmsg_desc(StringInfo buf, XLogReaderState *record);
 const char *logicalmsg_identify(uint8 info);
 
+extern void wallog_file(char const* path);
+extern void wallog_file_descriptor(char const* path, int fd);
+
 #endif							/* PG_LOGICAL_MESSAGE_H */
