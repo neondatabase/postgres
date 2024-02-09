@@ -3748,6 +3748,8 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 						tmpfile, statfile)));
 		unlink(tmpfile);
 	}
+	else if (XLogInsertAllowed())
+		wallog_file(statfile);
 
 	if (permanent)
 		unlink(pgstat_stat_filename);
@@ -3758,9 +3760,6 @@ pgstat_write_statsfiles(bool permanent, bool allDbs)
 	 */
 	list_free(pending_write_requests);
 	pending_write_requests = NIL;
-
-	if (XLogInsertAllowed())
-		wallog_file(statfile);
 }
 
 /*
@@ -3886,6 +3885,8 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 						tmpfile, statfile)));
 		unlink(tmpfile);
 	}
+	else if (XLogInsertAllowed())
+		wallog_file(statfile);
 
 	if (permanent)
 	{
@@ -3894,9 +3895,6 @@ pgstat_write_db_statsfile(PgStat_StatDBEntry *dbentry, bool permanent)
 		elog(DEBUG2, "removing temporary stats file \"%s\"", statfile);
 		unlink(statfile);
 	}
-
-	if (XLogInsertAllowed())
-		wallog_file(statfile);
 }
 
 /* ----------
