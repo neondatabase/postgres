@@ -1433,8 +1433,7 @@ pgstat_write_statsfile(void)
 				 errmsg("could not rename temporary statistics file \"%s\" to \"%s\": %m",
 						tmpfile, statfile)));
 		unlink(tmpfile);
-	}
-	if (XLogInsertAllowed())
+	} else if (XLogInsertAllowed())
 		wallog_file(statfile);
 }
 
