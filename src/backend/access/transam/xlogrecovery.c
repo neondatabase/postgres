@@ -548,6 +548,18 @@ XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 	ConditionVariableCancelSleep();
 }
 
+
+/*
+ * NEON: check if primary node is running.
+ * Correspondent GUC is received from control plane
+ */
+static bool
+IsPrimaryAlive()
+{
+	const char* val = GetConfigOption("neon.primary_is_running", true, false);
+	return val != NULL && strcmp(val, "on") == 0;
+}
+
 /*
  * Prepare the system for WAL recovery, if needed.
  *
@@ -793,7 +805,10 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		// When read-only replica is started, we need to obtain information about running xacts, so wasShutdown is set to false.
 		// When snapshot read-only node is started, we can treat all active transactions as aborted so once again
 		// assume that we restart after normal shutdown.
-		wasShutdown = StandbyModeRequested && PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0' ? false : true;
+		wasShutdown = StandbyModeRequested
+			&& PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0'
+			&& IsPrimaryAlive()
+			? false : true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
