@@ -542,6 +542,18 @@ typedef union WALInsertLockPadded
 	char		pad[PG_CACHE_LINE_SIZE];
 } WALInsertLockPadded;
 
+
+/*
+ * NEON: check if primary node is running.
+ * Correspondent GUC is received from control plane
+ */
+static bool
+IsPrimaryAlive()
+{
+	const char* val = GetConfigOption("neon.primary_is_running", true, false);
+	return val != NULL && strcmp(val, "on") == 0;
+}
+
 /*
  * State of an exclusive backup, necessary to control concurrent activities
  * across sessions when working on exclusive backups.
@@ -7034,7 +7046,10 @@ StartupXLOG(void)
 		// When read-only replica is started, we need to obtain information about running xacts, so wasShutdown is set to false.
 		// When snapshot read-only node is started, we can treat all active transactions as aborted so once again
 		// assume that we restart after normal shutdown.
-		wasShutdown = StandbyModeRequested && PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0' ? false : true;
+		wasShutdown = StandbyModeRequested
+			&& PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0'
+			&& IsPrimaryAlive()
+			? false : true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
