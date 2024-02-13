@@ -542,6 +542,18 @@ typedef union WALInsertLockPadded
 	char		pad[PG_CACHE_LINE_SIZE];
 } WALInsertLockPadded;
 
+
+/*
+ * NEON: check if primary node is running.
+ * Correspondent GUC is received from control plane
+ */
+static bool
+IsPrimaryAlive()
+{
+	const char* val = GetConfigOption("neon.primary_is_running", true, false);
+	return val != NULL && strcmp(val, "on") == 0;
+}
+
 /*
  * State of an exclusive backup, necessary to control concurrent activities
  * across sessions when working on exclusive backups.
@@ -7031,7 +7043,15 @@ StartupXLOG(void)
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
-		wasShutdown = true;
+		// When normal (primary) Neon compute node is started, we assume that is started after normal shutdown and
+		// no recovery is needed.
+		// When read-only replica is started, we need to obtain information about running xacts, so wasShutdown is set to false.
+		// When snapshot read-only node is started, we can treat all active transactions as aborted so once again
+		// assume that we restart after normal shutdown.
+		wasShutdown = StandbyModeRequested
+			&& PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0'
+			&& IsPrimaryAlive()
+			? false : true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
@@ -7200,6 +7220,14 @@ StartupXLOG(void)
 	if (!TransactionIdIsNormal(XidFromFullTransactionId(checkPoint.nextXid)))
 		ereport(PANIC,
 				(errmsg("invalid next transaction ID")));
+
+	if (ZenithRecoveryRequested)
+	{
+		if (wasShutdown)
+			checkPoint.oldestActiveXid = 0;
+		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
+			checkPoint.oldestActiveXid = FirstNormalTransactionId;
+	}
 
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
