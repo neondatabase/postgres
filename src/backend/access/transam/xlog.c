@@ -5187,6 +5187,14 @@ StartupXLOG(void)
 					&haveBackupLabel, &haveTblspcMap);
 	checkPoint = ControlFile->checkPointCopy;
 
+	if (ZenithRecoveryRequested)
+	{
+		if (wasShutdown)
+			checkPoint.oldestActiveXid = 0;
+		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
+			checkPoint.oldestActiveXid = FirstNormalTransactionId;
+	}
+
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
