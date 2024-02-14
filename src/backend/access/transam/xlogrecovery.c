@@ -814,15 +814,26 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		//EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
-		// When normal (primary) Neon compute node is started, we assume that is started after normal shutdown and
-		// no recovery is needed.
-		// When read-only replica is started, we need to obtain information about running xacts, so wasShutdown is set to false.
-		// When snapshot read-only node is started, we can treat all active transactions as aborted so once again
-		// assume that we restart after normal shutdown.
-		wasShutdown = StandbyModeRequested
-			&& PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0'
-			&& IsPrimaryAlive()
-			? false : true;
+		// When primary Neon compute node is started, we pretend that it started after a clean shutdown and
+		// no recovery is needed. We don't need to do WAL replay, the page server does that on a page-by-page basis.
+		// When a read-only replica is started, PostgreSQL normally waits for a shutdown checkpoint or running-xacts
+		// record before enabling hot standby, to establish which transactions are still running in the primary,
+		// and might still commit later. But if we know that the primary is not running - because the control plane
+		// says so - we can skip that. That avoids having to wait indefinitely if the primary is not running. This is
+		// particularly important for Neon because we don't start recovery from a checkpoint record, so there's
+		// no guarantee on when we'll see the next checkpoint or running-xacts record, if ever. so if we know the primary is
+		// not currently running, also set wasShutdown to 'true'.
+		if (StandbyModeRequested &&
+				PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0')
+		{
+			if (!IsPrimaryAlive())
+				wasShutdown = true;
+			else
+				wasShutdown = false;
+		}
+		else
+			wasShutdown = true;
+
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
