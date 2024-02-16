@@ -381,9 +381,6 @@ extern const char *GetSystemUser(void);
 extern bool superuser(void);	/* current user is superuser */
 extern bool superuser_arg(Oid roleid);	/* given user is superuser */
 
-/* in utils/adt/acl.c */
-extern bool is_neon_superuser(void); /* current user is neon_superuser */
-extern bool is_neon_superuser_arg(Oid roleid); /* given user is neon_superuser */
 
 /*****************************************************************************
  *	  pmod.h --																 *
