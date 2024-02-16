@@ -1125,7 +1125,7 @@ CreateFunction(ParseState *pstate, CreateFunctionStmt *stmt)
 	else
 	{
 		/* if untrusted language, must be superuser */
-		if (!(superuser() || (is_neon_superuser() && creating_extension)))
+		if (!superuser())
 			aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_LANGUAGE,
 						   NameStr(languageStruct->lanname));
 	}
@@ -2129,7 +2129,7 @@ ExecuteDoStmt(ParseState *pstate, DoStmt *stmt, bool atomic)
 	else
 	{
 		/* if untrusted language, must be superuser */
-		if (!(superuser() || (is_neon_superuser() && creating_extension)))
+		if (!superuser())
 			aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_LANGUAGE,
 						   NameStr(languageStruct->lanname));
 	}
