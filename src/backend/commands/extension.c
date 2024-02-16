@@ -897,7 +897,7 @@ execute_extension_script(Oid extensionOid, ExtensionControlFile *control,
 	 * here so that the control flags are correctly associated with the right
 	 * script(s) if they happen to be set in secondary control files.
 	 */
-	if (control->superuser && !superuser() && !is_neon_superuser())
+	if (control->superuser && !superuser())
 	{
 		if (extension_is_trusted(control))
 			switch_to_superuser = true;
