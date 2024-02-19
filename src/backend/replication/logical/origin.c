@@ -676,7 +676,7 @@ CheckPointReplicationOrigin(void)
 		chkp_size += sizeof(crc);
 
 		/* NEON specific: persist snapshot in storage using logical message */
-		LogLogicalMessage("neon-file:pg_logical/replorigin_checkpoint", buf, chkp_size, false);
+		XLogFlush(LogLogicalMessage("neon-file:pg_logical/replorigin_checkpoint", buf, chkp_size, false));
 	}
 	pfree(buf);
 
