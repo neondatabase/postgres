@@ -1730,7 +1730,7 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 
 	/* NEON specific: persist snapshot in storage using logical message */
 	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-	LogLogicalMessage(prefix, (char*)ondisk, needed_length, false);
+	XLogFlush(LogLogicalMessage(prefix, (char*)ondisk, needed_length, false));
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
@@ -2099,7 +2099,7 @@ CheckPointSnapBuild(void)
 
 			/* NEON specific: delete file from storage using logical message */
 			snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-			LogLogicalMessage(prefix, NULL, 0, false);
+			XLogFlush(LogLogicalMessage(prefix, NULL, 0, false));
 
 			/*
 			 * It's not particularly harmful, though strange, if we can't
