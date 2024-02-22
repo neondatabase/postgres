@@ -5349,6 +5349,7 @@ StartupXLOG(void)
 			 * FirstNormalTransactionId is conservative estimation of oldest active XACT, unless
 			 * current XID is greater than 1^31. So it is also not 100% safe solution but better than assertion failure.
 			 */
+			elog(FATAL, "oldestActiveXid=%d", checkPoint.oldestActiveXid);
 			checkPoint.oldestActiveXid = FirstNormalTransactionId;
 		}
 	}
