@@ -5339,7 +5339,6 @@ StartupXLOG(void)
 	if (ZenithRecoveryRequested)
 	{
 		if (wasShutdown)
-		{
 			checkPoint.oldestActiveXid = InvalidTransactionId;
 		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
 		{
