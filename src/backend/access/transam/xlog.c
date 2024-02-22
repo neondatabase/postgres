@@ -5336,6 +5336,24 @@ StartupXLOG(void)
 					&haveBackupLabel, &haveTblspcMap);
 	checkPoint = ControlFile->checkPointCopy;
 
+	if (ZenithRecoveryRequested)
+	{
+		if (wasShutdown)
+			checkPoint.oldestActiveXid = InvalidTransactionId;
+		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
+		{
+			/*
+			 * It should not actually happen: PS oldestActiveXid
+			 * from running xacts WAL records and include it in checkpoint
+			 * sent in basebackup.
+			 * FirstNormalTransactionId is conservative estimation of oldest active XACT, unless
+			 * current XID is greater than 1^31. So it is also not 100% safe solution but better than assertion failure.
+			 */
+			elog(FATAL, "oldestActiveXid=%d", checkPoint.oldestActiveXid);
+			checkPoint.oldestActiveXid = FirstNormalTransactionId;
+		}
+	}
+
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
