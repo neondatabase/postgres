@@ -5339,17 +5339,18 @@ StartupXLOG(void)
 	if (ZenithRecoveryRequested)
 	{
 		if (wasShutdown)
+		{
 			checkPoint.oldestActiveXid = InvalidTransactionId;
 		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
 		{
 			/*
-			 * It should not actually happen: PS oldestActiveXid
-			 * from running xacts WAL records and include it in checkpoint
-			 * sent in basebackup.
-			 * FirstNormalTransactionId is conservative estimation of oldest active XACT, unless
-			 * current XID is greater than 1^31. So it is also not 100% safe solution but better than assertion failure.
+			 * Pageserver extracts oldestActiveXid from snapshot and running xacts WAL records
+			 * and include it in checkpoint sent in basebackup.
+			 * So oldestActiveXid can be zero only after database initialization when no checkpoints are yet performed
+			 * and not running xacts records was logged.
+			 * In this case it is possible to use FirstNormalTransactionId as safe conservative estimation
+			 * of oldest active transaction XID.
 			 */
-			elog(FATAL, "oldestActiveXid=%d", checkPoint.oldestActiveXid);
 			checkPoint.oldestActiveXid = FirstNormalTransactionId;
 		}
 	}
