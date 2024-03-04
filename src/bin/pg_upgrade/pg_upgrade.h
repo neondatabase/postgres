@@ -234,7 +234,14 @@ typedef enum
 {
 	TRANSFER_MODE_CLONE,
 	TRANSFER_MODE_COPY,
-	TRANSFER_MODE_LINK
+	TRANSFER_MODE_LINK,
+	/*
+	 * NEON: We don't want to transfer user files over to the new cluster.
+	 * Because the new cluster shares the same LSN as the old cluster (thanks
+	 * pg_upgrade!), we can just get Neon to recognize the new cluster as
+	 * one large update to the previous version's initdb files.
+	 */
+	TRANSFER_MODE_NONE,
 } transferMode;
 
 /*
