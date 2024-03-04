@@ -126,6 +126,7 @@ int			wal_sender_timeout = 60 * 1000; /* maximum time to send one WAL
 											 * data message */
 bool		log_replication_commands = false;
 
+void		(*WalSender_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
 /*
  * State for WalSndWakeupRequest
  */
@@ -1260,6 +1261,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
 	QueryCompletion qc;
+        XLogReaderRoutine xlr;
 
 	/* make sure that our requirements are still fulfilled */
 	CheckLogicalDecodingRequirements();
@@ -1280,6 +1282,12 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 		got_STOPPING = true;
 	}
 
+	xlr.page_read = logical_read_xlog_page;
+	xlr.segment_open = WalSndSegmentOpen;
+	xlr.segment_close = wal_segment_close;
+	if (WalSender_Custom_XLogReaderRoutines != NULL)
+		WalSender_Custom_XLogReaderRoutines(&xlr);
+
 	/*
 	 * Create our decoding context, making it start at the previously ack'ed
 	 * position.
@@ -1288,10 +1296,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * are reported early.
 	 */
 	logical_decoding_ctx =
-		CreateDecodingContext(cmd->startpoint, cmd->options, false,
-							  XL_ROUTINE(.page_read = logical_read_xlog_page,
-										 .segment_open = WalSndSegmentOpen,
-										 .segment_close = wal_segment_close),
+		CreateDecodingContext(cmd->startpoint, cmd->options, false, &xlr,
 							  WalSndPrepareWrite, WalSndWriteData,
 							  WalSndUpdateProgress);
 	xlogreader = logical_decoding_ctx->reader;
