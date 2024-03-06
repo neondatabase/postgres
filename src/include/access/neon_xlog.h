@@ -1,6 +1,8 @@
 #ifndef NEON_XLOG_H
 #define NEON_XLOG_H
 
+#include "storage/off.h"
+
 /*
  * The RMGR id of the Neon RMGR
  *
