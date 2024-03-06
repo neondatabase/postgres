@@ -23,6 +23,8 @@
 #define XLOG_NEON_HEAP_MULTI_INSERT	0x50
 /* 2 variants available */
 
+#define XLOG_NEON_FILE				0x60
+
 /* */
 typedef struct xl_neon_heap_header {
 	uint16		t_infomask2;
@@ -130,5 +132,19 @@ typedef struct xl_neon_multi_insert_tuple
 	/* TUPLE DATA FOLLOWS AT END OF STRUCT */
 } xl_neon_multi_insert_tuple;
 #define SizeOfNeonMultiInsertTuple	(offsetof(xl_neon_multi_insert_tuple, t_hoff) + sizeof(uint8))
+
+typedef enum xl_neon_file_filetype {
+	XLOG_NEON_FILE_UPGRADE_TARBALL = 0x00,
+} xl_neon_file_filetype;
+
+typedef struct xl_neon_file
+{
+	uint8		filetype;
+	uint8		padding1;
+	uint16		padding2;
+	size_t		size;
+	char		data[FLEXIBLE_ARRAY_MEMBER];
+} xl_neon_file;
+#define SizeOfNeonFile	offsetof(xl_neon_file, data)
 
 #endif //NEON_XLOG_H
