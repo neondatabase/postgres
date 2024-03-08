@@ -51,7 +51,8 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 	if (IsInParallelMode())
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
-				 errmsg("cannot set parameters during a parallel operation")));
+				 errmsg("cannot set parameters during a parallel operation"),
+				 errbacktrace()));
 
 	switch (stmt->kind)
 	{

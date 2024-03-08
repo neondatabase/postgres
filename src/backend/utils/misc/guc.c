@@ -3366,7 +3366,8 @@ set_config_option_ext(const char *name, const char *value,
 	{
 		ereport(elevel,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
-				 errmsg("cannot set parameters during a parallel operation")));
+				 errmsg("cannot set parameters during a parallel operation"),
+				 errbacktrace()));
 		return -1;
 	}
 
