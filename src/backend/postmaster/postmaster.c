@@ -4061,7 +4061,7 @@ SignalSomeChildren(int signal, int target)
 			 * processes.
 			 */
 			/* Neon: Also allow walproposer background worker to be treated like a WAL sender, so that it's shut down last */
-			if ((bp->bkend_type == BACKEND_TYPE_NORMAL || BACKEND_TYPE_BGWORKER) &&
+			if ((bp->bkend_type == BACKEND_TYPE_NORMAL || bp->bkend_type == BACKEND_TYPE_BGWORKER) &&
 				IsPostmasterChildWalSender(bp->child_slot))
 				bp->bkend_type = BACKEND_TYPE_WALSND;
 
@@ -5307,7 +5307,7 @@ CountChildren(int target)
 			 * processes.
 			 */
 			/* Neon: Also allow walproposer background worker to be treated like a WAL sender, so that it's shut down last */
-			if ((bp->bkend_type == BACKEND_TYPE_NORMAL || BACKEND_TYPE_BGWORKER) &&
+			if ((bp->bkend_type == BACKEND_TYPE_NORMAL || bp->bkend_type == BACKEND_TYPE_BGWORKER) &&
 				IsPostmasterChildWalSender(bp->child_slot))
 				bp->bkend_type = BACKEND_TYPE_WALSND;
 
