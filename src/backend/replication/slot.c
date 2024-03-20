@@ -1665,7 +1665,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 		char		prefix[MAXPGPATH];
 		snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 		elog(LOG, "Save replication slot at %s restart_lsn=%X/%X", path, 	LSN_FORMAT_ARGS(cp.slotdata.restart_lsn));
-		LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false);
+		XLogFlush(LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false));
 	}
 
 	errno = 0;
