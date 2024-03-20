@@ -690,7 +690,7 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 		char		prefix[MAXPGPATH];
 		snprintf(prefix, sizeof(prefix), "neon-file:%s/state", path);
 		elog(LOG, "Drop replication slot %s", path);
-		LogLogicalMessage(prefix, NULL, 0, false);
+		XLogFlush(LogLogicalMessage(prefix, NULL, 0, false));
 	}
 
 	/*
