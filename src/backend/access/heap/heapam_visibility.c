@@ -128,7 +128,11 @@ SetHintBits(HeapTupleHeader tuple, Buffer buffer,
 			return;
 		}
 	}
-
+	if (RecoveryInProgress() && !XLogGetAppliedRunningXacts())
+	{
+		/* NEON: Replica has not received running-xacts snapshot yet */
+		return;
+	}
 	tuple->t_infomask |= infomask;
 	MarkBufferDirtyHint(buffer, true);
 }

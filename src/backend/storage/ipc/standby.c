@@ -1193,6 +1193,7 @@ standby_redo(XLogReaderState *record)
 		running.xids = xlrec->xids;
 
 		ProcArrayApplyRecoveryInfo(&running);
+		XLogSetAppliedRunningXacts();
 
 		/*
 		 * The startup process currently has no convenient way to schedule

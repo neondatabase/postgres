@@ -272,6 +272,9 @@ extern XLogRecPtr GetRedoStartLsn(void);
 
 extern void SetWalWriterSleeping(bool sleeping);
 
+extern bool XLogGetAppliedRunningXacts(void);
+extern void XLogSetAppliedRunningXacts(void);
+
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
  */
