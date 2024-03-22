@@ -265,10 +265,6 @@ extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum,
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
 
-extern void SetZenithCurrentClusterSize(uint64 size);
-extern uint64 GetZenithCurrentClusterSize(void);
-
-
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern void assign_max_wal_size(int newval, void *extra);
