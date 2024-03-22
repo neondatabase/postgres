@@ -5330,24 +5330,6 @@ StartupXLOG(void)
 					&haveBackupLabel, &haveTblspcMap);
 	checkPoint = ControlFile->checkPointCopy;
 
-	if (ZenithRecoveryRequested)
-	{
-		if (wasShutdown)
-			checkPoint.oldestActiveXid = InvalidTransactionId;
-		else if (!TransactionIdIsValid(checkPoint.oldestActiveXid))
-		{
-			/*
-			 * Pageserver extracts oldestActiveXid from snapshot and running xacts WAL records
-			 * and include it in checkpoint sent in basebackup.
-			 * So oldestActiveXid can be zero only after database initialization when no checkpoints are yet performed
-			 * and not running xacts records was logged.
-			 * In this case it is possible to use FirstNormalTransactionId as safe conservative estimation
-			 * of oldest active transaction XID.
-			 */
-			checkPoint.oldestActiveXid = FirstNormalTransactionId;
-		}
-	}
-
 	/* initialize shared memory variables from the checkpoint record */
 	ShmemVariableCache->nextXid = checkPoint.nextXid;
 	ShmemVariableCache->nextOid = checkPoint.nextOid;
