@@ -366,9 +366,6 @@ extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum,
 
 extern XLogRecPtr GetRedoStartLsn(void);
 
-extern void SetZenithCurrentClusterSize(uint64 size);
-extern uint64 GetZenithCurrentClusterSize(void);
-
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
 extern void WakeupRecovery(void);
