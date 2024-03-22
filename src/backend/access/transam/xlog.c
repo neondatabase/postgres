@@ -560,6 +560,12 @@ typedef struct XLogCtlData
 	 */
 	bool		WalWriterSleeping;
 
+
+	/*
+	 * Running-xacts wal records was applied
+	 */
+	bool        AppliedRunningXacts;
+
 	/*
 	 * During recovery, we keep a copy of the latest checkpoint record here.
 	 * lastCheckPointRecPtr points to start of checkpoint record and
@@ -9383,4 +9389,16 @@ XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len)
 			memcpy(page + overlap - len, data, len);
 	}
 	LWLockRelease(WALBufMappingLock);
+}
+
+bool XLogGetAppliedRunningXacts(void)
+{
+	return XLogCtl->AppliedRunningXacts;
+}
+
+void XLogSetAppliedRunningXacts(void)
+{
+	SpinLockAcquire(&XLogCtl->info_lck);
+	XLogCtl->AppliedRunningXacts = true;
+	SpinLockRelease(&XLogCtl->info_lck);
 }
