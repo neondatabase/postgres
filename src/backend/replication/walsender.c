@@ -256,7 +256,7 @@ static void WalSndWait(uint32 socket_events, long timeout, uint32 wait_event);
 static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid);
-static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
+XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
@@ -1400,7 +1400,7 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
  * if we detect a shutdown request (either from postmaster or client)
  * we will return early, so caller must always check.
  */
-static XLogRecPtr
+XLogRecPtr
 WalSndWaitForWal(XLogRecPtr loc)
 {
 	int			wakeEvents;
