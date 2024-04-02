@@ -5181,6 +5181,47 @@ readZenithSignalFile(void)
 	}
 }
 
+static void
+RestoreRunningXactsFromClog(CheckPoint*	checkPoint, TransactionId** xids, int* nxids)
+{
+	TransactionId from = checkPoint->oldestActiveXid;
+	TransactionId till = XidFromFullTransactionId(checkPoint->nextXid);
+	int xcnt;
+	if (!TransactionIdIsNormal(from))
+	{
+		/*
+		 * No checkpoint or running-xacts record was written,
+		 * so use most conservative approximation for oldestActiveXid: firstNormalTransactionId.
+		 * There are should not be problems with wraparounf because it is not possible that
+		 * XID is overflown without writting any checkpoint or running-xact record.
+		 */
+		from = FirstNormalTransactionId;
+	}
+	if (*xids != NULL)
+	{
+		/*
+		 * xids already set by PrescanPreparedTransactions.
+		 * We do not need inforamtion about prepared transactions, because
+		 * they should be subset of one reconstred frion CLOG.
+		 * So just deallocate *xids not to leak memory
+		 */
+		pfree(*xids);
+	}
+	/* Upper estimation of number of running xids */
+	xcnt = till > from ? till - from : till - from - FirstNormalTransactionId;
+	*xids = (TransactionId*)palloc(xcnt*sizeof(TransactionId));
+	xcnt = 0;
+	for (TransactionId xid = from; TransactionIdPrecedes(xid, till);)
+	{
+		if (!TransactionIdDidCommit(xid) && !TransactionIdDidAbort(xid))
+		{
+			(*xids)[xcnt++] = xid;
+		}
+		TransactionIdAdvance(xid);
+	}
+	*nxids = xcnt;
+}
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -5560,14 +5601,33 @@ StartupXLOG(void)
 			InitRecoveryTransactionEnvironment();
 
 			if (wasShutdown)
+			{
 				oldestActiveXID = PrescanPreparedTransactions(&xids, &nxids);
+				if (TransactionIdIsValid(checkPoint.oldestActiveXid) &&
+					NormalTransactionIdPrecedes(checkPoint.oldestActiveXid, oldestActiveXID))
+				{
+					oldestActiveXID = checkPoint.oldestActiveXid;
+				}
+			}
 			else
+			{
 				oldestActiveXID = checkPoint.oldestActiveXid;
+			}
+			elog(LOG, "checkPoint.oldestActiveXid=%d, oldestActiveXID=%d", checkPoint.oldestActiveXid, oldestActiveXID);
 			Assert(TransactionIdIsValid(oldestActiveXID));
 
 			/* Tell procarray about the range of xids it has to deal with */
 			ProcArrayInitRecovery(XidFromFullTransactionId(ShmemVariableCache->nextXid));
 
+			/*
+			 * NEON: we always assume that standby replica was normally shotdown,
+			 * but primary can be actually alive and we have to restore iformation
+			 * about runniong xacts from CLOG
+			 */
+			if (wasShutdown)
+			{
+				RestoreRunningXactsFromClog(&checkPoint, &xids, &nxids);
+			}
 			/*
 			 * Startup subtrans only.  CLOG, MultiXact and commit timestamp
 			 * have already been started up and other SLRUs are not maintained
