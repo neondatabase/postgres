@@ -6701,12 +6701,26 @@ CheckRequiredParameterValues(void)
 	}
 }
 
+/*
+ * This is taken from procarry.c
+ * TODO: should we better move it to some header file?
+ */
+#define PROCARRAY_MAXPROCS	(MaxBackends + max_prepared_xacts)
+#define TOTAL_MAX_CACHED_SUBXIDS \
+	((PGPROC_MAX_CACHED_SUBXIDS + 1) * PROCARRAY_MAXPROCS)
+
+
+/*
+ * NEON: we do not want to wait running-xacts record from primary which is generated each 15 seconds (if there is some activity).
+ * So we try to restore information about running transactions from CLOG.
+ */
 static void
 RestoreRunningXactsFromClog(CheckPoint*	checkPoint, TransactionId** xids, int* nxids)
 {
 	TransactionId from = checkPoint->oldestActiveXid;
 	TransactionId till = XidFromFullTransactionId(checkPoint->nextXid);
 	int xcnt;
+
 	if (!TransactionIdIsNormal(from))
 	{
 		/*
@@ -6729,13 +6743,27 @@ RestoreRunningXactsFromClog(CheckPoint*	checkPoint, TransactionId** xids, int* n
 	}
 	/* Upper estimation of number of running xids */
 	xcnt = till > from ? till - from : till - from - FirstNormalTransactionId;
+
+	/*
+	 * FIXME: To avoid "too many KnownAssignedXids" error we limit number of reported transactions.
+	 * Certainly it may cause (with very small probability) incorrect results at replica for not reported transactions.
+	 * But is t seems to be better than stuck replica waiting fior sunning-xacts while primary isnot going to send it because
+	 * there were no changes since last generation of this record. Or crashing replica because of fatal error "too many KnownAssignedXids".
+	 * TOTAL_MAX_CACHED_SUBXIDS/2 is taken in the assumption that we need to reserve some space for known xids for subsequent calls
+	 * of RecordKnownAssignedTransactionIds
+	 */
+	xcnt = Min(xcnt, TOTAL_MAX_CACHED_SUBXIDS/2);
 	*xids = (TransactionId*)palloc(xcnt*sizeof(TransactionId));
 	xcnt = 0;
 	for (TransactionId xid = from; TransactionIdPrecedes(xid, till);)
 	{
-		if (!TransactionIdDidCommit(xid) && !TransactionIdDidAbort(xid))
+		XLogRecPtr	xidlsn;
+		XidStatus	xidstatus = TransactionIdGetStatus(xid, &xidlsn);
+		ExtendSUBTRANS(xid);
+		if (xidstatus == TRANSACTION_STATUS_IN_PROGRESS)
 		{
-			(*xids)[xcnt++] = xid;
+			if (xcnt < TOTAL_MAX_CACHED_SUBXIDS/2)
+				(*xids)[xcnt++] = xid;
 		}
 		TransactionIdAdvance(xid);
 	}
