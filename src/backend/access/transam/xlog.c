@@ -6133,6 +6133,12 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
+		else
+		{
+			LWLockRelease(LastWrittenLsnLock);
+			SetLastWrittenLSNForBlock(lsn, rlocator, forknum, blkno);
+			return lsn;
+		}
 	}
 	else
 	{
