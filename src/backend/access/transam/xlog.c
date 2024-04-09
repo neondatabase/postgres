@@ -9041,7 +9041,7 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 		else
 		{
 			LWLockRelease(LastWrittenLsnLock);
-			SetLastWrittenLSNForBlock(lsn, rlocator, forknum, blkno);
+			SetLastWrittenLSNForBlock(lsn, rnode, forknum, blkno);
 			return lsn;
 		}
 	}
