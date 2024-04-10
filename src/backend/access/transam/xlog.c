@@ -9140,7 +9140,6 @@ SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum,
 /*
  * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
  */
-
 XLogRecPtr
 SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum)
 {
