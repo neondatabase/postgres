@@ -358,10 +358,10 @@ extern XLogRecPtr GetFlushRecPtr(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void RemovePromoteSignalFiles(void);
 
-extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
-extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
-extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
-extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+extern XLogRecPtr SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
 extern XLogRecPtr GetLastWrittenLSN(RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 
 extern XLogRecPtr GetRedoStartLsn(void);
