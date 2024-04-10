@@ -6133,6 +6133,11 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 		if (entry != NULL)
 			lsn = entry->lsn;
+		else
+		{
+			LWLockRelease(LastWrittenLsnLock);
+			return SetLastWrittenLSNForBlock(lsn, rnode, forknum, blkno);
+		}
 	}
 	else
 	{
@@ -6160,17 +6165,19 @@ GetLastWrittenLSN(RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
  * rnode.relNode can be InvalidOid, in this case maxLastWrittenLsn is updated.
  * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
  */
-void
+XLogRecPtr
 SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
 	if (lsn == InvalidXLogRecPtr || n_blocks == 0 || lastWrittenLsnCacheSize == 0)
-		return;
+		return lsn;
 
 	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
 	if (rnode.relNode == InvalidOid)
 	{
 		if (lsn > XLogCtl->maxLastWrittenLsn)
 			XLogCtl->maxLastWrittenLsn = lsn;
+		else
+			lsn = XLogCtl->maxLastWrittenLsn;
 	}
 	else
 	{
@@ -6189,6 +6196,8 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 			{
 				if (lsn > entry->lsn)
 					entry->lsn = lsn;
+				else
+					lsn = entry->lsn;
 				/* Unlink from LRU list */
 				dlist_delete(&entry->lru_node);
 			}
@@ -6211,34 +6220,35 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber for
 		}
 	}
 	LWLockRelease(LastWrittenLsnLock);
+	return lsn;
 }
 
 /*
  * SetLastWrittenLSNForBlock -- Set maximal LSN for block
  */
-void
+XLogRecPtr
 SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
 {
-	SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, 1);
+	return SetLastWrittenLSNForBlockRange(lsn, rnode, forknum, blkno, 1);
 }
 
 /*
  * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
  */
-void
+XLogRecPtr
 SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum)
 {
-	SetLastWrittenLSNForBlock(lsn, rnode, forknum, REL_METADATA_PSEUDO_BLOCKNO);
+	return SetLastWrittenLSNForBlock(lsn, rnode, forknum, REL_METADATA_PSEUDO_BLOCKNO);
 }
 
 /*
  * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
  */
-void
+XLogRecPtr
 SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 {
 	RelFileNode dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
+	return SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
 void
