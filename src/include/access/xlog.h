@@ -261,10 +261,10 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 
 /* neon specifics */
 
-extern void SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
-extern void SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
-extern void SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
-extern void SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
+extern XLogRecPtr SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
 extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
