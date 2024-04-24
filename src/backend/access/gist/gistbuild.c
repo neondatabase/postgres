@@ -331,10 +331,6 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			log_newpage_range(index, MAIN_FORKNUM,
 							  0, RelationGetNumberOfBlocks(index),
 							  true);
-			SetLastWrittenLSNForBlockRange(XactLastRecEnd,
-							  index->rd_smgr->smgr_rnode.node,
-							  MAIN_FORKNUM, 0, RelationGetNumberOfBlocks(index));
-			SetLastWrittenLSNForRelation(XactLastRecEnd, index->rd_smgr->smgr_rnode.node, MAIN_FORKNUM);
 		}
 	}
 
