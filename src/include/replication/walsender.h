@@ -36,6 +36,9 @@ extern int	max_wal_senders;
 extern int	wal_sender_timeout;
 extern bool log_replication_commands;
 
+struct XLogReaderRoutine;
+extern void (*WalSender_Custom_XLogReaderRoutines)(struct XLogReaderRoutine *xlr);
+
 extern void InitWalSender(void);
 extern bool exec_replication_command(const char *query_string);
 extern void WalSndErrorCleanup(void);
