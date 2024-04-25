@@ -1261,7 +1261,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
 	QueryCompletion qc;
-        XLogReaderRoutine xlr;
+	XLogReaderRoutine xlr;
 
 	/* make sure that our requirements are still fulfilled */
 	CheckLogicalDecodingRequirements();
