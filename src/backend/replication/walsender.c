@@ -124,6 +124,7 @@ int			wal_sender_timeout = 60 * 1000; /* maximum time to send one WAL
 											 * data message */
 bool		log_replication_commands = false;
 
+void		(*WalSender_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
 /*
  * State for WalSndWakeupRequest
  */
@@ -255,7 +256,7 @@ static void WalSndWait(uint32 socket_events, long timeout, uint32 wait_event);
 static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid);
-static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
+XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
@@ -1136,6 +1137,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
 	QueryCompletion qc;
+	XLogReaderRoutine xlr;
 
 	/* make sure that our requirements are still fulfilled */
 	CheckLogicalDecodingRequirements();
@@ -1163,6 +1165,12 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 		got_STOPPING = true;
 	}
 
+	xlr.page_read = logical_read_xlog_page;
+	xlr.segment_open = WalSndSegmentOpen;
+	xlr.segment_close = wal_segment_close;
+	if (WalSender_Custom_XLogReaderRoutines != NULL)
+		WalSender_Custom_XLogReaderRoutines(&xlr);
+
 	/*
 	 * Create our decoding context, making it start at the previously ack'ed
 	 * position.
@@ -1171,10 +1179,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * are reported early.
 	 */
 	logical_decoding_ctx =
-		CreateDecodingContext(cmd->startpoint, cmd->options, false,
-							  XL_ROUTINE(.page_read = logical_read_xlog_page,
-										 .segment_open = WalSndSegmentOpen,
-										 .segment_close = wal_segment_close),
+		CreateDecodingContext(cmd->startpoint, cmd->options, false, &xlr,
 							  WalSndPrepareWrite, WalSndWriteData,
 							  WalSndUpdateProgress);
 	xlogreader = logical_decoding_ctx->reader;
@@ -1395,7 +1400,7 @@ WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId 
  * if we detect a shutdown request (either from postmaster or client)
  * we will return early, so caller must always check.
  */
-static XLogRecPtr
+XLogRecPtr
 WalSndWaitForWal(XLogRecPtr loc)
 {
 	int			wakeEvents;
