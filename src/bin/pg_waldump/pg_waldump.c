@@ -302,8 +302,17 @@ search_directory(const char *directory, const char *fname, bool ignore_format_er
 					if(fstat(fd, &stat) != 0)
 						pg_fatal("could not stat file \"%s\"", fname);
 
-					/* Round up segment size to next power of 2 or 1MB */
-					WalSegSz = Max(next_pow2_int(stat.st_size), 1024 * 1024);
+					WalSegSz = stat.st_size;
+
+					// if file size is invalid, the xlogreader will fail later with some obscure error
+					// so better to fail here
+					if (!IsValidWalSegSize(WalSegSz))
+					{
+						pg_fatal(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" size is %d byte",
+										  "WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" size is %d bytes",
+										  WalSegSz),
+								 fname, WalSegSz);
+					}
 				}
 			}
 		}
