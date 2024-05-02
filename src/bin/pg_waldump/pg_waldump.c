@@ -189,7 +189,7 @@ open_file_in_directory(const char *directory, const char *fname)
  * wal segment size.
  */
 static bool
-search_directory(const char *directory, const char *fname)
+search_directory(const char *directory, const char *fname, bool ignore_format_errors)
 {
 	int			fd = -1;
 	DIR		   *xldir;
@@ -233,11 +233,35 @@ search_directory(const char *directory, const char *fname)
 
 			WalSegSz = longhdr->xlp_seg_size;
 
+			// if we skip errors, we don't need to check the segment size
 			if (!IsValidWalSegSize(WalSegSz))
+			{
+				if (!ignore_format_errors)
+				{
 				fatal_error(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" header specifies %d byte",
-									 "WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" header specifies %d bytes",
-									 WalSegSz),
-							fname, WalSegSz);
+								  "WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" header specifies %d bytes",
+								  WalSegSz),
+						 fname, WalSegSz);
+				}
+				else
+				{
+					struct stat stat;
+					if(fstat(fd, &stat) != 0)
+						fatal_error("could not stat file \"%s\"", fname);
+
+					WalSegSz = stat.st_size;
+
+					// if file size is invalid, the xlogreader will fail later with some obscure error
+					// so better to fail here
+					if (!IsValidWalSegSize(WalSegSz))
+					{
+						fatal_error(ngettext("WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" size is %d byte",
+										  "WAL segment size must be a power of two between 1 MB and 1 GB, but the WAL file \"%s\" size is %d bytes",
+										  WalSegSz),
+								 fname, WalSegSz);
+					}
+				}
+			}
 		}
 		else if (r < 0)
 			fatal_error("could not read file \"%s\": %m",
@@ -267,18 +291,18 @@ search_directory(const char *directory, const char *fname)
  * The valid target directory is returned.
  */
 static char *
-identify_target_directory(char *directory, char *fname)
+identify_target_directory(char *directory, char *fname, bool ignore_format_errors)
 {
 	char		fpath[MAXPGPATH];
 
 	if (directory != NULL)
 	{
-		if (search_directory(directory, fname))
+		if (search_directory(directory, fname, ignore_format_errors))
 			return pg_strdup(directory);
 
 		/* directory / XLOGDIR */
 		snprintf(fpath, MAXPGPATH, "%s/%s", directory, XLOGDIR);
-		if (search_directory(fpath, fname))
+		if (search_directory(fpath, fname, ignore_format_errors))
 			return pg_strdup(fpath);
 	}
 	else
@@ -286,10 +310,10 @@ identify_target_directory(char *directory, char *fname)
 		const char *datadir;
 
 		/* current directory */
-		if (search_directory(".", fname))
+		if (search_directory(".", fname, ignore_format_errors))
 			return pg_strdup(".");
 		/* XLOGDIR */
-		if (search_directory(XLOGDIR, fname))
+		if (search_directory(XLOGDIR, fname, ignore_format_errors))
 			return pg_strdup(XLOGDIR);
 
 		datadir = getenv("PGDATA");
@@ -297,7 +321,7 @@ identify_target_directory(char *directory, char *fname)
 		if (datadir != NULL)
 		{
 			snprintf(fpath, MAXPGPATH, "%s/%s", datadir, XLOGDIR);
-			if (search_directory(fpath, fname))
+			if (search_directory(fpath, fname, ignore_format_errors))
 				return pg_strdup(fpath);
 		}
 	}
@@ -1119,7 +1143,7 @@ main(int argc, char **argv)
 				fatal_error("could not open directory \"%s\": %m", waldir);
 		}
 
-		waldir = identify_target_directory(waldir, fname);
+		waldir = identify_target_directory(waldir, fname, config.ignore_format_errors);
 		fd = open_file_in_directory(waldir, fname);
 		if (fd < 0)
 			fatal_error("could not open file \"%s\"", fname);
@@ -1182,7 +1206,7 @@ main(int argc, char **argv)
 	}
 	else
 		if (!single_file)
-			waldir = identify_target_directory(waldir, NULL);
+			waldir = identify_target_directory(waldir, NULL, config.ignore_format_errors);
 
 	/* we don't know what to print */
 	if (XLogRecPtrIsInvalid(private.startptr) && !single_file)
@@ -1218,6 +1242,13 @@ main(int argc, char **argv)
 	}
 	else
 	{
+		if(config.ignore_format_errors)
+		{
+			xlogreader_state->skip_page_validation = true;
+			xlogreader_state->skip_invalid_records = true;
+			xlogreader_state->skip_lsn_checks = true;
+		}
+
 		/* first find a valid recptr to start from */
 		first_record = XLogFindNextRecord(xlogreader_state, private.startptr);
 
