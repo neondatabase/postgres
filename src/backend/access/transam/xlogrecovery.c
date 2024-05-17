@@ -507,33 +507,19 @@ XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 	 * Check the backend-local variable first, we may be able to skip accessing
 	 * shared memory (which requires locking)
 	 */
-	if (redoEndRecPtr <= replayRecPtr)
-		return;
-
-	replayRecPtr = GetXLogReplayRecPtr(NULL);
-
-	/*
-	 * Check again if we're going to need to wait, now that we've updated
-	 * the local cached variable.
-	 */
-	if (redoEndRecPtr <= replayRecPtr)
-		return;
-
-	/*
-	 * We need to wait for the variable, so prepare for that.
-	 * 
-	 * Note: This wakes up every time a WAL record is replayed, so this can
-	 * be expensive.
-	 */
-	ConditionVariablePrepareToSleep(&XLogRecoveryCtl->replayProgressCV);
-
 	while (redoEndRecPtr > replayRecPtr)
 	{
-		bool timeout;
+		bool		timeout;
+
+		/*
+		 * Note: This wakes up every time a WAL record is replayed, so this
+		 * can be expensive.
+		 */
 		timeout = ConditionVariableTimedSleep(&XLogRecoveryCtl->replayProgressCV,
 											  10000000, /* 10 seconds */
 											  WAIT_EVENT_RECOVERY_WAL_STREAM);
 
+		/* Update the local cached variable and check again */
 		replayRecPtr = GetXLogReplayRecPtr(NULL);
 
 		if (timeout)
