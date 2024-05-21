@@ -2473,24 +2473,26 @@ UnpinBuffer(BufferDesc *buf)
 		if (zenith_test_evict && !InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
-			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+			if ((buf_state & BM_VALID) && BUF_STATE_GET_REFCOUNT(buf_state) == 0)
 			{
+				ReservePrivateRefCountEntry();
+				PinBuffer_Locked(buf);
 				if (buf_state & BM_DIRTY)
 				{
-					ReservePrivateRefCountEntry();
-					PinBuffer_Locked(buf);
 					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
 												 LW_SHARED))
 					{
 						FlushOneBuffer(b);
 						LWLockRelease(BufferDescriptorGetContentLock(buf));
 					}
-					UnpinBuffer(buf);
 				}
-				else
-				{
-					InvalidateBuffer(buf);
-				}
+
+				/*
+				 * Try to invalidate the page. This can fail if the page is
+				 * concurrently modified; we'll let it be in that case
+				 */
+				(void) InvalidateVictimBuffer(buf);
+				UnpinBuffer(buf);
 			}
 			else
 				UnlockBufHdr(buf, buf_state);
