@@ -1573,6 +1573,84 @@ retry:
 }
 
 /*
+ * NEON: Backported this from v16, to support zenith_test_evict mode. Not
+ * used in production.
+ *
+ * Needs to be called on a buffer with a valid tag, pinned, but without the
+ * buffer header spinlock held.
+ *
+ * Returns true if the buffer can be reused, in which case the buffer is only
+ * pinned by this backend and marked as invalid, false otherwise.
+ */
+static bool
+InvalidateVictimBuffer(BufferDesc *buf_hdr)
+{
+	uint32		buf_state;
+	uint32		hash;
+	LWLock	   *partition_lock;
+	BufferTag	tag;
+
+	Assert(GetPrivateRefCount(BufferDescriptorGetBuffer(buf_hdr)) == 1);
+
+	/* have buffer pinned, so it's safe to read tag without lock */
+	tag = buf_hdr->tag;
+
+	hash = BufTableHashCode(&tag);
+	partition_lock = BufMappingPartitionLock(hash);
+
+	LWLockAcquire(partition_lock, LW_EXCLUSIVE);
+
+	/* lock the buffer header */
+	buf_state = LockBufHdr(buf_hdr);
+
+	/*
+	 * We have the buffer pinned nobody else should have been able to unset
+	 * this concurrently.
+	 */
+	Assert(buf_state & BM_TAG_VALID);
+	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+	Assert(BUFFERTAGS_EQUAL(buf_hdr->tag, tag));
+
+	/*
+	 * If somebody else pinned the buffer since, or even worse, dirtied it,
+	 * give up on this buffer: It's clearly in use.
+	 */
+	if (BUF_STATE_GET_REFCOUNT(buf_state) != 1 || (buf_state & BM_DIRTY))
+	{
+		Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+
+		UnlockBufHdr(buf_hdr, buf_state);
+		LWLockRelease(partition_lock);
+
+		return false;
+	}
+
+	/*
+	 * Clear out the buffer's tag and flags and usagecount.  This is not
+	 * strictly required, as BM_TAG_VALID/BM_VALID needs to be checked before
+	 * doing anything with the buffer. But currently it's beneficial, as the
+	 * cheaper pre-check for several linear scans of shared buffers use the
+	 * tag (see e.g. FlushDatabaseBuffers()).
+	 */
+	CLEAR_BUFFERTAG(buf_hdr->tag);
+	buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
+	UnlockBufHdr(buf_hdr, buf_state);
+
+	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+
+	/* finally delete buffer from the buffer mapping table */
+	BufTableDelete(&tag, hash);
+
+	LWLockRelease(partition_lock);
+
+	Assert(!(buf_state & (BM_DIRTY | BM_VALID | BM_TAG_VALID)));
+	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
+	Assert(BUF_STATE_GET_REFCOUNT(pg_atomic_read_u32(&buf_hdr->state)) > 0);
+
+	return true;
+}
+
+/*
  * MarkBufferDirty
  *
  *		Marks buffer contents as dirty (actual write happens later).
@@ -1933,24 +2011,29 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 		if (zenith_test_evict && !InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
-			if (BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+			if ((buf_state & BM_VALID) && BUF_STATE_GET_REFCOUNT(buf_state) == 0)
 			{
+				ReservePrivateRefCountEntry();
+				PinBuffer_Locked(buf);
 				if (buf_state & BM_DIRTY)
 				{
-					ReservePrivateRefCountEntry();
-					PinBuffer_Locked(buf);
 					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
 												 LW_SHARED))
 					{
 						FlushOneBuffer(b);
 						LWLockRelease(BufferDescriptorGetContentLock(buf));
 					}
-					UnpinBuffer(buf, true);
 				}
-				else
+
+				/*
+				 * Try to invalidate the page. This can fail if the page is
+				 * concurrently modified; we'll let it be in that case
+				 */
 				{
-					InvalidateBuffer(buf);
+
 				}
+				(void) InvalidateVictimBuffer(buf);
+				UnpinBuffer(buf, true);
 			}
 			else
 				UnlockBufHdr(buf, buf_state);
