@@ -7026,7 +7026,29 @@ StartupXLOG(void)
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
-		wasShutdown = true;
+
+		/*
+		 * When a primary Neon compute node is started, we pretend that it
+		 * started after a clean shutdown and no recovery is needed. We don't
+		 * need to do WAL replay, the page server does that on a page-by-page
+		 * basis.
+		 *
+		 * When starting a read-only replica, we will also start from a
+		 * consistent snapshot of the cluster the start LSN, so we don't need
+		 * to perform WAL replay to get there. However, wasShutdown must be
+		 * set to false, because wasShutdown==true would imply that there are
+		 * no transactions still in-progress at the start LSN, and we would
+		 * initialize the known-assigned XIDs machinery for hot standby
+		 * incorrectly. If this is a static read-only node that doesn't follow
+		 * the primary though, then it's OK.
+		 */
+		if (StandbyModeRequested &&
+			PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0')
+		{
+			wasShutdown = false;
+		}
+		else
+			wasShutdown = true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
