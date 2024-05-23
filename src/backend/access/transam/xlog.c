@@ -7025,6 +7025,22 @@ StartupXLOG(void)
 		XLogCtl->RedoStartLSN = RedoStartLSN;
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
+		if (!TransactionIdIsNormal(ControlFile->checkPointCopy.oldestActiveXid))
+		{
+			/*
+			 * No checkpoint or running-xacts record was written, so use most
+			 * conservative approximation for oldestActiveXid:
+			 * firstNormalTransactionId.  There are should not be problems
+			 * with wraparounf because it is not possible that XID is
+			 * overflown without writting any checkpoint or running-xact
+			 * record.
+			 *
+			 * HEIKKI: I don't understand this. Why is it not always set
+			 * correctly in the checkpoint?
+			 */
+			ControlFile->checkPointCopy.oldestActiveXid = FirstNormalTransactionId;
+		}
+
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
 
 		/*
