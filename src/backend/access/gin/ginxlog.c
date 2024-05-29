@@ -450,9 +450,11 @@ ginRedoVacuumPage(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) != BLK_RESTORED)
 	{
-		elog(ERROR, "replay of gin entry tree page vacuum did not restore the page");
+		/* NEON: we do not not apply WAL record if target page is absent at replica */
+		elog(DEBUG2, "replay of gin entry tree page vacuum did not restore the page");
 	}
-	UnlockReleaseBuffer(buffer);
+	if (BufferIsValid(buffer))
+		UnlockReleaseBuffer(buffer);
 }
 
 static void
