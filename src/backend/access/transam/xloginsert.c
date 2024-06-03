@@ -33,6 +33,7 @@
 #include "storage/bufmgr.h"
 #include "storage/proc.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/wait_event.h"
 
 /* Buffer size required to store a compressed version of backup block image */
@@ -67,6 +68,8 @@ typedef struct
 int			max_replication_apply_lag;
 int			max_replication_flush_lag;
 int			max_replication_write_lag;
+
+log_newpage_range_callback_t log_newpage_range_callback;
 
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
@@ -1159,6 +1162,7 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 		XLogRecPtr	recptr;
 		int			nbufs;
 		int			i;
+		BlockNumber firstblk = blkno;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -1189,7 +1193,6 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 
 		/* Write WAL record for this batch. */
 		XLogBeginInsert();
-
 		START_CRIT_SECTION();
 		for (i = 0; i < nbufs; i++)
 		{
@@ -1198,7 +1201,9 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 		}
 
 		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
-
+		SetLastWrittenLSNForBlockRange(recptr, rel->rd_smgr->smgr_rnode.node,
+									   forkNum, firstblk, blkno - firstblk);
+		SetLastWrittenLSNForRelation(recptr, rel->rd_smgr->smgr_rnode.node, forkNum);
 		for (i = 0; i < nbufs; i++)
 		{
 			PageSetLSN(BufferGetPage(bufpack[i]), recptr);
@@ -1206,6 +1211,8 @@ log_newpage_range(Relation rel, ForkNumber forkNum,
 		}
 		END_CRIT_SECTION();
 	}
+	if (log_newpage_range_callback)
+		log_newpage_range_callback(rel, forkNum);
 }
 
 /*

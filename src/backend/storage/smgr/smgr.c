@@ -691,30 +691,6 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- * Zenith-added functions to mark the phases of an unlogged index build.
- */
-void
-smgr_start_unlogged_build(SMgrRelation reln)
-{
-	if ((*reln->smgr).smgr_start_unlogged_build)
-		(*reln->smgr).smgr_start_unlogged_build(reln);
-}
-
-void
-smgr_finish_unlogged_build_phase_1(SMgrRelation reln)
-{
-	if ((*reln->smgr).smgr_finish_unlogged_build_phase_1)
-		(*reln->smgr).smgr_finish_unlogged_build_phase_1(reln);
-}
-
-void
-smgr_end_unlogged_build(SMgrRelation reln)
-{
-	if ((*reln->smgr).smgr_end_unlogged_build)
-		(*reln->smgr).smgr_end_unlogged_build(reln);
-}
-
-/*
  * AtEOXact_SMgr
  *
  * This routine is called during transaction commit or abort (it doesn't
