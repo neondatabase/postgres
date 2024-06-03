@@ -21,6 +21,7 @@
 #define XLOG_NEON_HEAP_LOCK			0x40
 /* from XLOG_HEAP2_* */
 #define XLOG_NEON_HEAP_MULTI_INSERT	0x50
+#define XLOG_NEON_FILE				0x60
 /* 2 variants available */
 
 /* */
@@ -130,5 +131,19 @@ typedef struct xl_neon_multi_insert_tuple
 	/* TUPLE DATA FOLLOWS AT END OF STRUCT */
 } xl_neon_multi_insert_tuple;
 #define SizeOfNeonMultiInsertTuple	(offsetof(xl_neon_multi_insert_tuple, t_hoff) + sizeof(uint8))
+
+/* The type of file being logged to WAL. */
+typedef enum xl_neon_file_filetype {
+	XL_NEON_FILE_UPGRADE_TARBALL,
+} xl_neon_file_filetype;
+
+/* Necessary information for logging a file to WAL. */
+typedef struct xl_neon_file
+{
+	uint32		size;
+	uint8		filetype;
+	uint8		data[FLEXIBLE_ARRAY_MEMBER];
+} xl_neon_file;
+#define SizeOfNeonFile	offsetof(xl_neon_file, data)
 
 #endif //NEON_XLOG_H
