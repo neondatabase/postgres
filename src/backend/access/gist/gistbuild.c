@@ -298,8 +298,6 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		Buffer		buffer;
 		Page		page;
 
-		smgr_start_unlogged_build(index->rd_smgr);
-
 		/* initialize the root page */
 		buffer = gistNewBuffer(index, heap);
 		Assert(BufferGetBlockNumber(buffer) == GIST_ROOT_BLKNO);
@@ -332,8 +330,6 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			gistFreeBuildBuffers(buildstate.gfbb);
 		}
 
-		smgr_finish_unlogged_build_phase_1(index->rd_smgr);
-
 		/*
 		 * We didn't write WAL records as we built the index, so if
 		 * WAL-logging is required, write all pages to the WAL now.
@@ -343,13 +339,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			log_newpage_range(index, MAIN_FORKNUM,
 							  0, RelationGetNumberOfBlocks(index),
 							  true);
-			SetLastWrittenLSNForBlockRange(XactLastRecEnd,
-							  index->rd_smgr->smgr_rlocator.locator,
-							  MAIN_FORKNUM, 0, RelationGetNumberOfBlocks(index));
-			SetLastWrittenLSNForRelation(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
 		}
-
-		smgr_end_unlogged_build(index->rd_smgr);
 	}
 
 	/* okay, all heap tuples are indexed */
