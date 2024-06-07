@@ -500,7 +500,6 @@ Oid
 GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 {
 	RelFileNode node;
-	char	   *rpath;
 	bool		collides;
 	BackendId	backend;
 	SMgrRelation srel;
