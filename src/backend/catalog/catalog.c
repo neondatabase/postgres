@@ -502,7 +502,6 @@ RelFileNumber
 GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 {
 	RelFileLocator locator;
-	char	   *rpath;
 	bool		collides;
 	BackendId	backend;
 	SMgrRelation srel;
