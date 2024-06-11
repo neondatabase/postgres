@@ -101,6 +101,7 @@ typedef struct LogicalDecodingContext
 	TransactionId write_xid;
 } LogicalDecodingContext;
 
+extern void		(*LogicalFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
 
 extern void CheckLogicalDecodingRequirements(void);
 
