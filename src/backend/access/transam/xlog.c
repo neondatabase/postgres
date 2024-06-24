@@ -696,7 +696,6 @@ static void CreateEndOfRecoveryRecord(void);
 static XLogRecPtr CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn,
 												  XLogRecPtr pagePtr,
 												  TimeLineID newTLI);
-static void PreCheckPointGuts(int flags);
 static void CheckPointGuts(XLogRecPtr checkPointRedo, int flags);
 static void KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo);
 static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
@@ -6855,11 +6854,6 @@ CreateCheckPoint(int flags)
 	SyncPreCheckpoint();
 
 	/*
-	 * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
-	 */
-	PreCheckPointGuts(flags);
-
-	/*
 	 * Use a critical section to force system panic if we have trouble.
 	 */
 	START_CRIT_SECTION();
@@ -7124,7 +7118,15 @@ CreateCheckPoint(int flags)
 		if (flags & CHECKPOINT_END_OF_RECOVERY)
 			LocalXLogInsertAllowed = oldXLogAllowed;
 		else
-			LocalXLogInsertAllowed = 0; /* never again write WAL */
+		{
+			/*
+			 * NEON: fixme we need to persist some informastion on shutdown checkpoint
+			 * using AUX files mechanism (logical messages). So we need to be able to write WAL.
+			 */
+#if 0
+			 LocalXLogInsertAllowed = 0; /* never again write WAL */
+#endif
+		}
 	}
 
 	/*
@@ -7375,28 +7377,6 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 	return recptr;
 }
 
-static void
-CheckPointReplicationState(void)
-{
-	CheckPointRelationMap();
-	CheckPointReplicationSlots();
-	CheckPointSnapBuild();
-	CheckPointLogicalRewriteHeap();
-	CheckPointReplicationOrigin();
-}
-
-/*
- * NEON:  we use logical records to persist information of about slots, origins, relation map...
- * If it is done inside shutdown checkpoint, then Postgres panics: "concurrent write-ahead log activity while database system is shutting down"
- * So it before checkpoint REDO position is determined.
- */
-static void
-PreCheckPointGuts(int flags)
-{
-	if (flags & CHECKPOINT_IS_SHUTDOWN)
-		CheckPointReplicationState();
-}
-
 /*
  * Flush all data in shared memory to disk, and fsync
  *
@@ -7406,8 +7386,11 @@ PreCheckPointGuts(int flags)
 static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
-	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
-		CheckPointReplicationState();
+	CheckPointRelationMap();
+	CheckPointReplicationSlots();
+	CheckPointSnapBuild();
+	CheckPointLogicalRewriteHeap();
+	CheckPointReplicationOrigin();
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);

@@ -116,7 +116,7 @@ wallog_file_descriptor(char const* path, int fd)
 		lseek(fd, 0, SEEK_SET);
 		if (read(fd, buf, (size_t)size) != size)
 			elog(ERROR, "Failed to read mapping file: %m");
-		LogLogicalMessage(prefix, buf, (size_t)size, false);
+		XLogFlush(LogLogicalMessage(prefix, buf, (size_t)size, false));
 		pfree(buf);
 	}
 }
