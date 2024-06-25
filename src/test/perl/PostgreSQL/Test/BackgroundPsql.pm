@@ -215,13 +215,13 @@ sub query
 	my $banner = "background_psql: QUERY_SEPARATOR";
 	$self->{stdin} .= "$query\n;\n\\echo $banner\n";
 
-	pump_until($self->{run}, $self->{timeout}, \$self->{stdout}, qr/$banner/);
+	pump_until($self->{run}, $self->{timeout}, \$self->{stdout}, qr/$banner\n/);
 
 	die "psql query timed out" if $self->{timeout}->is_expired;
 	$output = $self->{stdout};
 
 	# remove banner again, our caller doesn't care
-	$output =~ s/\n$banner$//s;
+	$output =~ s/\n$banner\n$//s;
 
 	# clear out output for the next query
 	$self->{stdout} = '';
