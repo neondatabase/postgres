@@ -467,6 +467,7 @@ extern void StatsShmemInit(void);
 extern void pgstat_restore_stats(void);
 extern void pgstat_discard_stats(void);
 extern void pgstat_before_server_shutdown(int code, Datum arg);
+extern void pgstat_write_statsfile(void);
 
 /* Functions for backend initialization */
 extern void pgstat_initialize(void);
