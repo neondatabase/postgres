@@ -602,9 +602,7 @@ pgstat_report_stat(bool force)
 	 * pgstat_report_stat() call in pgstat_shutdown_hook() - which at least
 	 * the process that ran pgstat_before_server_shutdown() will still call.
 	 */
-	/* NEON: we have to emit WAL during shutdown */
-	if (pgStatLocal.shmem->is_shutdown)
-		return 0;
+	Assert(!pgStatLocal.shmem->is_shutdown);
 
 	now = GetCurrentTransactionStopTimestamp();
 
@@ -1434,8 +1432,11 @@ pgstat_write_statsfile(void)
 				 errmsg("could not rename temporary statistics file \"%s\" to \"%s\": %m",
 						tmpfile, statfile)));
 		unlink(tmpfile);
-	} else if (XLogInsertAllowed())
+	}
+	else if (XLogInsertAllowed())
+	{
 		wallog_file(statfile);
+	}
 }
 
 /* helpers for pgstat_read_statsfile() */
