@@ -6963,15 +6963,7 @@ CreateCheckPoint(int flags)
 		if (flags & CHECKPOINT_END_OF_RECOVERY)
 			LocalXLogInsertAllowed = oldXLogAllowed;
 		else
-		{
-			/*
-			 * NEON: fixme we need to persist some informastion on shutdown checkpoint
-			 * using AUX files mechanism (logical messages). So we need to be able to write WAL.
-			 */
-#if 0
-			 LocalXLogInsertAllowed = 0; /* never again write WAL */
-#endif
-		}
+			LocalXLogInsertAllowed = 0; /* never again write WAL */
 	}
 
 	/*
@@ -7228,6 +7220,7 @@ CheckPointReplicationState(void)
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
+	pgstat_write_statsfile();
 }
 
 

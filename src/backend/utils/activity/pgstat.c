@@ -165,7 +165,6 @@ typedef struct PgStat_SnapshotEntry
  * ----------
  */
 
-static void pgstat_write_statsfile(void);
 static void pgstat_read_statsfile(void);
 
 static void pgstat_reset_after_failure(void);
@@ -603,7 +602,7 @@ pgstat_report_stat(bool force)
 	 * pgstat_report_stat() call in pgstat_shutdown_hook() - which at least
 	 * the process that ran pgstat_before_server_shutdown() will still call.
 	 */
-	/* NEON: we have to emit WAL during shutdpown */
+	/* NEON: we have to emit WAL during shutdown */
 	if (pgStatLocal.shmem->is_shutdown)
 		return 0;
 
@@ -1284,7 +1283,7 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
  * This function is called in the last process that is accessing the shared
  * stats so locking is not required.
  */
-static void
+void
 pgstat_write_statsfile(void)
 {
 	FILE	   *fpout;
