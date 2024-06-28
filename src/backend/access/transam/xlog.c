@@ -122,6 +122,9 @@ bool		XLOG_DEBUG = false;
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
+/* NEON: Hook to allow the neon extension to restore running-xacts from CLOG at replica startup */
+restore_running_xacts_callback_t restore_running_xacts_callback;
+
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -7026,7 +7029,30 @@ StartupXLOG(void)
 		EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
-		wasShutdown = true;
+
+		/*
+		 * When a primary Neon compute node is started, we pretend that it
+		 * started after a clean shutdown and no recovery is needed. We don't
+		 * need to do WAL replay to make the database consistent, the page
+		 * server does that on a page-by-page basis.
+		 *
+		 * When starting a read-only replica, we will also start from a
+		 * consistent snapshot of the cluster the start LSN, so we don't need
+		 * to perform WAL replay to get there. However, wasShutdown must be
+		 * set to false, because wasShutdown==true would imply that there are
+		 * no transactions still in-progress at the start LSN, and we would
+		 * initialize the known-assigned XIDs machinery for hot standby
+		 * incorrectly. If this is a static read-only node that doesn't follow
+		 * the primary though, then it's OK, as we will never see the possible
+		 * commits of the in-progress transactions.
+		 */
+		if (StandbyModeRequested &&
+			PrimaryConnInfo != NULL && *PrimaryConnInfo != '\0')
+		{
+			wasShutdown = false;
+		}
+		else
+			wasShutdown = true;
 
 		/* Initialize expectedTLEs, like ReadRecord() does */
 		expectedTLEs = readTimeLineHistory(checkPoint.ThisTimeLineID);
@@ -7492,8 +7518,9 @@ StartupXLOG(void)
 		 */
 		if (ArchiveRecoveryRequested && EnableHotStandby)
 		{
-			TransactionId *xids;
+			TransactionId *xids = NULL;
 			int			nxids;
+			bool		apply_running_xacts = false;
 
 			ereport(DEBUG1,
 					(errmsg_internal("initializing for hot standby")));
@@ -7521,14 +7548,33 @@ StartupXLOG(void)
 			 * nothing was running on the primary at this point. So fake-up an
 			 * empty running-xacts record and use that here and now. Recover
 			 * additional standby state for prepared transactions.
+			 *
+			 * Neon: We also use a similar mechanism to start up sooner at
+			 * replica startup, by scanning the CLOG and faking a running-xacts
+			 * record based on that.
 			 */
 			if (wasShutdown)
+			{
+				/* Update pg_subtrans entries for any prepared transactions */
+				StandbyRecoverPreparedTransactions();
+				apply_running_xacts = true;
+			}
+			else if (restore_running_xacts_callback)
+			{
+				/*
+				 * Update pg_subtrans entries for any prepared transactions before
+				 * calling the extension hook.
+				 */
+				StandbyRecoverPreparedTransactions();
+				apply_running_xacts = restore_running_xacts_callback(&checkPoint, &xids, &nxids);
+			}
+
+			if (apply_running_xacts)
 			{
 				RunningTransactionsData running;
 				TransactionId latestCompletedXid;
 
-				/* Update pg_subtrans entries for any prepared transactions */
-				StandbyRecoverPreparedTransactions();
+				/* Neon: called StandbyRecoverPreparedTransactions() above already */
 
 				/*
 				 * Construct a RunningTransactions snapshot representing a
