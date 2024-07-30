@@ -227,7 +227,16 @@ heap_xlog_visible(XLogReaderState *record)
 
 		PageSetAllVisible(page);
 
-		if (XLogHintBitIsNeeded())
+		/*
+		 * NEON: despite to the comment above we need to update page LSN here.
+		 * See discussion at hackers: https://www.postgresql.org/message-id/flat/039076d4f6cdd871691686361f83cb8a6913a86a.camel%40j-davis.com#101ba42b004f9988e3d54fce26fb3462
+		 * For Neon this assignment is critical because otherwise last written LSN tracked at compute doesn't
+		 * match with page LSN assignee by WAL-redo and as a result, prefetched page is rejected.
+		 *
+		 * It is fixed in upstream in https://github.com/neondatabase/postgres/commit/7bf713dd2d0739fbcd4103971ed69c17ebe677ea
+		 * but until it is merged we still need to carry a patch here.
+		 */
+		if (true || XLogHintBitIsNeeded())
 			PageSetLSN(page, lsn);
 
 		MarkBufferDirty(buffer);
@@ -317,7 +326,7 @@ static void
 fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
 {
 	*infomask &= ~(HEAP_XMAX_IS_MULTI | HEAP_XMAX_LOCK_ONLY |
-				   HEAP_XMAX_KEYSHR_LOCK | HEAP_XMAX_EXCL_LOCK);
+				   HEAP_XMAX_KEYSHR_LOCK | HEAP_XMAX_EXCL_LOCK | HEAP_COMBOCID);
 	*infomask2 &= ~HEAP_KEYS_UPDATED;
 
 	if (infobits & XLHL_XMAX_IS_MULTI)
@@ -326,6 +335,8 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
 		*infomask |= HEAP_XMAX_LOCK_ONLY;
 	if (infobits & XLHL_XMAX_EXCL_LOCK)
 		*infomask |= HEAP_XMAX_EXCL_LOCK;
+	if (infobits & XLHL_COMBOCID)
+		*infomask |= HEAP_COMBOCID;
 	/* note HEAP_XMAX_SHR_LOCK isn't considered here */
 	if (infobits & XLHL_XMAX_KEYSHR_LOCK)
 		*infomask |= HEAP_XMAX_KEYSHR_LOCK;
