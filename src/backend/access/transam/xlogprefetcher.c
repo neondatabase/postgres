@@ -717,8 +717,10 @@ XLogPrefetcherNextBlock(uintptr_t pgsr_private, XLogRecPtr *lsn)
 			 * We could try to have a fast path for repeated references to the
 			 * same relation (with some scheme to handle invalidations
 			 * safely), but for now we'll call smgropen() every time.
+			 *
+			 * Only permanent relations are WAL-logged, so RELPERSISTENCE_PERMANENT.
 			 */
-			reln = smgropen(block->rlocator, INVALID_PROC_NUMBER);
+			reln = smgropen(block->rlocator, INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT);
 
 			/*
 			 * If the relation file doesn't exist on disk, for example because

@@ -18,6 +18,14 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+struct f_smgr;
+
+/*
+ * Neon: extended SMGR API.
+ * This define can be used by extensions to determine that them are built for Neon.
+ */
+#define NEON_SMGR 1
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -36,6 +44,9 @@ typedef struct SMgrRelationData
 	/* rlocator is the hashtable lookup key, so it must be first! */
 	RelFileLocatorBackend smgr_rlocator;	/* relation physical identifier */
 
+	/* copy of pg_class.relpersistence, or 0 if not known */
+	char		smgr_relpersistence;
+
 	/*
 	 * The following fields are reset to InvalidBlockNumber upon a cache flush
 	 * event, and hold the last known size for each fork.  This information is
@@ -51,7 +62,7 @@ typedef struct SMgrRelationData
 	 * Fields below here are intended to be private to smgr.c and its
 	 * submodules.  Do not touch them from elsewhere.
 	 */
-	int			smgr_which;		/* storage manager selector */
+	const struct f_smgr *smgr;
 
 	/*
 	 * for md.c; per-fork arrays of the number of open segments
@@ -73,8 +84,75 @@ typedef SMgrRelationData *SMgrRelation;
 #define SmgrIsTemp(smgr) \
 	RelFileLocatorBackendIsTemp((smgr)->smgr_rlocator)
 
+/*
+ * This struct of function pointers defines the API between smgr.c and
+ * any individual storage manager module.  Note that smgr subfunctions are
+ * generally expected to report problems via elog(ERROR).  An exception is
+ * that smgr_unlink should use elog(WARNING), rather than erroring out,
+ * because we normally unlink relations during post-commit/abort cleanup,
+ * and so it's too late to raise an error.  Also, various conditions that
+ * would normally be errors should be allowed during bootstrap and/or WAL
+ * recovery --- see comments in md.c for details.
+ */
+typedef struct f_smgr
+{
+	void		(*smgr_init) (void);	/* may be NULL */
+	void		(*smgr_shutdown) (void);	/* may be NULL */
+	void		(*smgr_open) (SMgrRelation reln);
+	void		(*smgr_close) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_create) (SMgrRelation reln, ForkNumber forknum,
+								bool isRedo);
+	bool		(*smgr_exists) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_unlink) (RelFileLocatorBackend rlocator, ForkNumber forknum,
+								bool isRedo);
+	void		(*smgr_extend) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum, const void *buffer, bool skipFsync);
+	void		(*smgr_zeroextend) (SMgrRelation reln, ForkNumber forknum,
+									BlockNumber blocknum, int nblocks, bool skipFsync);
+	bool		(*smgr_prefetch) (SMgrRelation reln, ForkNumber forknum,
+								  BlockNumber blocknum, int nblocks);
+	void		(*smgr_readv) (SMgrRelation reln, ForkNumber forknum,
+							   BlockNumber blocknum,
+							   void **buffers, BlockNumber nblocks);
+	void		(*smgr_writev) (SMgrRelation reln, ForkNumber forknum,
+								BlockNumber blocknum,
+								const void **buffers, BlockNumber nblocks,
+								bool skipFsync);
+	void		(*smgr_writeback) (SMgrRelation reln, ForkNumber forknum,
+								   BlockNumber blocknum, BlockNumber nblocks);
+	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
+								  BlockNumber nblocks);
+	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
+	void		(*smgr_registersync) (SMgrRelation reln, ForkNumber forknum);
+
+	/* Neon: New capabilities for smgr used to make Neon work */
+	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
+	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
+	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
+
+	int  		(*smgr_read_slru_segment) (SMgrRelation reln, const char *path, int segno, void* buffer);
+} f_smgr;
+
+typedef void (*smgr_init_hook_type) (void);
+typedef void (*smgr_shutdown_hook_type) (void);
+extern PGDLLIMPORT smgr_init_hook_type smgr_init_hook;
+extern PGDLLIMPORT smgr_shutdown_hook_type smgr_shutdown_hook;
+extern void smgr_init_standard(void);
+extern void smgr_shutdown_standard(void);
+
+// Alternative implementation of calculate_database_size()
+typedef int64 (*dbsize_hook_type) (Oid dbOid);
+extern PGDLLIMPORT dbsize_hook_type dbsize_hook;
+
+typedef const f_smgr *(*smgr_hook_type) (ProcNumber backend, RelFileLocator rlocator);
+extern PGDLLIMPORT smgr_hook_type smgr_hook;
+extern const f_smgr *smgr_standard(ProcNumber backend, RelFileLocator rlocator);
+
+extern const f_smgr *smgr(ProcNumber backend, RelFileLocator rlocator);
+
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend);
+extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrpin(SMgrRelation reln);
 extern void smgrunpin(SMgrRelation reln);
@@ -123,5 +201,12 @@ smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 {
 	smgrwritev(reln, forknum, blocknum, &buffer, 1, skipFsync);
 }
+
+/* Neon: Change relpersistence for unlogged index builds */
+extern void smgr_start_unlogged_build(SMgrRelation reln);
+extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
+extern void smgr_end_unlogged_build(SMgrRelation reln);
+
+extern int  smgr_read_slru_segment(SMgrRelation reln, const char *path, int segno, void* buffer);
 
 #endif							/* SMGR_H */
