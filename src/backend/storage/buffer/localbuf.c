@@ -240,7 +240,10 @@ GetLocalVictimBuffer(void)
 		Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
 
 		/* Find smgr relation for buffer */
-		oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyProcNumber);
+		if (am_wal_redo_postgres && MyProcNumber == INVALID_PROC_NUMBER)
+			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyProcNumber, RELPERSISTENCE_PERMANENT);
+		else
+			oreln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag), MyProcNumber, RELPERSISTENCE_TEMP);
 
 		PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 

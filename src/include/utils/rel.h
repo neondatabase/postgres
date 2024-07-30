@@ -568,7 +568,8 @@ RelationGetSmgr(Relation rel)
 {
 	if (unlikely(rel->rd_smgr == NULL))
 	{
-		rel->rd_smgr = smgropen(rel->rd_locator, rel->rd_backend);
+		rel->rd_smgr = smgropen(rel->rd_locator, rel->rd_backend,
+								rel->rd_rel->relpersistence);
 		smgrpin(rel->rd_smgr);
 	}
 	return rel->rd_smgr;
