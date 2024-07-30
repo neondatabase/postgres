@@ -55,7 +55,13 @@
  * so we pre-log a few fetches in advance. In the event of
  * crash we can lose (skip over) as many values as we pre-logged.
  */
-#define SEQ_LOG_VALS	32
+/*
+ * NEON XXX: to ensure sequential order of sequence in NEON without
+ * too large gaps even without restarts, we need to WAL log each
+ * sequence update.
+ */
+/* #define SEQ_LOG_VALS	32 */
+#define SEQ_LOG_VALS	0
 
 /*
  * The "special area" of a sequence's buffer page looks like this.
