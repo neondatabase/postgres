@@ -437,6 +437,9 @@ find_extension_control_filename(ExtensionControlFile *control)
 static char *
 get_extension_script_directory(ExtensionControlFile *control)
 {
+	char	   *result;
+	struct stat fst;
+
 	/*
 	 * The directory parameter can be omitted, absolute, or relative to the
 	 * installation's base directory, which can be the sharedir or a custom
@@ -444,13 +447,32 @@ get_extension_script_directory(ExtensionControlFile *control)
 	 * .control file was found.
 	 */
 	if (!control->directory)
-		return pstrdup(control->control_dir);
+	{
+		result = pstrdup(control->control_dir);
+		goto check_result_and_return;
+	}
 
 	if (is_absolute_path(control->directory))
-		return pstrdup(control->directory);
+	{
+		result = pstrdup(control->directory);
+		goto check_result_and_return;
+	}
 
 	Assert(control->basedir != NULL);
-	return psprintf("%s/%s", control->basedir, control->directory);
+	result = psprintf("%s/%s", control->basedir, control->directory);
+
+check_result_and_return:
+	/* NEON: If directory does not exist, check remote extension storage */
+	if (stat(result, &fst) < 0)
+	{
+		/* request download of extension files from for control->directory */
+		if (download_extension_file_hook != NULL)
+		{
+			download_extension_file_hook(control->directory, false);
+		}
+	}
+
+	return result;
 }
 
 static char *
@@ -1466,9 +1488,11 @@ identify_update_path(ExtensionControlFile *control,
 {
 	List	   *result;
 	List	   *evi_list;
+	bool		attempted_download = false;
 	ExtensionVersionInfo *evi_start;
 	ExtensionVersionInfo *evi_target;
 
+reidentify:
 	/* Extract the version update graph from the script directory */
 	evi_list = get_ext_ver_list(control);
 
@@ -1478,6 +1502,16 @@ identify_update_path(ExtensionControlFile *control,
 
 	/* Find shortest path */
 	result = find_update_path(evi_list, evi_start, evi_target, false, false);
+
+	/* Before we report an ERROR, try to download a remote extension */
+	if (result == NIL && download_extension_file_hook && !attempted_download)
+	{
+		attempted_download = true;
+		download_extension_file_hook(control->name, false);
+
+		/* Try again to find the shortest path */
+		goto reidentify;
+	}
 
 	if (result == NIL)
 		ereport(ERROR,
@@ -1701,6 +1735,7 @@ CreateExtensionInternal(char *extensionName,
 	 * will get us there.
 	 */
 	filename = get_extension_script_filename(pcontrol, NULL, versionName);
+
 	if (stat(filename, &fst) == 0)
 	{
 		/* Easy, no extra scripts */
@@ -1712,7 +1747,9 @@ CreateExtensionInternal(char *extensionName,
 		List	   *evi_list;
 		ExtensionVersionInfo *evi_start;
 		ExtensionVersionInfo *evi_target;
+		bool		attempted_download = false;
 
+	reidentify:
 		/* Extract the version update graph from the script directory */
 		evi_list = get_ext_ver_list(pcontrol);
 
@@ -1722,6 +1759,16 @@ CreateExtensionInternal(char *extensionName,
 		/* Identify best path to reach target */
 		evi_start = find_install_path(evi_list, evi_target,
 									  &updateVersions);
+
+		/* Before we report an ERROR, try to download a remote extension */
+		if (evi_start == NULL && download_extension_file_hook && !attempted_download)
+		{
+			attempted_download = true;
+			download_extension_file_hook(extensionName, false);
+
+			/* Try again to find the install path */
+			goto reidentify;
+		}
 
 		/* Fail if no path ... */
 		if (evi_start == NULL)
