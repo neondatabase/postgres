@@ -68,6 +68,7 @@
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 #include "utils/spccache.h"
+#include "access/neon_xlog.h"
 
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
@@ -2069,11 +2070,11 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 	/* XLOG stuff */
 	if (RelationNeedsWAL(relation))
 	{
-		xl_heap_insert xlrec;
-		xl_heap_header xlhdr;
+		xl_neon_heap_insert xlrec;
+		xl_neon_heap_header xlhdr;
 		XLogRecPtr	recptr;
 		Page		page = BufferGetPage(buffer);
-		uint8		info = XLOG_HEAP_INSERT;
+		uint8		info = XLOG_NEON_HEAP_INSERT;
 		int			bufflags = 0;
 
 		/*
@@ -2091,7 +2092,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		if (ItemPointerGetOffsetNumber(&(heaptup->t_self)) == FirstOffsetNumber &&
 			PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
 		{
-			info |= XLOG_HEAP_INIT_PAGE;
+			info |= XLOG_NEON_INIT_PAGE;
 			bufflags |= REGBUF_WILL_INIT;
 		}
 
@@ -2119,11 +2120,12 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		}
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapInsert);
+		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapInsert);
 
 		xlhdr.t_infomask2 = heaptup->t_data->t_infomask2;
 		xlhdr.t_infomask = heaptup->t_data->t_infomask;
 		xlhdr.t_hoff = heaptup->t_data->t_hoff;
+		xlhdr.t_cid = HeapTupleHeaderGetRawCommandId(heaptup->t_data);
 
 		/*
 		 * note we mark xlhdr as belonging to buffer; if XLogInsert decides to
@@ -2131,7 +2133,7 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		 * xl_heap_header in the xlog.
 		 */
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
-		XLogRegisterBufData(0, (char *) &xlhdr, SizeOfHeapHeader);
+		XLogRegisterBufData(0, (char *) &xlhdr, SizeOfNeonHeapHeader);
 		/* PG73FORMAT: write bitmap [+ padding] [+ oid] + data */
 		XLogRegisterBufData(0,
 							(char *) heaptup->t_data + SizeofHeapTupleHeader,
@@ -2140,14 +2142,25 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		/* filtering by origin on a row level is much more efficient */
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
-		recptr = XLogInsert(RM_HEAP_ID, info);
+		recptr = XLogInsert(RM_NEON_ID, info);
 
 		PageSetLSN(page, recptr);
 	}
 
 	END_CRIT_SECTION();
 
-	UnlockReleaseBuffer(buffer);
+	if (options & HEAP_INSERT_SPECULATIVE)
+	{
+		/*
+		 * NEON: speculative token is not stored in WAL, so if the page is evicted
+		 * from the buffer cache, the token will be lost. To prevent that, we keep the
+		 * buffer pinned. It will be unpinned in heapam_tuple_finish/abort_speculative.
+		 */
+		LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+	}
+	else
+		UnlockReleaseBuffer(buffer);
+
 	if (vmbuffer != InvalidBuffer)
 		ReleaseBuffer(vmbuffer);
 
@@ -2431,8 +2444,8 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 		if (needwal)
 		{
 			XLogRecPtr	recptr;
-			xl_heap_multi_insert *xlrec;
-			uint8		info = XLOG_HEAP2_MULTI_INSERT;
+			xl_neon_heap_multi_insert *xlrec;
+			uint8		info = XLOG_NEON_HEAP_MULTI_INSERT;
 			char	   *tupledata;
 			int			totaldatalen;
 			char	   *scratchptr = scratch.data;
@@ -2445,9 +2458,9 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			 */
 			init = starting_with_empty_page;
 
-			/* allocate xl_heap_multi_insert struct from the scratch area */
-			xlrec = (xl_heap_multi_insert *) scratchptr;
-			scratchptr += SizeOfHeapMultiInsert;
+			/* allocate xl_neon_heap_multi_insert struct from the scratch area */
+			xlrec = (xl_neon_heap_multi_insert *) scratchptr;
+			scratchptr += SizeOfNeonHeapMultiInsert;
 
 			/*
 			 * Allocate offsets array. Unless we're reinitializing the page,
@@ -2479,17 +2492,25 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			for (i = 0; i < nthispage; i++)
 			{
 				HeapTuple	heaptup = heaptuples[ndone + i];
-				xl_multi_insert_tuple *tuphdr;
+				xl_neon_multi_insert_tuple *tuphdr;
 				int			datalen;
 
 				if (!init)
 					xlrec->offsets[i] = ItemPointerGetOffsetNumber(&heaptup->t_self);
 				/* xl_multi_insert_tuple needs two-byte alignment. */
-				tuphdr = (xl_multi_insert_tuple *) SHORTALIGN(scratchptr);
-				scratchptr = ((char *) tuphdr) + SizeOfMultiInsertTuple;
+				tuphdr = (xl_neon_multi_insert_tuple *) SHORTALIGN(scratchptr);
+				scratchptr = ((char *) tuphdr) + SizeOfNeonMultiInsertTuple;
 
 				tuphdr->t_infomask2 = heaptup->t_data->t_infomask2;
 				tuphdr->t_infomask = heaptup->t_data->t_infomask;
+				if (i == 0)
+				{
+					xlrec->t_cid = HeapTupleHeaderGetRawCommandId(heaptup->t_data);
+				}
+				else
+				{
+					Assert(xlrec->t_cid == HeapTupleHeaderGetRawCommandId(heaptup->t_data));
+				}
 				tuphdr->t_hoff = heaptup->t_data->t_hoff;
 
 				/* write bitmap [+ padding] [+ oid] + data */
@@ -2516,7 +2537,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 
 			if (init)
 			{
-				info |= XLOG_HEAP_INIT_PAGE;
+				info |= XLOG_NEON_INIT_PAGE;
 				bufflags |= REGBUF_WILL_INIT;
 			}
 
@@ -2536,7 +2557,7 @@ heap_multi_insert(Relation relation, TupleTableSlot **slots, int ntuples,
 			/* filtering by origin on a row level is much more efficient */
 			XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
-			recptr = XLogInsert(RM_HEAP2_ID, info);
+			recptr = XLogInsert(RM_NEON_ID, info);
 
 			PageSetLSN(page, recptr);
 		}
@@ -2988,8 +3009,8 @@ l1:
 	 */
 	if (RelationNeedsWAL(relation))
 	{
-		xl_heap_delete xlrec;
-		xl_heap_header xlhdr;
+		xl_neon_heap_delete xlrec;
+		xl_neon_heap_header xlhdr;
 		XLogRecPtr	recptr;
 
 		/*
@@ -3008,6 +3029,7 @@ l1:
 											  tp.t_data->t_infomask2);
 		xlrec.offnum = ItemPointerGetOffsetNumber(&tp.t_self);
 		xlrec.xmax = new_xmax;
+		xlrec.t_cid = HeapTupleHeaderGetRawCommandId(tp.t_data);
 
 		if (old_key_tuple != NULL)
 		{
@@ -3018,7 +3040,7 @@ l1:
 		}
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapDelete);
+		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapDelete);
 
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
 
@@ -3029,9 +3051,10 @@ l1:
 		{
 			xlhdr.t_infomask2 = old_key_tuple->t_data->t_infomask2;
 			xlhdr.t_infomask = old_key_tuple->t_data->t_infomask;
+			xlhdr.t_cid = HeapTupleHeaderGetRawCommandId(old_key_tuple->t_data);
 			xlhdr.t_hoff = old_key_tuple->t_data->t_hoff;
 
-			XLogRegisterData((char *) &xlhdr, SizeOfHeapHeader);
+			XLogRegisterData((char *) &xlhdr, SizeOfNeonHeapHeader);
 			XLogRegisterData((char *) old_key_tuple->t_data
 							 + SizeofHeapTupleHeader,
 							 old_key_tuple->t_len
@@ -3041,7 +3064,7 @@ l1:
 		/* filtering by origin on a row level is much more efficient */
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
-		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_DELETE);
+		recptr = XLogInsert(RM_NEON_ID, XLOG_NEON_HEAP_DELETE);
 
 		PageSetLSN(page, recptr);
 	}
@@ -3736,7 +3759,7 @@ l2:
 
 		if (RelationNeedsWAL(relation))
 		{
-			xl_heap_lock xlrec;
+			xl_neon_heap_lock xlrec;
 			XLogRecPtr	recptr;
 
 			XLogBeginInsert();
@@ -3748,8 +3771,9 @@ l2:
 												  oldtup.t_data->t_infomask2);
 			xlrec.flags =
 				cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0;
-			XLogRegisterData((char *) &xlrec, SizeOfHeapLock);
-			recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_LOCK);
+			xlrec.t_cid = HeapTupleHeaderGetRawCommandId(oldtup.t_data);
+			XLogRegisterData((char *) &xlrec, SizeOfNeonHeapLock);
+			recptr = XLogInsert(RM_NEON_ID, XLOG_NEON_HEAP_LOCK);
 			PageSetLSN(page, recptr);
 		}
 
@@ -4946,7 +4970,7 @@ failed:
 	 */
 	if (RelationNeedsWAL(relation))
 	{
-		xl_heap_lock xlrec;
+		xl_neon_heap_lock xlrec;
 		XLogRecPtr	recptr;
 
 		XLogBeginInsert();
@@ -4957,11 +4981,12 @@ failed:
 		xlrec.infobits_set = compute_infobits(new_infomask,
 											  tuple->t_data->t_infomask2);
 		xlrec.flags = cleared_all_frozen ? XLH_LOCK_ALL_FROZEN_CLEARED : 0;
-		XLogRegisterData((char *) &xlrec, SizeOfHeapLock);
+		xlrec.t_cid = HeapTupleHeaderGetRawCommandId(tuple->t_data);
+		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapLock);
 
 		/* we don't decode row locks atm, so no need to log the origin */
 
-		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_LOCK);
+		recptr = XLogInsert(RM_NEON_ID, XLOG_NEON_HEAP_LOCK);
 
 		PageSetLSN(page, recptr);
 	}
@@ -5873,6 +5898,7 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 
 	END_CRIT_SECTION();
 
+	ReleaseBuffer(buffer); /* NEON: release buffer pinned by heap_insert */
 	UnlockReleaseBuffer(buffer);
 }
 
@@ -5945,6 +5971,16 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	Assert(!HeapTupleHeaderIsHeapOnly(tp.t_data));
 
 	/*
+	 * NEON: release buffer pinned by heap_insert
+	 *
+	 * This function is also used on the toast tuples of an aborted speculative
+	 * insertion. For those, there is no token on the tuple, and we didn' t keep
+	 * the pin. 
+	 */
+	if (HeapTupleHeaderIsSpeculative(tp.t_data))
+		ReleaseBuffer(buffer);  
+
+	/*
 	 * No need to check for serializable conflicts here.  There is never a
 	 * need for a combo CID, either.  No need to extract replica identity, or
 	 * do anything special with infomask bits.
@@ -5998,7 +6034,7 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 	 */
 	if (RelationNeedsWAL(relation))
 	{
-		xl_heap_delete xlrec;
+		xl_neon_heap_delete xlrec;
 		XLogRecPtr	recptr;
 
 		xlrec.flags = XLH_DELETE_IS_SUPER;
@@ -6006,14 +6042,15 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 											  tp.t_data->t_infomask2);
 		xlrec.offnum = ItemPointerGetOffsetNumber(&tp.t_self);
 		xlrec.xmax = xid;
+		xlrec.t_cid = HeapTupleHeaderGetRawCommandId(tp.t_data);
 
 		XLogBeginInsert();
-		XLogRegisterData((char *) &xlrec, SizeOfHeapDelete);
+		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapDelete);
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
 
 		/* No replica identity & replication origin logged */
 
-		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_DELETE);
+		recptr = XLogInsert(RM_NEON_ID, XLOG_NEON_HEAP_DELETE);
 
 		PageSetLSN(page, recptr);
 	}
@@ -8359,9 +8396,9 @@ log_heap_update(Relation reln, Buffer oldbuf,
 				HeapTuple old_key_tuple,
 				bool all_visible_cleared, bool new_all_visible_cleared)
 {
-	xl_heap_update xlrec;
-	xl_heap_header xlhdr;
-	xl_heap_header xlhdr_idx;
+	xl_neon_heap_update xlrec;
+	xl_neon_heap_header xlhdr;
+	xl_neon_heap_header xlhdr_idx;
 	uint8		info;
 	uint16		prefix_suffix[2];
 	uint16		prefixlen = 0,
@@ -8378,9 +8415,9 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	XLogBeginInsert();
 
 	if (HeapTupleIsHeapOnly(newtup))
-		info = XLOG_HEAP_HOT_UPDATE;
+		info = XLOG_NEON_HEAP_HOT_UPDATE;
 	else
-		info = XLOG_HEAP_UPDATE;
+		info = XLOG_NEON_HEAP_UPDATE;
 
 	/*
 	 * If the old and new tuple are on the same page, we only need to log the
@@ -8460,7 +8497,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	if (ItemPointerGetOffsetNumber(&(newtup->t_self)) == FirstOffsetNumber &&
 		PageGetMaxOffsetNumber(page) == FirstOffsetNumber)
 	{
-		info |= XLOG_HEAP_INIT_PAGE;
+		info |= XLOG_NEON_INIT_PAGE;
 		init = true;
 	}
 	else
@@ -8475,6 +8512,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	/* Prepare WAL data for the new page */
 	xlrec.new_offnum = ItemPointerGetOffsetNumber(&newtup->t_self);
 	xlrec.new_xmax = HeapTupleHeaderGetRawXmax(newtup->t_data);
+	xlrec.t_cid = HeapTupleHeaderGetRawCommandId(newtup->t_data);
 
 	bufflags = REGBUF_STANDARD;
 	if (init)
@@ -8486,7 +8524,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	if (oldbuf != newbuf)
 		XLogRegisterBuffer(1, oldbuf, REGBUF_STANDARD);
 
-	XLogRegisterData((char *) &xlrec, SizeOfHeapUpdate);
+	XLogRegisterData((char *) &xlrec, SizeOfNeonHeapUpdate);
 
 	/*
 	 * Prepare WAL data for the new tuple.
@@ -8512,6 +8550,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	xlhdr.t_infomask2 = newtup->t_data->t_infomask2;
 	xlhdr.t_infomask = newtup->t_data->t_infomask;
 	xlhdr.t_hoff = newtup->t_data->t_hoff;
+	xlhdr.t_cid = HeapTupleHeaderGetRawCommandId(newtup->t_data);
 	Assert(SizeofHeapTupleHeader + prefixlen + suffixlen <= newtup->t_len);
 
 	/*
@@ -8519,7 +8558,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	 *
 	 * The 'data' doesn't include the common prefix or suffix.
 	 */
-	XLogRegisterBufData(0, (char *) &xlhdr, SizeOfHeapHeader);
+	XLogRegisterBufData(0, (char *) &xlhdr, SizeOfNeonHeapHeader);
 	if (prefixlen == 0)
 	{
 		XLogRegisterBufData(0,
@@ -8553,8 +8592,9 @@ log_heap_update(Relation reln, Buffer oldbuf,
 		xlhdr_idx.t_infomask2 = old_key_tuple->t_data->t_infomask2;
 		xlhdr_idx.t_infomask = old_key_tuple->t_data->t_infomask;
 		xlhdr_idx.t_hoff = old_key_tuple->t_data->t_hoff;
+		xlhdr_idx.t_cid = HeapTupleHeaderGetRawCommandId(old_key_tuple->t_data);
 
-		XLogRegisterData((char *) &xlhdr_idx, SizeOfHeapHeader);
+		XLogRegisterData((char *) &xlhdr_idx, SizeOfNeonHeapHeader);
 
 		/* PG73FORMAT: write bitmap [+ padding] [+ oid] + data */
 		XLogRegisterData((char *) old_key_tuple->t_data + SizeofHeapTupleHeader,
@@ -8564,7 +8604,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	/* filtering by origin on a row level is much more efficient */
 	XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
-	recptr = XLogInsert(RM_HEAP_ID, info);
+	recptr = XLogInsert(RM_NEON_ID, info);
 
 	return recptr;
 }
@@ -8949,7 +8989,16 @@ heap_xlog_visible(XLogReaderState *record)
 
 		PageSetAllVisible(page);
 
-		if (XLogHintBitIsNeeded())
+		/*
+		 * NEON: despite to the comment above we need to update page LSN here.
+		 * See discussion at hackers: https://www.postgresql.org/message-id/flat/039076d4f6cdd871691686361f83cb8a6913a86a.camel%40j-davis.com#101ba42b004f9988e3d54fce26fb3462
+		 * For Neon this assignment is critical because otherwise last written LSN tracked at compute doesn't
+		 * match with page LSN assignee by WAL-redo and as a result, prefetched page is rejected.
+		 *
+		 * It is fixed in upstream in https://github.com/neondatabase/postgres/commit/7bf713dd2d0739fbcd4103971ed69c17ebe677ea
+		 * but until it is merged we still need to carry a patch here.
+		 */
+		if (true || XLogHintBitIsNeeded())
 			PageSetLSN(page, lsn);
 
 		MarkBufferDirty(buffer);
