@@ -830,7 +830,8 @@ ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
 						  BlockNumber blockNum, ReadBufferMode mode,
 						  BufferAccessStrategy strategy, bool permanent)
 {
-	SMgrRelation smgr = smgropen(rlocator, INVALID_PROC_NUMBER);
+	SMgrRelation smgr = smgropen(rlocator, INVALID_PROC_NUMBER,
+								 RELPERSISTENCE_PERMANENT);
 
 	return ReadBuffer_common(NULL, smgr,
 							 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED,
@@ -3796,7 +3797,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER);
+		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER, 0);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
 										buf->tag.blockNum,
@@ -4699,7 +4700,8 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	use_wal = XLogIsNeeded() && (permanent || forkNum == INIT_FORKNUM);
 
 	/* Get number of blocks in the source relation. */
-	nblocks = smgrnblocks(smgropen(srclocator, INVALID_PROC_NUMBER),
+	nblocks = smgrnblocks(smgropen(srclocator, INVALID_PROC_NUMBER,
+								   permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
 						  forkNum);
 
 	/* Nothing to copy; just return. */
@@ -4711,7 +4713,9 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * relation before starting to copy block by block.
 	 */
 	memset(buf.data, 0, BLCKSZ);
-	smgrextend(smgropen(dstlocator, INVALID_PROC_NUMBER), forkNum, nblocks - 1,
+	smgrextend(smgropen(dstlocator, INVALID_PROC_NUMBER,
+						permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED),
+			   forkNum, nblocks - 1,
 			   buf.data, true);
 
 	/* This is a bulk operation, so use buffer access strategies. */
@@ -4778,8 +4782,8 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	relpersistence = permanent ?
 		RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED;
 
-	src_rel = smgropen(src_rlocator, INVALID_PROC_NUMBER);
-	dst_rel = smgropen(dst_rlocator, INVALID_PROC_NUMBER);
+	src_rel = smgropen(src_rlocator, INVALID_PROC_NUMBER, relpersistence);
+	dst_rel = smgropen(dst_rlocator, INVALID_PROC_NUMBER, relpersistence);
 
 	/*
 	 * Create and copy all forks of the relation.  During create database we
@@ -5996,7 +6000,7 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(currlocator, INVALID_PROC_NUMBER);
+		reln = smgropen(currlocator, INVALID_PROC_NUMBER, 0);
 		smgrwriteback(reln, BufTagGetForkNum(&tag), tag.blockNum, nblocks);
 	}
 
