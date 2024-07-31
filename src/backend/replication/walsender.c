@@ -125,6 +125,7 @@ int			wal_sender_timeout = 60 * 1000; /* maximum time to send one WAL
 											 * data message */
 bool		log_replication_commands = false;
 
+void		(*WalSender_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
 /*
  * State for WalSndWakeupRequest
  */
@@ -270,7 +271,7 @@ static void WalSndPrepareWrite(LogicalDecodingContext *ctx, XLogRecPtr lsn, Tran
 static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid, bool last_write);
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 								 bool skipped_xact);
-static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
+XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
@@ -1457,6 +1458,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 {
 	StringInfoData buf;
 	QueryCompletion qc;
+	XLogReaderRoutine xlr;
 
 	/* make sure that our requirements are still fulfilled */
 	CheckLogicalDecodingRequirements();
@@ -1477,6 +1479,12 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 		got_STOPPING = true;
 	}
 
+	xlr.page_read = logical_read_xlog_page;
+	xlr.segment_open = WalSndSegmentOpen;
+	xlr.segment_close = wal_segment_close;
+	if (WalSender_Custom_XLogReaderRoutines != NULL)
+		WalSender_Custom_XLogReaderRoutines(&xlr);
+
 	/*
 	 * Create our decoding context, making it start at the previously ack'ed
 	 * position.
@@ -1485,10 +1493,7 @@ StartLogicalReplication(StartReplicationCmd *cmd)
 	 * are reported early.
 	 */
 	logical_decoding_ctx =
-		CreateDecodingContext(cmd->startpoint, cmd->options, false,
-							  XL_ROUTINE(.page_read = logical_read_xlog_page,
-										 .segment_open = WalSndSegmentOpen,
-										 .segment_close = wal_segment_close),
+		CreateDecodingContext(cmd->startpoint, cmd->options, false, &xlr,
 							  WalSndPrepareWrite, WalSndWriteData,
 							  WalSndUpdateProgress);
 	xlogreader = logical_decoding_ctx->reader;
@@ -3299,9 +3304,12 @@ XLogSendPhysical(void)
 	/*
 	 * OK to read and send the slice.
 	 */
-	resetStringInfo(&output_message);
-	pq_sendbyte(&output_message, 'w');
+	if (output_message.data)
+		resetStringInfo(&output_message);
+	else
+		initStringInfo(&output_message);
 
+	pq_sendbyte(&output_message, 'w');
 	pq_sendint64(&output_message, startptr);	/* dataStart */
 	pq_sendint64(&output_message, SendRqstPtr); /* walEnd */
 	pq_sendint64(&output_message, 0);	/* sendtime, filled in last */
@@ -3496,8 +3504,8 @@ WalSndDone(WalSndSendDataCallback send_data)
 	 * flush location if valid, write otherwise. Tools like pg_receivewal will
 	 * usually (unless in synchronous mode) return an invalid flush location.
 	 */
-	replicatedPtr = XLogRecPtrIsInvalid(MyWalSnd->flush) ?
-		MyWalSnd->write : MyWalSnd->flush;
+	// XXX Zenith uses flush_lsn to pass extra payload, so use write_lsn here
+	replicatedPtr = MyWalSnd->write;
 
 	if (WalSndCaughtUp && sentPtr == replicatedPtr &&
 		!pq_is_send_pending())
