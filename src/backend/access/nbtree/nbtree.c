@@ -35,6 +35,7 @@
 #include "utils/fmgrprotos.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
+#include "utils/spccache.h"
 
 
 /*
@@ -363,6 +364,7 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
+	so->prefetch_maximum = 0;   /* disable prefetch */
 
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
