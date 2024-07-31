@@ -2144,6 +2144,15 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Evict unpinned pages (for better test coverage)"),
+		},
+		&neon_test_evict,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
