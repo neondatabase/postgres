@@ -186,6 +186,7 @@ void
 log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 {
 	xl_smgr_create xlrec;
+	XLogRecPtr lsn;
 
 	/*
 	 * Make an XLOG entry reporting the file creation.
@@ -195,7 +196,8 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
-	XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+	lsn = XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
+	SetLastWrittenLSNForRelation(lsn, *rlocator, forkNum);
 }
 
 /*

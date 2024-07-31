@@ -56,6 +56,8 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
+extern int  lastWrittenLsnCacheSize;
+
 
 /* Archive modes */
 typedef enum ArchiveMode
@@ -250,6 +252,14 @@ extern XLogRecPtr GetFlushRecPtr(TimeLineID *insertTLI);
 extern TimeLineID GetWALInsertionTimeLine(void);
 extern TimeLineID GetWALInsertionTimeLineIfSet(void);
 extern XLogRecPtr GetLastImportantRecPtr(void);
+
+/* neon specifics */
+
+extern XLogRecPtr SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
+extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
+extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
 
 extern void SetWalWriterSleeping(bool sleeping);
 
