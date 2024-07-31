@@ -1513,6 +1513,11 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 										dst_deftablespace);
 
 		/*
+		 * Update global last written LSN after wal-logging create database command
+		 */
+		SetLastWrittenLSNForDatabase(XactLastRecEnd);
+
+		/*
 		 * Close pg_database, but keep lock till commit.
 		 */
 		table_close(pg_database_rel, NoLock);
@@ -2170,6 +2175,7 @@ movedb(const char *dbname, const char *tblspcname)
 		 */
 		{
 			xl_dbase_create_file_copy_rec xlrec;
+			XLogRecPtr lsn;
 
 			xlrec.db_id = db_id;
 			xlrec.tablespace_id = dst_tblspcoid;
@@ -2180,8 +2186,10 @@ movedb(const char *dbname, const char *tblspcname)
 			XLogRegisterData((char *) &xlrec,
 							 sizeof(xl_dbase_create_file_copy_rec));
 
-			(void) XLogInsert(RM_DBASE_ID,
-							  XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			lsn = XLogInsert(RM_DBASE_ID,
+							 XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
+			// TODO: Do we really need to set the LSN here?
+			SetLastWrittenLSNForDatabase(lsn);
 		}
 
 		/*
@@ -3340,6 +3348,15 @@ dbase_redo(XLogReaderState *record)
 		 */
 		copydir(src_path, dst_path, false);
 
+		/*
+		 * Make sure any future requests to the page server see the new
+		 * database.
+		 */
+		{
+			XLogRecPtr	lsn = record->EndRecPtr;
+			SetLastWrittenLSNForDatabase(lsn);
+		}
+
 		pfree(src_path);
 		pfree(dst_path);
 	}
@@ -3360,6 +3377,16 @@ dbase_redo(XLogReaderState *record)
 		/* Create the database directory with the version file. */
 		CreateDirAndVersionFile(dbpath, xlrec->db_id, xlrec->tablespace_id,
 								true);
+
+		/*
+		 * Make sure any future requests to the page server see the new
+		 * database.
+		 */
+		{
+			XLogRecPtr	lsn = record->EndRecPtr;
+			SetLastWrittenLSNForDatabase(lsn);
+		}
+
 		pfree(dbpath);
 	}
 	else if (info == XLOG_DBASE_DROP)
