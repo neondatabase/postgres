@@ -175,6 +175,7 @@ extern PGDLLIMPORT int bgwriter_flush_after;
 
 extern PGDLLIMPORT const PgAioHandleCallbacks aio_shared_buffer_readv_cb;
 extern PGDLLIMPORT const PgAioHandleCallbacks aio_local_buffer_readv_cb;
+extern PGDLLIMPORT bool	neon_test_evict;
 
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
@@ -184,8 +185,8 @@ extern PGDLLIMPORT int NLocBuffer;
 extern PGDLLIMPORT Block *LocalBufferBlockPointers;
 extern PGDLLIMPORT int32 *LocalRefCount;
 
-/* upper limit for effective_io_concurrency */
-#define MAX_IO_CONCURRENCY 1000
+/* upper limit for effective_io_concurrency (power of 2 for convenience) */
+#define MAX_IO_CONCURRENCY 1024
 
 /* special block number for ReadBuffer() */
 #define P_NEW	InvalidBlockNumber	/* grow the file to get a new page */

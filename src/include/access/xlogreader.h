@@ -216,6 +216,10 @@ struct XLogReaderState
 	/* Set when XLP_FIRST_IS_OVERWRITE_CONTRECORD is found */
 	XLogRecPtr	overwrittenRecPtr;
 
+	/* Disable validation to allow dumping corrupt WAL */
+	bool skip_page_validation;
+	bool skip_invalid_records;
+	bool skip_lsn_checks;
 
 	/* ----------------------------------------
 	 * Decoded representation of current record
@@ -440,5 +444,8 @@ extern bool XLogRecGetBlockTagExtended(XLogReaderState *record, uint8 block_id,
 									   RelFileLocator *rlocator, ForkNumber *forknum,
 									   BlockNumber *blknum,
 									   Buffer *prefetch_buffer);
+
+extern DecodedXLogRecord *
+XLogReadRecordAlloc(XLogReaderState *state, size_t xl_tot_len, bool allow_oversized);
 
 #endif							/* XLOGREADER_H */

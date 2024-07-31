@@ -179,6 +179,10 @@ int			checkpoint_flush_after = DEFAULT_CHECKPOINT_FLUSH_AFTER;
 int			bgwriter_flush_after = DEFAULT_BGWRITER_FLUSH_AFTER;
 int			backend_flush_after = DEFAULT_BACKEND_FLUSH_AFTER;
 
+/* Evict unpinned pages (for better test coverage) */
+bool		neon_test_evict = false;
+
+
 /* local state for LockBufferForCleanup */
 static BufferDesc *PinCountWaitBuf = NULL;
 
@@ -1032,7 +1036,13 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 {
 	BufferDesc *bufHdr;
 	bool		need_to_zero;
-	bool		isLocalBuf = BufferIsLocal(buffer);
+	/*
+	 * wal_redo postgres is working in single user mode, we do not need to
+	 * synchronize access to shared buffer, so let's use local buffers instead.
+	 * Note that this implies that when am_wal_redo_postgres is set, we always
+	 * use local buffers.
+	 */
+	bool		isLocalBuf = BufferIsLocal(buffer) || am_wal_redo_postgres;
 
 	Assert(mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK);
 
@@ -1046,6 +1056,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 	}
 	else if (isLocalBuf)
 	{
+		Assert(BufferIsLocal(buffer));
 		/* Simple case for non-shared buffers. */
 		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
 		need_to_zero = StartLocalBufferIO(bufHdr, true, false);
@@ -3320,6 +3331,34 @@ UnpinBufferNoOwner(BufferDesc *buf)
 			WakePinCountWaiter(buf);
 
 		ForgetPrivateRefCountEntry(ref);
+
+		if (neon_test_evict && !InRecovery)
+		{
+			buf_state = LockBufHdr(buf);
+			if ((buf_state & BM_VALID) && BUF_STATE_GET_REFCOUNT(buf_state) == 0)
+			{
+				ReservePrivateRefCountEntry();
+				PinBuffer_Locked(buf);
+				if (buf_state & BM_DIRTY)
+				{
+					if (LWLockConditionalAcquire(BufferDescriptorGetContentLock(buf),
+												 LW_SHARED))
+					{
+						FlushOneBuffer(b);
+						LWLockRelease(BufferDescriptorGetContentLock(buf));
+					}
+				}
+
+				/*
+				 * Try to invalidate the page. This can fail if the page is
+				 * concurrently modified; we'll let it be in that case
+				 */
+				(void) InvalidateVictimBuffer(buf);
+				UnpinBuffer(buf);
+			}
+			else
+				UnlockBufHdr(buf, buf_state);
+		}
 	}
 }
 

@@ -494,6 +494,13 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 				if (endofwal)
 					break;
 
+				/*
+				 * Update WAL statistics, which are produced inside
+				 * issue_xlog_fsync function. This is useful for counting
+				 * WAL flushes, by querying pg_stat_wal.
+				 */
+				pgstat_report_wal(true);
+
 				/* Find the soonest wakeup time, to limit our nap. */
 				nextWakeup = TIMESTAMP_INFINITY;
 				for (int i = 0; i < NUM_WALRCV_WAKEUPS; ++i)

@@ -17,7 +17,9 @@
 
 #include "access/parallel.h"
 #include "executor/instrument.h"
+#include "miscadmin.h"
 #include "pgstat.h"
+#include "../../../../../../pg_install/v17/include/postgresql/server/c.h"
 #include "storage/aio.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
@@ -25,8 +27,11 @@
 #include "utils/guc_hooks.h"
 #include "utils/memdebug.h"
 #include "utils/memutils.h"
+#include "utils/rel.h"
 #include "utils/resowner.h"
 
+/* NEON: prevent eviction of the buffer of target page */
+extern Buffer wal_redo_buffer;
 
 /*#define LBDEBUG*/
 
@@ -244,7 +249,15 @@ GetLocalVictimBuffer(void)
 
 		if (LocalRefCount[victim_bufid] == 0)
 		{
-			uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
+			uint32		buf_state;
+
+			if (-victim_bufid - 1 == wal_redo_buffer)
+			{
+				/* NEON: Prevent eviction of the buffer with target wal redo page */
+				continue;
+			}
+
+			buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 			if (BUF_STATE_GET_USAGECOUNT(buf_state) > 0)
 			{

@@ -13,6 +13,7 @@
 
 #include "access/xlogbackup.h"
 #include "access/xlogdefs.h"
+#include "catalog/pg_control.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
@@ -40,6 +41,9 @@ extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
  */
 #define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
 
+extern bool			NeonRecoveryRequested;
+extern XLogRecPtr	neonLastRec;
+extern bool			neonWriteOk;
 
 /* these variables are GUC parameters related to XLOG */
 extern PGDLLIMPORT int wal_segment_size;
@@ -269,6 +273,9 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
 
+extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
+extern XLogRecPtr GetRedoStartLsn(void);
+
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern Size WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
@@ -328,6 +335,13 @@ extern void do_pg_abort_backup(int code, Datum arg);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
 
+/*
+ * NEON: Hook to allow the neon extension to restore running-xacts from CLOG
+ * at replica startup without having to wait for a running-xacts record.
+ */
+typedef bool (*restore_running_xacts_callback_t) (CheckPoint *checkpoint, TransactionId **xids, int *nxids);
+extern restore_running_xacts_callback_t restore_running_xacts_callback;
+
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_SIGNAL_FILE	"recovery.signal"
 #define STANDBY_SIGNAL_FILE		"standby.signal"
@@ -336,6 +350,8 @@ extern SessionBackupState get_backup_status(void);
 
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
+
+#define NEON_SIGNAL_FILE		"neon.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
