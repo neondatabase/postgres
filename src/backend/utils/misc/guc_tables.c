@@ -791,6 +791,26 @@ StaticAssertDecl(lengthof(config_type_names) == (PGC_ENUM + 1),
 struct config_bool ConfigureNamesBool[] =
 {
 	{
+		{"enable_indexscan_prefetch", PGC_USERSET, RESOURCES_IO,
+			gettext_noop("Enables prefetching of heap pages in index scans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexscan_prefetch,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_indexonlyscan_prefetch", PGC_USERSET, RESOURCES_IO,
+			gettext_noop("Enables prefetching of leave pages in index-only scans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexonlyscan_prefetch,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),
 			NULL,
