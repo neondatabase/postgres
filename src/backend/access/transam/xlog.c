@@ -84,6 +84,7 @@
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
+#include "storage/buf_internals.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/large_object.h"
@@ -145,6 +146,14 @@ bool		XLOG_DEBUG = false;
 
 int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
+/* NEON: Hooks to facilitate the last written LSN cache */
+set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
+set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
+set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_max_lwlsn_hook_type set_max_lwlsn_hook = NULL;
+
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -203,6 +212,7 @@ const struct config_enum_entry archive_mode_options[] = {
 	{"0", ARCHIVE_MODE_OFF, true},
 	{NULL, 0, false}
 };
+
 
 /*
  * Statistics for current checkpoint are collected in this global struct.
@@ -552,6 +562,9 @@ typedef struct XLogCtlData
 	 * XLOG_FPW_CHANGE record that instructs full_page_writes is disabled.
 	 */
 	XLogRecPtr	lastFpwDisableRecPtr;
+
+	/* neon: copy of startup's RedoStartLSN for walproposer's use */
+	XLogRecPtr	RedoStartLSN;
 
 	slock_t		info_lck;		/* locks shared variables shown above */
 } XLogCtlData;
@@ -5098,10 +5111,17 @@ BootStrapXLOG(uint32 data_checksum_version)
 	 * determine the initialization time of the installation, which could
 	 * perhaps be useful sometimes.
 	 */
-	gettimeofday(&tv, NULL);
-	sysidentifier = ((uint64) tv.tv_sec) << 32;
-	sysidentifier |= ((uint64) tv.tv_usec) << 12;
-	sysidentifier |= getpid() & 0xFFF;
+	if (predefined_sysidentifier != 0)
+	{
+		sysidentifier = predefined_sysidentifier;
+	}
+	else
+	{
+		gettimeofday(&tv, NULL);
+		sysidentifier = ((uint64) tv.tv_sec) << 32;
+		sysidentifier |= ((uint64) tv.tv_usec) << 12;
+		sysidentifier |= getpid() & 0xFFF;
+	}
 
 	/* page buffer must be aligned suitably for O_DIRECT */
 	buffer = (char *) palloc(XLOG_BLCKSZ + XLOG_BLCKSZ);
@@ -5729,6 +5749,9 @@ StartupXLOG(void)
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
+
+	if (set_max_lwlsn_hook)
+		set_max_lwlsn_hook(RedoRecPtr);
 
 	/* REDO */
 	if (InRecovery)
@@ -6529,6 +6552,22 @@ GetInsertRecPtr(void)
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return recptr;
+}
+
+void
+SetRedoStartLsn(XLogRecPtr RedoStartLSN)
+{
+	XLogCtl->RedoStartLSN = RedoStartLSN;
+}
+
+/*
+ * RedoStartLsn is set only once by startup process, locking is not required
+ * after its exit.
+ */
+XLogRecPtr
+GetRedoStartLsn(void)
+{
+	return XLogCtl->RedoStartLSN;
 }
 
 /*
