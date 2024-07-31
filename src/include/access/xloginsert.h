@@ -39,6 +39,10 @@
 									 * is taken */
 #define REGBUF_NO_CHANGE	0x20	/* intentionally register clean buffer */
 
+extern int max_replication_apply_lag;
+extern int max_replication_flush_lag;
+extern int max_replication_write_lag;
+
 /* prototypes for public functions in xloginsert.c: */
 extern void XLogBeginInsert(void);
 extern void XLogSetRecordFlags(uint8 flags);
