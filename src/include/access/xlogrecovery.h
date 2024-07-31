@@ -136,6 +136,7 @@ extern void ShutdownWalRecovery(void);
 extern void RemovePromoteSignalFiles(void);
 
 extern bool HotStandbyActive(void);
+extern void XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr);
 extern XLogRecPtr GetXLogReplayRecPtr(TimeLineID *replayTLI);
 extern RecoveryPauseState GetRecoveryPauseState(void);
 extern void SetRecoveryPause(bool recoveryPause);
@@ -154,5 +155,7 @@ extern void XLogRequestWalReceiverReply(void);
 extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue);
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
+
+extern void XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len);
 
 #endif							/* XLOGRECOVERY_H */

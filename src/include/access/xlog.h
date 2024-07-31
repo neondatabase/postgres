@@ -13,9 +13,12 @@
 
 #include "access/xlogbackup.h"
 #include "access/xlogdefs.h"
+#include "catalog/pg_control.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
 #include "nodes/pg_list.h"
+#include "storage/block.h"
+#include "storage/relfilelocator.h"
 
 
 /* Sync methods */
@@ -32,6 +35,15 @@ extern PGDLLIMPORT int wal_sync_method;
 extern PGDLLIMPORT XLogRecPtr ProcLastRecPtr;
 extern PGDLLIMPORT XLogRecPtr XactLastRecEnd;
 extern PGDLLIMPORT XLogRecPtr XactLastCommitEnd;
+
+/*
+ * Pseudo block number used to associate LSN with relation metadata (relation size)
+ */
+#define REL_METADATA_PSEUDO_BLOCKNO InvalidBlockNumber
+
+extern bool			ZenithRecoveryRequested;
+extern XLogRecPtr	zenithLastRec;
+extern bool			zenithWriteOk;
 
 /* these variables are GUC parameters related to XLOG */
 extern PGDLLIMPORT int wal_segment_size;
@@ -261,6 +273,9 @@ extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
 extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
 extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
 
+extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
+extern XLogRecPtr GetRedoStartLsn(void);
+
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern Size WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
@@ -313,6 +328,8 @@ extern SessionBackupState get_backup_status(void);
 
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
+
+#define ZENITH_SIGNAL_FILE		"zenith.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"

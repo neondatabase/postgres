@@ -693,6 +693,15 @@ static bool holdingAllLocks = false;
 static MemoryContext walDebugCxt = NULL;
 #endif
 
+
+/*
+ * Variables read from 'zenith.signal' file.
+ */
+bool		ZenithRecoveryRequested = false;
+XLogRecPtr	zenithLastRec = InvalidXLogRecPtr;
+bool		zenithWriteOk = false;
+
+
 static void CleanupAfterArchiveRecovery(TimeLineID EndOfLogTLI,
 										XLogRecPtr EndOfLog,
 										TimeLineID newTLI);
@@ -703,6 +712,7 @@ static void CreateEndOfRecoveryRecord(void);
 static XLogRecPtr CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn,
 												  XLogRecPtr pagePtr,
 												  TimeLineID newTLI);
+static void PreCheckPointGuts(int flags);
 static void CheckPointGuts(XLogRecPtr checkPointRedo, int flags);
 static void KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo);
 static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
@@ -3602,11 +3612,15 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 
 	XLogFilePath(path, tli, *segno, wal_segment_size);
 
-	LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
-	if (!XLogCtl->InstallXLogFileSegmentActive)
-	{
-		LWLockRelease(ControlFileLock);
-		return false;
+	if (XLogCtl)
+ 	{
+		/* Neon: in case of sync-safekeepers shared memory is not inialized */
+		LWLockAcquire(ControlFileLock, LW_EXCLUSIVE);
+		if (!XLogCtl->InstallXLogFileSegmentActive)
+		{
+			LWLockRelease(ControlFileLock);
+			return false;
+		}
 	}
 
 	if (!find_free)
@@ -3622,7 +3636,8 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 			if ((*segno) >= max_segno)
 			{
 				/* Failed to find a free slot within specified range */
-				LWLockRelease(ControlFileLock);
+				if (XLogCtl)
+					LWLockRelease(ControlFileLock);
 				return false;
 			}
 			(*segno)++;
@@ -3633,12 +3648,14 @@ InstallXLogFileSegment(XLogSegNo *segno, char *tmppath,
 	Assert(access(path, F_OK) != 0 && errno == ENOENT);
 	if (durable_rename(tmppath, path, LOG) != 0)
 	{
-		LWLockRelease(ControlFileLock);
+		if (XLogCtl)
+			LWLockRelease(ControlFileLock);
 		/* durable_rename already emitted log message */
 		return false;
 	}
 
-	LWLockRelease(ControlFileLock);
+	if (XLogCtl)
+		LWLockRelease(ControlFileLock);
 
 	return true;
 }
@@ -5457,6 +5474,81 @@ CheckRequiredParameterValues(void)
 	}
 }
 
+static void
+readZenithSignalFile(void)
+{
+	int			fd;
+
+	fd = BasicOpenFile(ZENITH_SIGNAL_FILE, O_RDONLY | PG_BINARY);
+	if (fd >= 0)
+	{
+		struct stat statbuf;
+		char	   *content;
+		char		prev_lsn_str[20];
+
+		/* Slurp the file into a string */
+		if (stat(ZENITH_SIGNAL_FILE, &statbuf) != 0)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not stat file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content = palloc(statbuf.st_size + 1);
+		if (read(fd, content, statbuf.st_size) != statbuf.st_size)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not read file \"%s\": %m",
+							ZENITH_SIGNAL_FILE)));
+		content[statbuf.st_size] = '\0';
+
+		/* Parse it */
+		if (sscanf(content, "PREV LSN: %19s", prev_lsn_str) != 1)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+
+		if (strcmp(prev_lsn_str, "invalid") == 0)
+		{
+			/* No prev LSN. Forbid starting up in read-write mode */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = false;
+		}
+		else if (strcmp(prev_lsn_str, "none") == 0)
+		{
+			/*
+			 * The page server had no valid prev LSN, but assured that it's ok
+			 * to start without it. This happens when you start the compute
+			 * node for the first time on a new branch.
+			 */
+			zenithLastRec = InvalidXLogRecPtr;
+			zenithWriteOk = true;
+		}
+		else
+		{
+			uint32		hi,
+						lo;
+
+			if (sscanf(prev_lsn_str, "%X/%X", &hi, &lo) != 2)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid data in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithLastRec = ((uint64) hi) << 32 | lo;
+
+			/* If prev LSN is given, it better be valid */
+			if (zenithLastRec == InvalidXLogRecPtr)
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("invalid prev-LSN in file \"%s\"", ZENITH_SIGNAL_FILE)));
+			zenithWriteOk = true;
+		}
+		ZenithRecoveryRequested = true;
+		close(fd);
+
+		elog(LOG,
+			 "[ZENITH] found 'zenith.signal' file. setting prev LSN to %X/%X",
+			 LSN_FORMAT_ARGS(zenithLastRec));
+	}
+}
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -5489,9 +5581,14 @@ StartupXLOG(void)
 	CurrentResourceOwner = AuxProcessResourceOwner;
 
 	/*
+	 * Read zenith.signal before anything else.
+	 */
+	readZenithSignalFile();
+
+	/*
 	 * Check that contents look valid.
 	 */
-	if (!XRecOffIsValid(ControlFile->checkPoint))
+	if (!XRecOffIsValid(ControlFile->checkPoint) && !ZenithRecoveryRequested)
 		ereport(FATAL,
 				(errcode(ERRCODE_DATA_CORRUPTED),
 				 errmsg("control file contains invalid checkpoint location")));
@@ -5826,8 +5923,9 @@ StartupXLOG(void)
 		 */
 		if (ArchiveRecoveryRequested && EnableHotStandby)
 		{
-			TransactionId *xids;
+			TransactionId *xids = NULL;
 			int			nxids;
+			bool		apply_running_xacts = false;
 
 			ereport(DEBUG1,
 					(errmsg_internal("initializing for hot standby")));
@@ -5855,14 +5953,33 @@ StartupXLOG(void)
 			 * nothing was running on the primary at this point. So fake-up an
 			 * empty running-xacts record and use that here and now. Recover
 			 * additional standby state for prepared transactions.
+			 *
+			 * Neon: We also use a similar mechanism to start up sooner at
+			 * replica startup, by scanning the CLOG and faking a running-xacts
+			 * record based on that.
 			 */
 			if (wasShutdown)
+			{
+				/* Update pg_subtrans entries for any prepared transactions */
+				StandbyRecoverPreparedTransactions();
+				apply_running_xacts = true;
+			}
+			else if (restore_running_xacts_callback)
+			{
+				/*
+				 * Update pg_subtrans entries for any prepared transactions before
+				 * calling the extension hook.
+				 */
+				StandbyRecoverPreparedTransactions();
+				apply_running_xacts = restore_running_xacts_callback(&checkPoint, &xids, &nxids);
+			}
+
+			if (apply_running_xacts)
 			{
 				RunningTransactionsData running;
 				TransactionId latestCompletedXid;
 
-				/* Update pg_subtrans entries for any prepared transactions */
-				StandbyRecoverPreparedTransactions();
+				/* Neon: called StandbyRecoverPreparedTransactions() above already */
 
 				/*
 				 * Construct a RunningTransactions snapshot representing a
@@ -6685,6 +6802,22 @@ SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 	return SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
+void
+SetRedoStartLsn(XLogRecPtr RedoStartLSN)
+{
+	XLogCtl->RedoStartLSN = RedoStartLSN;
+}
+
+/*
+ * RedoStartLsn is set only once by startup process, locking is not required
+ * after its exit.
+ */
+XLogRecPtr
+GetRedoStartLsn(void)
+{
+	return XLogCtl->RedoStartLSN;
+}
+
 /*
  * GetFlushRecPtr -- Returns the current flush position, ie, the last WAL
  * position known to be fsync'd to disk. This should only be used on a
@@ -7120,6 +7253,11 @@ CreateCheckPoint(int flags)
 	 * checkpoint is needed.
 	 */
 	SyncPreCheckpoint();
+
+	/*
+	 * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
+	 */
+	PreCheckPointGuts(flags);
 
 	/*
 	 * Use a critical section to force system panic if we have trouble.
@@ -7688,6 +7826,33 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 	return recptr;
 }
 
+static void
+CheckPointReplicationState(int flags)
+{
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	{
+		CheckPointRelationMap();
+		CheckPointReplicationSlots(true);
+		CheckPointSnapBuild();
+		CheckPointLogicalRewriteHeap();
+		CheckPointReplicationOrigin();
+	}
+	else
+		CheckPointReplicationSlots(false);
+}
+
+/*
+ * NEON:  we use logical records to persist information of about slots, origins, relation map...
+ * If it is done inside shutdown checkpoint, then Postgres panics: "concurrent write-ahead log activity while database system is shutting down"
+ * So it before checkpoint REDO position is determined.
+ */
+static void
+PreCheckPointGuts(int flags)
+{
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+		CheckPointReplicationState(flags);
+}
+
 /*
  * Flush all data in shared memory to disk, and fsync
  *
@@ -7697,11 +7862,7 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
-	CheckPointRelationMap();
-	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
-	CheckPointSnapBuild();
-	CheckPointLogicalRewriteHeap();
-	CheckPointReplicationOrigin();
+	CheckPointReplicationState(flags);
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
@@ -8665,6 +8826,7 @@ xlog_redo(XLogReaderState *record)
 		for (uint8 block_id = 0; block_id <= XLogRecMaxBlockId(record); block_id++)
 		{
 			Buffer		buffer;
+			XLogRedoAction result;
 
 			if (!XLogRecHasBlockImage(record, block_id))
 			{
@@ -8673,9 +8835,23 @@ xlog_redo(XLogReaderState *record)
 				continue;
 			}
 
-			if (XLogReadBufferForRedo(record, block_id, &buffer) != BLK_RESTORED)
+			result = XLogReadBufferForRedo(record, block_id, &buffer);
+
+			if (result == BLK_DONE && (!IsUnderPostmaster || StandbyMode))
+			{
+				/*
+				 * NEON: In the special WAL redo process, blocks that are being
+				 * ignored return BLK_DONE. Accept that.
+				 * Additionally, in standby mode, blocks that are not present
+				 * in shared buffers are ignored during replay, so we also
+				 * ignore those blocks.
+				 */
+			}
+			else if (result != BLK_RESTORED)
 				elog(ERROR, "unexpected XLogReadBufferForRedo result when restoring backup block");
-			UnlockReleaseBuffer(buffer);
+
+			if (buffer != InvalidBuffer)
+				UnlockReleaseBuffer(buffer);
 		}
 	}
 	else if (info == XLOG_BACKUP_END)
@@ -9697,4 +9873,31 @@ SetWalWriterSleeping(bool sleeping)
 	SpinLockAcquire(&XLogCtl->info_lck);
 	XLogCtl->WalWriterSleeping = sleeping;
 	SpinLockRelease(&XLogCtl->info_lck);
+}
+
+void
+XLogUpdateWalBuffers(char* data, XLogRecPtr start, size_t len)
+{
+	XLogRecPtr end;
+	int idx;
+	XLogRecPtr pagebegptr;
+
+	end = start + len;
+	Assert(len + (start & (XLOG_BLCKSZ - 1)) <= XLOG_BLCKSZ);
+
+	LWLockAcquire(WALBufMappingLock, LW_EXCLUSIVE);
+	idx = XLogRecPtrToBufIdx(end);
+	pagebegptr = pg_atomic_read_u64(&XLogCtl->xlblocks[idx]) - XLOG_BLCKSZ;
+
+	if (pagebegptr + XLOG_BLCKSZ >= end && pagebegptr < end)
+	{
+		/* Last page of the segment is present in WAL buffers */
+		char* page = &XLogCtl->pages[idx * XLOG_BLCKSZ];
+		size_t overlap = end - pagebegptr;
+		if (overlap <= len)
+			memcpy(page, data + len - overlap, overlap);
+		else
+			memcpy(page + overlap - len, data, len);
+	}
+	LWLockRelease(WALBufMappingLock);
 }
