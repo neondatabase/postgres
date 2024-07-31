@@ -53,6 +53,7 @@
 #include "catalog/catalog.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
 #include "pgstat.h"
 #include "port/atomics.h"
 #include "port/pg_bitutils.h"
@@ -380,6 +381,27 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	{
 		scan->rs_base.rs_flags &= ~SO_ALLOW_SYNC;
 		scan->rs_startblock = 0;
+	}
+
+	if (enable_seqscan_prefetch)
+	{
+		/*
+		 * Do not use tablespace setting for catalog scans, as we might have
+		 * the tablespace settings in the catalogs locked already, which
+		 * might result in a deadlock.
+		 */
+		if (IsCatalogRelation(scan->rs_base.rs_rd))
+			scan->rs_prefetch_maximum = effective_io_concurrency;
+		else
+			scan->rs_prefetch_maximum =
+				get_tablespace_io_concurrency(scan->rs_base.rs_rd->rd_rel->reltablespace);
+
+		scan->rs_prefetch_target = 1;
+	}
+	else
+	{
+		scan->rs_prefetch_maximum = -1;
+		scan->rs_prefetch_target = -1;
 	}
 
 	scan->rs_numblocks = InvalidBlockNumber;
