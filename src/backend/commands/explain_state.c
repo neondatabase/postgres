@@ -97,6 +97,10 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 			buffers_set = true;
 			es->buffers = defGetBoolean(opt);
 		}
+		else if (strcmp(opt->defname, "prefetch") == 0)
+			es->prefetch = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "filecache") == 0)
+			es->file_cache = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -178,6 +182,18 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 
 	/* if the buffers was not set explicitly, set default value */
 	es->buffers = (buffers_set) ? es->buffers : es->analyze;
+
+	/* check that prefetch is used with EXPLAIN (BUFFERS) */
+	if (es->prefetch && !es->buffers)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option %s requires BUFFERS", "PREFETCH")));
+
+	/* check that filecache is used with EXPLAIN (BUFFERS) */
+	if (es->file_cache && !es->buffers)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option %s requires BUFFERS", "filecache")));
 
 	/* check that timing is used with EXPLAIN ANALYZE */
 	if (es->timing && !es->analyze)

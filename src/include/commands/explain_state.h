@@ -49,6 +49,8 @@ typedef struct ExplainState
 	bool		analyze;		/* print actual times */
 	bool		costs;			/* print estimated costs */
 	bool		buffers;		/* print buffer usage */
+	bool		prefetch;		/* print buffer prefetch stats */
+	bool		file_cache;		/* print LFC stats */
 	bool		wal;			/* print WAL usage */
 	bool		timing;			/* print detailed node timing */
 	bool		summary;		/* print total planning and execution timing */
