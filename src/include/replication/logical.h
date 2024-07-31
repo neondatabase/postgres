@@ -114,6 +114,7 @@ typedef struct LogicalDecodingContext
 	bool		processing_required;
 } LogicalDecodingContext;
 
+extern void		(*LogicalFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
 
 extern void CheckLogicalDecodingRequirements(void);
 
