@@ -218,13 +218,23 @@ BootstrapModeMain(int argc, char *argv[], bool check_only)
 	argv++;
 	argc--;
 
-	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:X:-:")) != -1)
+	while ((flag = getopt(argc, argv, "B:c:d:D:Fkr:s:X:-:")) != -1)
 	{
 		switch (flag)
 		{
 			case 'B':
 				SetConfigOption("shared_buffers", optarg, PGC_POSTMASTER, PGC_S_ARGV);
 				break;
+			case 's':
+			{
+				char* endptr;
+#ifdef HAVE_STRTOULL
+				predefined_sysidentifier = strtoull(optarg, &endptr, 10);
+#else
+				predefined_sysidentifier = strtoul(optarg, &endptr, 10);
+#endif
+				break;
+			}
 			case '-':
 
 				/*
