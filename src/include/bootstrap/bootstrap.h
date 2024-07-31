@@ -31,7 +31,7 @@
 extern PGDLLIMPORT Relation boot_reldesc;
 extern PGDLLIMPORT Form_pg_attribute attrtypes[MAXATTR];
 extern PGDLLIMPORT int numattr;
-
+extern PGDLLIMPORT uint64 predefined_sysidentifier;
 
 pg_noreturn extern void BootstrapModeMain(int argc, char *argv[], bool check_only);
 

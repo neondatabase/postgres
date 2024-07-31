@@ -63,6 +63,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "backup/basebackup.h"
+#include "bootstrap/bootstrap.h"
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "catalog/pg_database.h"
@@ -136,6 +137,7 @@ int			wal_retrieve_retry_interval = 5000;
 int			max_slot_wal_keep_size_mb = -1;
 int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
+uint64		predefined_sysidentifier;
 
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
