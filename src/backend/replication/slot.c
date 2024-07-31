@@ -50,6 +50,7 @@
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/walsender_private.h"
+#include "replication/message.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/proc.h"
@@ -897,6 +898,15 @@ ReplicationSlotDropPtr(ReplicationSlot *slot)
 	/* Generate pathnames. */
 	sprintf(path, "pg_replslot/%s", NameStr(slot->data.name));
 	sprintf(tmppath, "pg_replslot/%s.tmp", NameStr(slot->data.name));
+
+	if (SlotIsLogical(slot))
+	{
+		/* NEON specific: delete slot from storage using logical message */
+		char		prefix[MAXPGPATH];
+		snprintf(prefix, sizeof(prefix), "neon-file:%s/state", path);
+		elog(LOG, "Drop replication slot %s", path);
+		LogLogicalMessage(prefix, NULL, 0, false, true);
+	}
 
 	/*
 	 * Rename the slot directory on disk, so that we'll no longer recognize
@@ -2076,6 +2086,15 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 				(char *) (&cp) + ReplicationSlotOnDiskNotChecksummedSize,
 				ReplicationSlotOnDiskChecksummedSize);
 	FIN_CRC32C(cp.checksum);
+
+	if (SlotIsLogical(slot) && cp.slotdata.restart_lsn != InvalidXLogRecPtr)
+	{
+		/* NEON specific: persist slot in storage using logical message */
+		char		prefix[MAXPGPATH];
+		snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
+		elog(LOG, "Save replication slot at %s restart_lsn=%X/%X", path, 	LSN_FORMAT_ARGS(cp.slotdata.restart_lsn));
+		LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false, true);
+	}
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_REPLICATION_SLOT_WRITE);

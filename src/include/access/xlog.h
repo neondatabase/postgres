@@ -320,6 +320,10 @@ extern void do_pg_abort_backup(int code, Datum arg);
 extern void register_persistent_abort_backup_handler(void);
 extern SessionBackupState get_backup_status(void);
 
+/* NEON: Hook to allow the neon extension to restore running-xacts from CLOG at replica startup */
+typedef bool (*restore_running_xacts_callback_t) (CheckPoint *checkpoint, TransactionId **xids, int *nxids);
+extern restore_running_xacts_callback_t restore_running_xacts_callback;
+
 /* File path names (all relative to $PGDATA) */
 #define RECOVERY_SIGNAL_FILE	"recovery.signal"
 #define STANDBY_SIGNAL_FILE		"standby.signal"
