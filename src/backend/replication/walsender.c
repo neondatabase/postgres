@@ -53,6 +53,7 @@
 #include "access/transam.h"
 #include "access/xact.h"
 #include "access/xlog_internal.h"
+#include "access/xloginsert.h"
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
@@ -128,6 +129,11 @@ bool		log_replication_commands = false;
  * State for WalSndWakeupRequest
  */
 bool		wake_wal_senders = false;
+
+/*
+ * Backpressure hook, detecting how much we should delay.
+ */
+uint64 (*delay_backend_us)(void) = NULL;
 
 /*
  * xlogreader used for replication.  Note that a WAL sender doing physical
@@ -265,8 +271,6 @@ static void WalSndWriteData(LogicalDecodingContext *ctx, XLogRecPtr lsn, Transac
 static void WalSndUpdateProgress(LogicalDecodingContext *ctx, XLogRecPtr lsn, TransactionId xid,
 								 bool skipped_xact);
 static XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
-static void LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time);
-static TimeOffset LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now);
 static bool TransactionIdInRecentPast(TransactionId xid, uint32 epoch);
 
 static void WalSndSegmentOpen(XLogReaderState *state, XLogSegNo nextSegNo,
@@ -1814,7 +1818,7 @@ NeedToWaitForWal(XLogRecPtr target_lsn, XLogRecPtr flushed_lsn,
  * detect a shutdown request (either from postmaster or client) we will return
  * early, so caller must always check.
  */
-static XLogRecPtr
+XLogRecPtr
 WalSndWaitForWal(XLogRecPtr loc)
 {
 	int			wakeEvents;
@@ -2350,7 +2354,7 @@ ProcessStandbyMessage(void)
 /*
  * Remember that a walreceiver just confirmed receipt of lsn `lsn`.
  */
-static void
+void
 PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
@@ -2390,14 +2394,7 @@ ProcessStandbyReplyMessage(void)
 				flushPtr,
 				applyPtr;
 	bool		replyRequested;
-	TimeOffset	writeLag,
-				flushLag,
-				applyLag;
-	bool		clearLagTimes;
-	TimestampTz now;
 	TimestampTz replyTime;
-
-	static bool fullyAppliedLastTime = false;
 
 	/* the caller already consumed the msgtype byte */
 	writePtr = pq_getmsgint64(&reply_message);
@@ -2405,6 +2402,26 @@ ProcessStandbyReplyMessage(void)
 	applyPtr = pq_getmsgint64(&reply_message);
 	replyTime = pq_getmsgint64(&reply_message);
 	replyRequested = pq_getmsgbyte(&reply_message);
+	ProcessStandbyReply(writePtr,
+						flushPtr,
+						applyPtr,
+						replyTime,
+						replyRequested);
+}
+
+void
+ProcessStandbyReply(XLogRecPtr	writePtr,
+					XLogRecPtr	flushPtr,
+					XLogRecPtr	applyPtr,
+					TimestampTz replyTime,
+					bool		replyRequested)
+{
+	TimeOffset	writeLag,
+				flushLag,
+				applyLag;
+	bool		clearLagTimes;
+	TimestampTz now;
+	static bool fullyAppliedLastTime = false;
 
 	if (message_level_is_interesting(DEBUG2))
 	{
@@ -2587,7 +2604,16 @@ ProcessStandbyHSFeedbackMessage(void)
 	feedbackEpoch = pq_getmsgint(&reply_message, 4);
 	feedbackCatalogXmin = pq_getmsgint(&reply_message, 4);
 	feedbackCatalogEpoch = pq_getmsgint(&reply_message, 4);
+	ProcessStandbyHSFeedback(replyTime, feedbackXmin, feedbackEpoch, feedbackCatalogXmin, feedbackCatalogEpoch);
+}
 
+void
+ProcessStandbyHSFeedback(TimestampTz   replyTime,
+						 TransactionId feedbackXmin,
+						 uint32		feedbackEpoch,
+						 TransactionId feedbackCatalogXmin,
+						 uint32		feedbackCatalogEpoch)
+{
 	if (message_level_is_interesting(DEBUG2))
 	{
 		char	   *replyTimeStr;
@@ -4091,7 +4117,7 @@ WalSndKeepaliveIfNecessary(void)
  * eventually reported to have been written, flushed and applied by the
  * standby in a reply message.
  */
-static void
+void
 LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
 {
 	bool		buffer_full;
@@ -4156,7 +4182,7 @@ LagTrackerWrite(XLogRecPtr lsn, TimestampTz local_flush_time)
  * Return -1 if no new sample data is available, and otherwise the elapsed
  * time in microseconds.
  */
-static TimeOffset
+TimeOffset
 LagTrackerRead(int head, XLogRecPtr lsn, TimestampTz now)
 {
 	TimestampTz time = 0;
