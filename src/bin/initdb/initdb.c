@@ -3128,6 +3128,7 @@ main(int argc, char *argv[])
 		{"icu-locale", required_argument, NULL, 17},
 		{"icu-rules", required_argument, NULL, 18},
 		{"sync-method", required_argument, NULL, 19},
+		{"sysid", required_argument, NULL, 20},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -3319,6 +3320,11 @@ main(int argc, char *argv[])
 				if (!parse_sync_method(optarg, &sync_method))
 					exit(1);
 				break;
+		case 20:
+			extra_options = psprintf("%s -s %s",
+									 extra_options,
+									 optarg);
+			break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
