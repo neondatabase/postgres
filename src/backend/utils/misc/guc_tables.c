@@ -32,6 +32,7 @@
 #include "access/toast_compression.h"
 #include "access/twophase.h"
 #include "access/xlog_internal.h"
+#include "access/xloginsert.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogrecovery.h"
 #include "archive/archive_module.h"
@@ -2950,6 +2951,42 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&max_replication_slots,
 		10, 0, MAX_BACKENDS /* XXX? */ ,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_apply_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal write lag between master and replicas."),
+			gettext_noop("When lag between minimal apply position of replica and current LSN exceeds this value,"
+						 "backends are blocked."),
+			GUC_UNIT_MB,
+		},
+		&max_replication_apply_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_flush_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal flush lag between master and replicas."),
+			gettext_noop("When lag between minimal flush position of replica and current LSN exceeds this value,"
+						 "backends are blocked"),
+			GUC_UNIT_MB,
+		},
+		&max_replication_flush_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_replication_write_lag", PGC_POSTMASTER, REPLICATION_SENDING,
+			gettext_noop("Maximal write lag between master and replicas."),
+			gettext_noop("When lag between minimal write position of replica and current LSN exceeds this value,"
+						 "backends are blocked"),
+			GUC_UNIT_MB,
+		},
+		&max_replication_write_lag,
+		-1, -1, INT_MAX, /* it should not be smaller than maximal size of WAL record */
 		NULL, NULL, NULL
 	},
 

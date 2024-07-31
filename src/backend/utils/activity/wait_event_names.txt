@@ -179,6 +179,7 @@ SPIN_DELAY	"Waiting while acquiring a contended spinlock."
 VACUUM_DELAY	"Waiting in a cost-based vacuum delay point."
 VACUUM_TRUNCATE	"Waiting to acquire an exclusive lock to truncate off any empty pages at the end of a table vacuumed."
 WAL_SUMMARIZER_ERROR	"Waiting after a WAL summarizer error."
+BACK_PRESSURE	"Waiting to relieve backpressure."
 
 ABI_compatibility:
 
