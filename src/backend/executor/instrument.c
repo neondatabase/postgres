@@ -239,8 +239,13 @@ BufferUsageAdd(BufferUsage *dst, const BufferUsage *add)
 	INSTR_TIME_ADD(dst->shared_blk_write_time, add->shared_blk_write_time);
 	INSTR_TIME_ADD(dst->local_blk_read_time, add->local_blk_read_time);
 	INSTR_TIME_ADD(dst->local_blk_write_time, add->local_blk_write_time);
-	INSTR_TIME_ADD(dst->temp_blk_read_time, add->temp_blk_read_time);
-	INSTR_TIME_ADD(dst->temp_blk_write_time, add->temp_blk_write_time);
+	/* Neon-specific stats*/
+	dst->prefetch.hits += add->prefetch.hits;
+	dst->prefetch.misses += add->prefetch.misses;
+	dst->prefetch.expired += add->prefetch.expired;
+	dst->prefetch.duplicates += add->prefetch.duplicates;
+	dst->file_cache.hits += add->file_cache.hits;
+	dst->file_cache.misses += add->file_cache.misses;
 }
 
 /* dst += add - sub */
@@ -271,6 +276,13 @@ BufferUsageAccumDiff(BufferUsage *dst,
 						  add->temp_blk_read_time, sub->temp_blk_read_time);
 	INSTR_TIME_ACCUM_DIFF(dst->temp_blk_write_time,
 						  add->temp_blk_write_time, sub->temp_blk_write_time);
+	/* Neon-only stats */
+	dst->prefetch.hits += add->prefetch.hits - sub->prefetch.hits;
+	dst->prefetch.misses += add->prefetch.misses - sub->prefetch.misses;
+	dst->prefetch.expired += add->prefetch.expired - sub->prefetch.expired;
+	dst->prefetch.duplicates += add->prefetch.duplicates - sub->prefetch.duplicates;
+	dst->file_cache.hits += add->file_cache.hits - sub->file_cache.hits;
+	dst->file_cache.misses += add->file_cache.misses - sub->file_cache.misses;
 }
 
 /* helper functions for WAL usage accumulation */
