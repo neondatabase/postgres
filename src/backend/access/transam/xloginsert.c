@@ -669,22 +669,30 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			 */
 			if (regbuf->flags & REGBUF_STANDARD)
 			{
-				/* Assume we can omit data between pd_lower and pd_upper */
-				uint16		lower = ((PageHeader) page)->pd_lower;
-				uint16		upper = ((PageHeader) page)->pd_upper;
-
-				if (lower >= SizeOfPageHeaderData &&
-					upper > lower &&
-					upper <= BLCKSZ)
+				if (PageIsNew(page))
 				{
-					bimg.hole_offset = lower;
-					cbimg.hole_length = upper - lower;
+					bimg.hole_offset = 0;
+					cbimg.hole_length = BLCKSZ;
 				}
 				else
 				{
-					/* No "hole" to remove */
-					bimg.hole_offset = 0;
-					cbimg.hole_length = 0;
+					/* Assume we can omit data between pd_lower and pd_upper */
+					uint16		lower = ((PageHeader) page)->pd_lower;
+					uint16		upper = ((PageHeader) page)->pd_upper;
+
+					if (lower >= SizeOfPageHeaderData &&
+						upper > lower &&
+						upper <= BLCKSZ)
+					{
+						bimg.hole_offset = lower;
+						cbimg.hole_length = upper - lower;
+					}
+					else
+					{
+						/* No "hole" to remove */
+						bimg.hole_offset = 0;
+						cbimg.hole_length = 0;
+					}
 				}
 			}
 			else
@@ -777,6 +785,11 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 				{
 					rdt_datas_last->data = page;
 					rdt_datas_last->len = BLCKSZ;
+				}
+				else if (bimg.length == 0)
+				{
+					rdt_datas_last->data = page;
+					rdt_datas_last->len = 0;
 				}
 				else
 				{

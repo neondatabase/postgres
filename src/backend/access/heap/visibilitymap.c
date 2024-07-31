@@ -297,7 +297,9 @@ visibilitymap_set(Relation rel, BlockNumber heapBlk, Buffer heapBuf,
 				 * WAL record inserted above, so it would be incorrect to
 				 * update the heap page's LSN.
 				 */
-				if (XLogHintBitIsNeeded())
+				/* NEON: we have to update page LSN even if  wal_log_hints=off 
+ 				if (XLogHintBitIsNeeded())
+				*/
 				{
 					Page		heapPage = BufferGetPage(heapBuf);
 
