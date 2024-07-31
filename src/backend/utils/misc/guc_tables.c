@@ -75,6 +75,7 @@
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
+#include "storage/smgr.h"
 #include "storage/standby.h"
 #include "tcop/tcopprot.h"
 #include "tsearch/ts_cache.h"
@@ -2022,6 +2023,15 @@ struct config_bool ConfigureNamesBool[] =
 			gettext_noop("Enables a physical standby to synchronize logical failover slots from the primary server."),
 		},
 		&sync_replication_slots,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"neon_test_evict", PGC_POSTMASTER, UNGROUPED,
+			gettext_noop("Evict unpinned pages (for better test coverage)"),
+		},
+		&zenith_test_evict,
 		false,
 		NULL, NULL, NULL
 	},

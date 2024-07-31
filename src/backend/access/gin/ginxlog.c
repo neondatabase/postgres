@@ -407,6 +407,7 @@ ginRedoSplit(XLogReaderState *record)
 				rootbuf;
 	bool		isLeaf = (data->flags & GIN_INSERT_ISLEAF) != 0;
 	bool		isRoot = (data->flags & GIN_SPLIT_ROOT) != 0;
+	XLogRedoAction action;
 
 	/*
 	 * First clear incomplete-split flag on child page if this finishes a
@@ -415,21 +416,27 @@ ginRedoSplit(XLogReaderState *record)
 	if (!isLeaf)
 		ginRedoClearIncompleteSplit(record, 3);
 
-	if (XLogReadBufferForRedo(record, 0, &lbuffer) != BLK_RESTORED)
+	action = XLogReadBufferForRedo(record, 0, &lbuffer);
+	if (action != BLK_RESTORED && action != BLK_DONE)
 		elog(ERROR, "GIN split record did not contain a full-page image of left page");
 
-	if (XLogReadBufferForRedo(record, 1, &rbuffer) != BLK_RESTORED)
+	action = XLogReadBufferForRedo(record, 1, &rbuffer);
+	if (action != BLK_RESTORED && action != BLK_DONE)
 		elog(ERROR, "GIN split record did not contain a full-page image of right page");
 
 	if (isRoot)
 	{
-		if (XLogReadBufferForRedo(record, 2, &rootbuf) != BLK_RESTORED)
+		action = XLogReadBufferForRedo(record, 2, &rootbuf);
+		if (action != BLK_RESTORED && action != BLK_DONE)
 			elog(ERROR, "GIN split record did not contain a full-page image of root page");
-		UnlockReleaseBuffer(rootbuf);
+		if (rootbuf != InvalidBuffer)
+			UnlockReleaseBuffer(rootbuf);
 	}
 
-	UnlockReleaseBuffer(rbuffer);
-	UnlockReleaseBuffer(lbuffer);
+	if (rbuffer != InvalidBuffer)
+		UnlockReleaseBuffer(rbuffer);
+	if (lbuffer != InvalidBuffer)
+		UnlockReleaseBuffer(lbuffer);
 }
 
 /*
@@ -443,9 +450,11 @@ ginRedoVacuumPage(XLogReaderState *record)
 
 	if (XLogReadBufferForRedo(record, 0, &buffer) != BLK_RESTORED)
 	{
-		elog(ERROR, "replay of gin entry tree page vacuum did not restore the page");
+		/* NEON: we do not not apply WAL record if target page is absent at replica */
+		elog(DEBUG2, "replay of gin entry tree page vacuum did not restore the page");
 	}
-	UnlockReleaseBuffer(buffer);
+	if (BufferIsValid(buffer))
+		UnlockReleaseBuffer(buffer);
 }
 
 static void

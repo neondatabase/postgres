@@ -30,6 +30,8 @@
 #include "utils/rel.h"
 
 
+bool	(*redo_read_buffer_filter) (XLogReaderState *record, uint8 block_id);
+
 /* GUC variable */
 bool		ignore_invalid_pages = false;
 
@@ -368,6 +370,21 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		/* Caller specified a bogus block_id */
 		elog(PANIC, "failed to locate backup block with ID %d in WAL record",
 			 block_id);
+	}
+
+	if (redo_read_buffer_filter && redo_read_buffer_filter(record, block_id))
+	{
+		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
+		{
+			*buf = ReadBufferWithoutRelcache(rlocator, forknum,
+											 blkno, mode, NULL, true);
+			return BLK_DONE;
+		}
+		else
+		{
+			*buf = InvalidBuffer;
+			return BLK_DONE;
+		}
 	}
 
 	/*
