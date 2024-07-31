@@ -137,6 +137,8 @@ static void show_foreignscan_info(ForeignScanState *fsstate, ExplainState *es);
 static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
+static void show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info);
+static void show_file_cache_info(ExplainState *es, const FileCacheInfo* file_cache_info);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
@@ -205,6 +207,10 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 			es->costs = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "buffers") == 0)
 			es->buffers = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "prefetch") == 0)
+			es->prefetch = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "filecache") == 0)
+			es->file_cache = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "wal") == 0)
 			es->wal = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "settings") == 0)
@@ -635,7 +641,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	else if (es->analyze)
 		instrument_option |= INSTRUMENT_ROWS;
 
-	if (es->buffers)
+	if (es->buffers || es->prefetch || es->file_cache)
 		instrument_option |= INSTRUMENT_BUFFERS;
 	if (es->wal)
 		instrument_option |= INSTRUMENT_WAL;
@@ -2283,6 +2289,14 @@ ExplainNode(PlanState *planstate, List *ancestors,
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->walusage);
 
+	/* Show prefetch usage */
+	if (es->prefetch && planstate->instrument)
+		show_prefetch_info(es, &planstate->instrument->bufusage.prefetch);
+
+	/* Show file cache usage */
+	if (es->file_cache && planstate->instrument)
+		show_file_cache_info(es, &planstate->instrument->bufusage.file_cache);
+
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
 	{
@@ -3737,7 +3751,57 @@ peek_buffer_usage(ExplainState *es, const BufferUsage *usage)
 }
 
 /*
- * Show buffer usage details.  This better be sync with peek_buffer_usage.
+ * Show prefetch statistics
+ */
+static void
+show_prefetch_info(ExplainState *es, const PrefetchInfo* prefetch_info)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "Prefetch: hits=%lld misses=%lld expired=%lld duplicates=%lld\n",
+							 (long long) prefetch_info->hits,
+							 (long long) prefetch_info->misses,
+							 (long long) prefetch_info->expired,
+							 (long long) prefetch_info->duplicates);
+	}
+	else
+	{
+		ExplainPropertyInteger("Prefetch Hits", NULL,
+							   prefetch_info->hits, es);
+		ExplainPropertyInteger("Prefetch Misses", NULL,
+							   prefetch_info->misses, es);
+		ExplainPropertyInteger("Prefetch Expired Requests", NULL,
+							   prefetch_info->expired, es);
+		ExplainPropertyInteger("Prefetch Duplicated Requests", NULL,
+							   prefetch_info->duplicates, es);
+	}
+}
+
+/*
+ * Show local file cache statistics
+ */
+static void
+show_file_cache_info(ExplainState *es, const FileCacheInfo* file_cache_info)
+{
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "File cache: hits=%lld misses=%lld\n",
+							 (long long) file_cache_info->hits,
+							 (long long) file_cache_info->misses);
+	}
+	else
+	{
+		ExplainPropertyInteger("File Cache Hits", NULL,
+							   file_cache_info->hits, es);
+		ExplainPropertyInteger("File Cache Misses", NULL,
+							   file_cache_info->misses, es);
+	}
+}
+
+/*
+ * Show buffer usage details.  This better be synced with peek_buffer_usage.
  */
 static void
 show_buffer_usage(ExplainState *es, const BufferUsage *usage)
