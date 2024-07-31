@@ -41,6 +41,7 @@
 #include "utils/fmgrprotos.h"
 #include "utils/guc_hooks.h"
 #include "utils/hsearch.h"
+#include "utils/rel.h"
 #include "utils/timestamp.h"
 
 /*
