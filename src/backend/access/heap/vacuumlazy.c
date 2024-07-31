@@ -49,6 +49,8 @@
 #include "common/int.h"
 #include "executor/instrument.h"
 #include "miscadmin.h"
+#include "optimizer/cost.h"
+#include "optimizer/paths.h"
 #include "pgstat.h"
 #include "portability/instr_time.h"
 #include "postmaster/autovacuum.h"
@@ -59,6 +61,7 @@
 #include "utils/memutils.h"
 #include "utils/pg_rusage.h"
 #include "utils/timestamp.h"
+#include "utils/spccache.h"
 
 
 /*
@@ -139,6 +142,9 @@ typedef struct LVRelState
 	Relation	rel;
 	Relation   *indrels;
 	int			nindexes;
+
+	/* prefetch */
+	int			io_concurrency;
 
 	/* Buffer access strategy and parallel vacuum state */
 	BufferAccessStrategy bstrategy;
@@ -356,6 +362,8 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 
 	/* Set up high level stuff about rel and its indexes */
 	vacrel->rel = rel;
+	vacrel->io_concurrency =
+		get_tablespace_maintenance_io_concurrency(rel->rd_rel->reltablespace);
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
 	vacrel->bstrategy = bstrategy;
@@ -817,6 +825,7 @@ lazy_scan_heap(LVRelState *vacrel)
 {
 	BlockNumber rel_pages = vacrel->rel_pages,
 				blkno,
+				next_prefetch_block,
 				next_fsm_block_to_vacuum = 0;
 	bool		all_visible_according_to_vm;
 
@@ -841,6 +850,8 @@ lazy_scan_heap(LVRelState *vacrel)
 	vacrel->next_unskippable_block = InvalidBlockNumber;
 	vacrel->next_unskippable_allvis = false;
 	vacrel->next_unskippable_vmbuffer = InvalidBuffer;
+	/* initialize prefetching system */
+	next_prefetch_block = 0;
 
 	while (heap_vac_scan_next_block(vacrel, &blkno, &all_visible_according_to_vm))
 	{
@@ -905,6 +916,33 @@ lazy_scan_heap(LVRelState *vacrel)
 			/* Report that we are once again scanning the heap */
 			pgstat_progress_update_param(PROGRESS_VACUUM_PHASE,
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
+		}
+
+		if (vacrel->io_concurrency > 0)
+		{
+			/*
+			 * Prefetch io_concurrency blocks ahead
+			 */
+			uint32 prefetch_budget = vacrel->io_concurrency;
+
+			/* never trail behind the current scan */
+			if (next_prefetch_block < blkno)
+				next_prefetch_block = blkno;
+
+			/* but only up to the end of the relation */
+			if (prefetch_budget > rel_pages - next_prefetch_block)
+				prefetch_budget = rel_pages - next_prefetch_block;
+
+			/* And only up to io_concurrency ahead of the current vacuum scan */
+			if (next_prefetch_block + prefetch_budget > blkno + vacrel->io_concurrency)
+				prefetch_budget = blkno + vacrel->io_concurrency - next_prefetch_block;
+
+			/* And only up to the next unskippable block */
+			if (next_prefetch_block + prefetch_budget > vacrel->next_unskippable_block)
+				prefetch_budget = vacrel->next_unskippable_block - next_prefetch_block;
+
+			for (; prefetch_budget-- > 0; next_prefetch_block++)
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, next_prefetch_block);
 		}
 
 		/*
@@ -2104,7 +2142,9 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	Buffer		vmbuffer = InvalidBuffer;
 	LVSavedErrInfo saved_err_info;
 	TidStoreIter *iter;
+	TidStoreIter *piter = NULL;
 	TidStoreIterResult *iter_result;
+	TidStoreIterResult *piter_result = NULL;
 
 	Assert(vacrel->do_index_vacuuming);
 	Assert(vacrel->do_index_cleanup);
@@ -2120,6 +2160,10 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
 	iter = TidStoreBeginIterate(vacrel->dead_items);
+
+	if (vacrel->io_concurrency > 0)
+		piter = TidStoreBeginIterate(vacrel->dead_items);
+
 	while ((iter_result = TidStoreIterateNext(iter)) != NULL)
 	{
 		BlockNumber blkno;
@@ -2131,6 +2175,38 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		blkno = iter_result->blkno;
 		vacrel->blkno = blkno;
+
+		if (piter != NULL)
+		{
+			/* Scan only just started */
+			if (piter_result == NULL)
+			{
+				int readahead = vacrel->io_concurrency;
+
+				while (readahead-- > 0 &&
+					   (piter_result = TidStoreIterateNext(piter)) != NULL)
+				{
+					PrefetchBuffer(vacrel->rel, MAIN_FORKNUM,
+								   piter_result->blkno);
+				}
+			}
+
+			piter_result = TidStoreIterateNext(piter);
+
+			if (piter_result != NULL)
+			{
+				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, piter_result->blkno);
+			}
+			else /* end of iterator */
+			{
+				/*
+				 * We shut down the iterator here. This makes sure we don't
+				 * try iterating again up above.
+				 */
+				TidStoreEndIterate(piter);
+				piter = NULL;
+			}
+		}
 
 		/*
 		 * Pin the visibility map page in case we need to mark the page

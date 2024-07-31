@@ -39,6 +39,7 @@
 #include "nodes/plannodes.h"
 #include "nodes/tidbitmap.h"
 #include "partitioning/partdefs.h"
+#include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "utils/hsearch.h"
 #include "utils/queryenvironment.h"
@@ -1789,6 +1790,15 @@ typedef struct ParallelBitmapHeapState
 	ConditionVariable cv;
 } ParallelBitmapHeapState;
 
+typedef struct TBMIteratePrefetchResult
+{
+	BlockNumber blockno;		/* page number containing tuples */
+	int			ntuples;		/* -1 indicates lossy result */
+	bool		recheck;		/* should the tuples be rechecked? */
+	/* Note: recheck is always true if ntuples < 0 */
+	OffsetNumber offsets[MaxHeapTuplesPerPage];
+} TBMIteratePrefetchResult;
+
 /* ----------------
  *	 BitmapHeapScanState information
  *
@@ -1805,7 +1815,6 @@ typedef struct ParallelBitmapHeapState
  *		prefetch_maximum   maximum value for prefetch_target
  *		initialized		   is node is ready to iterate
  *		shared_tbmiterator	   shared iterator
- *		shared_prefetch_iterator shared iterator for prefetching
  *		pstate			   shared state for parallel bitmap scan
  * ----------------
  */
@@ -1825,7 +1834,10 @@ typedef struct BitmapHeapScanState
 	int			prefetch_maximum;
 	bool		initialized;
 	TBMSharedIterator *shared_tbmiterator;
-	TBMSharedIterator *shared_prefetch_iterator;
+	/* parallel worker private ring buffer with prefetch requests: it allows to access prefetch result from the same worker */
+	TBMIteratePrefetchResult prefetch_requests[MAX_IO_CONCURRENCY];
+	TBMIteratePrefetchResult tbmres_copy; /* copy of current iterator result */
+	int prefetch_head; /* head position in ring buffer */
 	ParallelBitmapHeapState *pstate;
 } BitmapHeapScanState;
 
