@@ -37,6 +37,7 @@
 									 * will be skipped) */
 #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
 									 * is taken */
+#define REGBUF_OPAQUE       0x40    /* Do not interprete page header */
 
 extern int max_replication_apply_lag;
 extern int max_replication_flush_lag;
@@ -59,7 +60,7 @@ extern bool XLogCheckBufferNeedsBackup(Buffer buffer);
 extern XLogRecPtr log_newpage(RelFileLocator *rlocator, ForkNumber forknum,
 							  BlockNumber blkno, char *page, bool page_std);
 extern void log_newpages(RelFileLocator *rlocator, ForkNumber forknum, int num_pages,
-						 BlockNumber *blknos, char **pages, bool page_std);
+						 BlockNumber *blknos, char **pages, int flags);
 extern XLogRecPtr log_newpage_buffer(Buffer buffer, bool page_std);
 extern void log_newpage_range(Relation rel, ForkNumber forknum,
 							  BlockNumber startblk, BlockNumber endblk, bool page_std);
