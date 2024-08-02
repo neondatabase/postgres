@@ -2756,6 +2756,7 @@ compute_infobits(uint16 infomask, uint16 infomask2)
 		((infomask & HEAP_XMAX_IS_MULTI) != 0 ? XLHL_XMAX_IS_MULTI : 0) |
 		((infomask & HEAP_XMAX_LOCK_ONLY) != 0 ? XLHL_XMAX_LOCK_ONLY : 0) |
 		((infomask & HEAP_XMAX_EXCL_LOCK) != 0 ? XLHL_XMAX_EXCL_LOCK : 0) |
+		((infomask & HEAP_COMBOCID) != 0 ? XLHL_COMBOCID : 0) |
 	/* note we ignore HEAP_XMAX_SHR_LOCK here */
 		((infomask & HEAP_XMAX_KEYSHR_LOCK) != 0 ? XLHL_XMAX_KEYSHR_LOCK : 0) |
 		((infomask2 & HEAP_KEYS_UPDATED) != 0 ?
@@ -8504,7 +8505,7 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	/* Prepare WAL data for the new page */
 	xlrec.new_offnum = ItemPointerGetOffsetNumber(&newtup->t_self);
 	xlrec.new_xmax = HeapTupleHeaderGetRawXmax(newtup->t_data);
-	xlrec.t_cid = HeapTupleHeaderGetRawCommandId(newtup->t_data);
+	xlrec.t_cid = HeapTupleHeaderGetRawCommandId(oldtup->t_data);
 	bufflags = REGBUF_STANDARD;
 	if (init)
 		bufflags |= REGBUF_WILL_INIT;
@@ -9154,7 +9155,7 @@ static void
 fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
 {
 	*infomask &= ~(HEAP_XMAX_IS_MULTI | HEAP_XMAX_LOCK_ONLY |
-				   HEAP_XMAX_KEYSHR_LOCK | HEAP_XMAX_EXCL_LOCK);
+				   HEAP_XMAX_KEYSHR_LOCK | HEAP_XMAX_EXCL_LOCK | HEAP_COMBOCID);
 	*infomask2 &= ~HEAP_KEYS_UPDATED;
 
 	if (infobits & XLHL_XMAX_IS_MULTI)
@@ -9163,6 +9164,8 @@ fix_infomask_from_infobits(uint8 infobits, uint16 *infomask, uint16 *infomask2)
 		*infomask |= HEAP_XMAX_LOCK_ONLY;
 	if (infobits & XLHL_XMAX_EXCL_LOCK)
 		*infomask |= HEAP_XMAX_EXCL_LOCK;
+	if (infobits & XLHL_COMBOCID)
+		*infomask |= HEAP_COMBOCID;
 	/* note HEAP_XMAX_SHR_LOCK isn't considered here */
 	if (infobits & XLHL_XMAX_KEYSHR_LOCK)
 		*infomask |= HEAP_XMAX_KEYSHR_LOCK;
