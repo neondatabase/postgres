@@ -8501,11 +8501,12 @@ log_heap_update(Relation reln, Buffer oldbuf,
 	xlrec.old_xmax = HeapTupleHeaderGetRawXmax(oldtup->t_data);
 	xlrec.old_infobits_set = compute_infobits(oldtup->t_data->t_infomask,
 											  oldtup->t_data->t_infomask2);
+	xlrec.t_cid = HeapTupleHeaderGetRawCommandId(oldtup->t_data);
 
 	/* Prepare WAL data for the new page */
 	xlrec.new_offnum = ItemPointerGetOffsetNumber(&newtup->t_self);
 	xlrec.new_xmax = HeapTupleHeaderGetRawXmax(newtup->t_data);
-	xlrec.t_cid = HeapTupleHeaderGetRawCommandId(oldtup->t_data);
+
 	bufflags = REGBUF_STANDARD;
 	if (init)
 		bufflags |= REGBUF_WILL_INIT;
