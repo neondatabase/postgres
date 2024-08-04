@@ -501,10 +501,10 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 RelFileNumber
 GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 {
-	RelFileLocatorBackend rlocator;
-	char	   *rpath;
+	RelFileLocator locator;
 	bool		collides;
 	BackendId	backend;
+	SMgrRelation srel;
 
 	/*
 	 * If we ever get here during pg_upgrade, there's something wrong; all
@@ -528,17 +528,10 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 	}
 
 	/* This logic should match RelationInitPhysicalAddr */
-	rlocator.locator.spcOid = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rlocator.locator.dbOid =
-		(rlocator.locator.spcOid == GLOBALTABLESPACE_OID) ?
+	locator.spcOid = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	locator.dbOid =
+		(locator.spcOid == GLOBALTABLESPACE_OID) ?
 		InvalidOid : MyDatabaseId;
-
-	/*
-	 * The relpath will vary based on the backend ID, so we must initialize
-	 * that properly here to make sure that any collisions based on filename
-	 * are properly detected.
-	 */
-	rlocator.backend = backend;
 
 	do
 	{
@@ -546,35 +539,18 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 
 		/* Generate the OID */
 		if (pg_class)
-			rlocator.locator.relNumber = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+			locator.relNumber = GetNewOidWithIndex(pg_class, ClassOidIndexId,
 															Anum_pg_class_oid);
 		else
-			rlocator.locator.relNumber = GetNewObjectId();
+			locator.relNumber = GetNewObjectId();
 
 		/* Check for existing file of same name */
-		rpath = relpath(rlocator, MAIN_FORKNUM);
-
-		if (access(rpath, F_OK) == 0)
-		{
-			/* definite collision */
-			collides = true;
-		}
-		else
-		{
-			/*
-			 * Here we have a little bit of a dilemma: if errno is something
-			 * other than ENOENT, should we declare a collision and loop? In
-			 * practice it seems best to go ahead regardless of the errno.  If
-			 * there is a colliding file we will get an smgr failure when we
-			 * attempt to create the new relation file.
-			 */
-			collides = false;
-		}
-
-		pfree(rpath);
+		srel = smgropen(locator, backend, relpersistence);
+		collides = smgrexists(srel, MAIN_FORKNUM);
+		smgrclose(srel);
 	} while (collides);
 
-	return rlocator.locator.relNumber;
+	return locator.relNumber;
 }
 
 /*
