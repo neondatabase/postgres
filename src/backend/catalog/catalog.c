@@ -430,10 +430,10 @@ GetNewOidWithIndex(Relation relation, Oid indexId, AttrNumber oidcolumn)
 Oid
 GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 {
-	RelFileNodeBackend rnode;
-	char	   *rpath;
+	RelFileNode node;
 	bool		collides;
 	BackendId	backend;
+	SMgrRelation srel;
 
 	/*
 	 * If we ever get here during pg_upgrade, there's something wrong; all
@@ -457,15 +457,8 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 	}
 
 	/* This logic should match RelationInitPhysicalAddr */
-	rnode.node.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
-	rnode.node.dbNode = (rnode.node.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
-
-	/*
-	 * The relpath will vary based on the backend ID, so we must initialize
-	 * that properly here to make sure that any collisions based on filename
-	 * are properly detected.
-	 */
-	rnode.backend = backend;
+	node.spcNode = reltablespace ? reltablespace : MyDatabaseTableSpace;
+	node.dbNode = (node.spcNode == GLOBALTABLESPACE_OID) ? InvalidOid : MyDatabaseId;
 
 	do
 	{
@@ -473,35 +466,18 @@ GetNewRelFileNode(Oid reltablespace, Relation pg_class, char relpersistence)
 
 		/* Generate the OID */
 		if (pg_class)
-			rnode.node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
+			node.relNode = GetNewOidWithIndex(pg_class, ClassOidIndexId,
 													Anum_pg_class_oid);
 		else
-			rnode.node.relNode = GetNewObjectId();
+			node.relNode = GetNewObjectId();
 
 		/* Check for existing file of same name */
-		rpath = relpath(rnode, MAIN_FORKNUM);
-
-		if (access(rpath, F_OK) == 0)
-		{
-			/* definite collision */
-			collides = true;
-		}
-		else
-		{
-			/*
-			 * Here we have a little bit of a dilemma: if errno is something
-			 * other than ENOENT, should we declare a collision and loop? In
-			 * practice it seems best to go ahead regardless of the errno.  If
-			 * there is a colliding file we will get an smgr failure when we
-			 * attempt to create the new relation file.
-			 */
-			collides = false;
-		}
-
-		pfree(rpath);
+		srel = smgropen(node, backend, relpersistence);
+		collides = smgrexists(srel, MAIN_FORKNUM);
+		smgrclose(srel);
 	} while (collides);
 
-	return rnode.node.relNode;
+	return node.relNode;
 }
 
 /*
