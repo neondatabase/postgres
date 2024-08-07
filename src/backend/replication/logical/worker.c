@@ -1534,6 +1534,10 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 		CommitTransactionCommand();
 		pgstat_report_stat(false);
 
+		elog(LOG, "Store flush position remote LSN %X/%X, local LSN %X/%X",
+			 LSN_FORMAT_ARGS(commit_data->end_lsn),
+			 LSN_FORMAT_ARGS(XactLastCommitEnd));
+
 		store_flush_position(commit_data->end_lsn);
 	}
 	else
