@@ -6983,7 +6983,8 @@ GetRedoStartLsn(void)
 XLogRecPtr
 GetFlushRecPtr(TimeLineID *insertTLI)
 {
-	Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE);
+	// NEON
+	//Assert(XLogCtl->SharedRecoveryState == RECOVERY_STATE_DONE);
 
 	RefreshXLogWriteResult(LogwrtResult);
 
