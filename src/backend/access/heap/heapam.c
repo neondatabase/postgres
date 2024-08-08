@@ -9228,7 +9228,7 @@ heap_xlog_delete(XLogReaderState *record)
 			HeapTupleHeaderSetXmax(htup, xlrec->xmax);
 		else
 			HeapTupleHeaderSetXmin(htup, InvalidTransactionId);
-		HeapTupleHeaderSetCmax(htup, xlrec->t_cid, false);
+		htup->t_choice.t_heap.t_field3.t_cid = xlrec->t_cid;
 
 		/* Mark the page as a candidate for pruning */
 		PageSetPrunable(page, XLogRecGetXid(record));
@@ -9329,7 +9329,7 @@ heap_xlog_insert(XLogReaderState *record)
 		htup->t_infomask = xlhdr.t_infomask;
 		htup->t_hoff = xlhdr.t_hoff;
 		HeapTupleHeaderSetXmin(htup, XLogRecGetXid(record));
-		HeapTupleHeaderSetCmin(htup, xlhdr.t_cid);
+		htup->t_choice.t_heap.t_field3.t_cid = xlhdr.t_cid;
 		htup->t_ctid = target_tid;
 
 		if (PageAddItem(page, (Item) htup, newlen, xlrec->offnum,
@@ -9472,7 +9472,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 			htup->t_infomask = xlhdr->t_infomask;
 			htup->t_hoff = xlhdr->t_hoff;
 			HeapTupleHeaderSetXmin(htup, XLogRecGetXid(record));
-			HeapTupleHeaderSetCmin(htup, xlhdr->t_cid);
+			htup->t_choice.t_heap.t_field3.t_cid = xlhdr->t_cid;
 			ItemPointerSetBlockNumber(&htup->t_ctid, blkno);
 			ItemPointerSetOffsetNumber(&htup->t_ctid, offnum);
 
@@ -9612,7 +9612,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		fix_infomask_from_infobits(xlrec->old_infobits_set, &htup->t_infomask,
 								   &htup->t_infomask2);
 		HeapTupleHeaderSetXmax(htup, xlrec->old_xmax);
-		HeapTupleHeaderSetCmax(htup, xlrec->t_cid, false);
+		htup->t_choice.t_heap.t_field3.t_cid = xlrec->t_cid;
 		/* Set forward chain link in t_ctid */
 		htup->t_ctid = newtid;
 
@@ -9745,7 +9745,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 		htup->t_hoff = xlhdr.t_hoff;
 
 		HeapTupleHeaderSetXmin(htup, XLogRecGetXid(record));
-		HeapTupleHeaderSetCmin(htup, xlhdr.t_cid);
+		htup->t_choice.t_heap.t_field3.t_cid = xlhdr.t_cid;
 		HeapTupleHeaderSetXmax(htup, xlrec->new_xmax);
 		/* Make sure there is no forward chain link in t_ctid */
 		htup->t_ctid = newtid;
@@ -9886,7 +9886,7 @@ heap_xlog_lock(XLogReaderState *record)
 						   offnum);
 		}
 		HeapTupleHeaderSetXmax(htup, xlrec->locking_xid);
-		HeapTupleHeaderSetCmax(htup, xlrec->t_cid, false);
+		htup->t_choice.t_heap.t_field3.t_cid = xlrec->t_cid;
 		PageSetLSN(page, lsn);
 		MarkBufferDirty(buffer);
 	}
