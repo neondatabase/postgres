@@ -658,7 +658,7 @@ PrefetchBuffer(Relation reln, ForkNumber forkNum, BlockNumber blockNum)
 	Assert(RelationIsValid(reln));
 	Assert(BlockNumberIsValid(blockNum));
 
-	if (RelationUsesLocalBuffers(reln))
+	if (RelationUsesLocalBuffers(reln) || am_wal_redo_postgres)
 	{
 		/* see comments in ReadBufferExtended */
 		if (RELATION_IS_OTHER_TEMP(reln))
@@ -1057,7 +1057,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
 	}
 	else if (isLocalBuf)
 	{
-		Assert(BufferIsLocal(buffer));
+		Assert(BufferIsLocal(buffer) || am_wal_redo_postgres);
 		/* Simple case for non-shared buffers. */
 		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
 		need_to_zero = StartLocalBufferIO(bufHdr, true, false);
@@ -1138,7 +1138,7 @@ PinBufferForBlock(Relation rel,
 			persistence == RELPERSISTENCE_PERMANENT ||
 			persistence == RELPERSISTENCE_UNLOGGED));
 
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 	{
 		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_TEMP_RELATION;
@@ -1155,7 +1155,7 @@ PinBufferForBlock(Relation rel,
 									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend);
 
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 	{
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
 		if (*foundPtr)
@@ -1647,7 +1647,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 	IOContext	io_context;
 	IOObject	io_object;
 
-	if (operation->persistence == RELPERSISTENCE_TEMP)
+	if (operation->persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 	{
 		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_TEMP_RELATION;
@@ -1798,7 +1798,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 	if (flags & READ_BUFFERS_SYNCHRONOUSLY)
 		ioh_flags |= PGAIO_HF_SYNCHRONOUS;
 
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 	{
 		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_TEMP_RELATION;
@@ -1899,7 +1899,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 										  operation->smgr->smgr_rlocator.backend,
 										  true);
 
-		if (persistence == RELPERSISTENCE_TEMP)
+		if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 			pgBufferUsage.local_blks_hit += 1;
 		else
 			pgBufferUsage.shared_blks_hit += 1;
@@ -1946,7 +1946,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 		pgaio_io_set_handle_data_32(ioh, (uint32 *) io_buffers, io_buffers_len);
 
 		pgaio_io_register_callbacks(ioh,
-									persistence == RELPERSISTENCE_TEMP ?
+									(persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres) ?
 									PGAIO_HCB_LOCAL_BUFFER_READV :
 									PGAIO_HCB_SHARED_BUFFER_READV,
 									flags);
@@ -1969,7 +1969,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 		pgstat_count_io_op_time(io_object, io_context, IOOP_READ,
 								io_start, 1, io_buffers_len * BLCKSZ);
 
-		if (persistence == RELPERSISTENCE_TEMP)
+		if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 			pgBufferUsage.local_blks_read += io_buffers_len;
 		else
 			pgBufferUsage.shared_blks_read += io_buffers_len;
@@ -2588,7 +2588,7 @@ ExtendBufferedRelCommon(BufferManagerRelation bmr,
 										 bmr.smgr->smgr_rlocator.backend,
 										 extend_by);
 
-	if (bmr.relpersistence == RELPERSISTENCE_TEMP)
+	if (bmr.relpersistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 		first_block = ExtendBufferedRelLocal(bmr, fork, flags,
 											 extend_by, extend_upto,
 											 buffers, &extend_by);
@@ -4582,7 +4582,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	rlocator = smgr_reln->smgr_rlocator;
 
 	/* If it's a local relation, it's localbuf.c's problem. */
-	if (RelFileLocatorBackendIsTemp(rlocator))
+	if (RelFileLocatorBackendIsTemp(rlocator) || am_wal_redo_postgres)
 	{
 		if (rlocator.backend == MyProcNumber)
 		{
@@ -4712,7 +4712,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	/* If it's a local relation, it's localbuf.c's problem. */
 	for (i = 0; i < nlocators; i++)
 	{
-		if (RelFileLocatorBackendIsTemp(smgr_reln[i]->smgr_rlocator))
+		if (RelFileLocatorBackendIsTemp(smgr_reln[i]->smgr_rlocator) || am_wal_redo_postgres)
 		{
 			if (smgr_reln[i]->smgr_rlocator.backend == MyProcNumber)
 				DropRelationAllLocalBuffers(smgr_reln[i]->smgr_rlocator.locator);
@@ -4979,7 +4979,7 @@ FlushRelationBuffers(Relation rel)
 	BufferDesc *bufHdr;
 	SMgrRelation srel = RelationGetSmgr(rel);
 
-	if (RelationUsesLocalBuffers(rel))
+	if (RelationUsesLocalBuffers(rel) || am_wal_redo_postgres)
 	{
 		for (i = 0; i < NLocBuffer; i++)
 		{
