@@ -1160,7 +1160,7 @@ PinBufferForBlock(Relation rel,
 									   smgr->smgr_rlocator.locator.relNumber,
 									   smgr->smgr_rlocator.backend);
 
-	if (persistence == RELPERSISTENCE_TEMP)
+	if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 	{
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
 		if (*foundPtr)
@@ -1523,7 +1523,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 			BufferDesc *bufHdr;
 			Block		bufBlock;
 
-			if (persistence == RELPERSISTENCE_TEMP)
+			if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 			{
 				bufHdr = GetLocalBufferDescriptor(-io_buffers[j] - 1);
 				bufBlock = LocalBufHdrGetBlock(bufHdr);
@@ -1556,7 +1556,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 			}
 
 			/* Terminate I/O and set BM_VALID. */
-			if (persistence == RELPERSISTENCE_TEMP)
+			if (persistence == RELPERSISTENCE_TEMP || am_wal_redo_postgres)
 			{
 				uint32		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
