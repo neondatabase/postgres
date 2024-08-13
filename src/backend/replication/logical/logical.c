@@ -101,6 +101,8 @@ static void update_progress_txn_cb_wrapper(ReorderBuffer *cache,
 
 static void LoadOutputPlugin(OutputPluginCallbacks *callbacks, const char *plugin);
 
+void		(*SlotFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
+
 /*
  * Make sure the current settings & environment are capable of doing logical
  * decoding.
@@ -2081,12 +2083,18 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 		 * as InvalidXLogRecPtr, so that we start processing from my slot's
 		 * confirmed_flush.
 		 */
+		XLogReaderRoutine xlr;
+		xlr.page_read = read_local_xlog_page;
+		xlr.segment_open = wal_segment_open;
+		xlr.segment_close = wal_segment_close;
+
+		if (SlotFuncs_Custom_XLogReaderRoutines != NULL)
+			SlotFuncs_Custom_XLogReaderRoutines(&xlr);
+
 		ctx = CreateDecodingContext(InvalidXLogRecPtr,
 									NIL,
 									true,	/* fast_forward */
-									XL_ROUTINE(.page_read = read_local_xlog_page,
-											   .segment_open = wal_segment_open,
-											   .segment_close = wal_segment_close),
+									&xlr,
 									NULL, NULL, NULL);
 
 		/*

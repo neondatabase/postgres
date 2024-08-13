@@ -16,6 +16,7 @@
 
 struct LogicalDecodingContext;
 
+
 typedef void (*LogicalOutputPluginWriterWrite) (struct LogicalDecodingContext *lr,
 												XLogRecPtr Ptr,
 												TransactionId xid,
@@ -115,6 +116,8 @@ typedef struct LogicalDecodingContext
 } LogicalDecodingContext;
 
 extern void		(*LogicalFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
+extern void		(*SlotFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
+
 
 extern void CheckLogicalDecodingRequirements(void);
 
