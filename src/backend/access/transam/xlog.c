@@ -5379,7 +5379,7 @@ XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 
 	/*
 	 * We need to wait for the variable, so prepare for that.
-	 * 
+	 *
 	 * Note: This wakes up every time a WAL record is replayed, so this can
 	 * be expensive.
 	 */
@@ -5391,7 +5391,7 @@ XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 		timeout = ConditionVariableTimedSleep(&XLogCtl->replayProgressCV,
 											  10000000,
 											  WAIT_EVENT_RECOVERY_WAL_STREAM);
-		
+
 		if (timeout)
 			ereport(LOG,
 					(errmsg("Waiting for recovery to catch up to %X/%X",
