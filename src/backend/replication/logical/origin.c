@@ -579,13 +579,9 @@ CheckPointReplicationOrigin(void)
 	int			i;
 	uint32		magic = REPLICATION_STATE_MAGIC;
 	pg_crc32c	crc;
-	char	   *buf;
-	size_t      chkp_size;
 
 	if (max_replication_slots == 0)
 		return;
-
-	buf = palloc(sizeof(magic) + max_replication_slots*sizeof(ReplicationStateOnDisk) + sizeof(crc));
 
 	INIT_CRC32C(crc);
 
@@ -620,9 +616,6 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not write to file \"%s\": %m",
 						tmppath)));
 	}
-	memcpy(buf, &magic, sizeof magic);
-	chkp_size = sizeof(magic);
-
 	COMP_CRC32C(crc, &magic, sizeof(magic));
 
 	/* prevent concurrent creations/drops */
@@ -665,9 +658,6 @@ CheckPointReplicationOrigin(void)
 					 errmsg("could not write to file \"%s\": %m",
 							tmppath)));
 		}
-		memcpy(buf + chkp_size, &disk_state, sizeof(disk_state));
-		chkp_size += sizeof(disk_state);
-
 		COMP_CRC32C(crc, &disk_state, sizeof(disk_state));
 	}
 
@@ -686,15 +676,6 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not write to file \"%s\": %m",
 						tmppath)));
 	}
-	if (chkp_size != sizeof(magic)) /* has some valid origins */
-	{
-		memcpy(buf + chkp_size, &crc, sizeof crc);
-		chkp_size += sizeof(crc);
-
-		/* NEON specific: persist snapshot in storage using logical message */
-		XLogFlush(LogLogicalMessage("neon-file:pg_logical/replorigin_checkpoint", buf, chkp_size, false));
-	}
-	pfree(buf);
 
 	if (CloseTransientFile(tmpfd) != 0)
 		ereport(PANIC,
@@ -1163,6 +1144,7 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 
 		/* ok, found slot */
 		session_replication_state = curstate;
+		break;
 	}
 
 
