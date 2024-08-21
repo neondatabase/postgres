@@ -6705,6 +6705,66 @@ GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno
 }
 
 /*
+ * GetLastWrittenLSN -- Returns maximal LSN of written page.
+ * It returns an upper bound for the last written LSN of a given page,
+ * either from a cached last written LSN or a global maximum last written LSN.
+ * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
+ * If cache is large enough, iterating through all hash items may be rather expensive.
+ * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
+ */
+void
+GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
+				   BlockNumber blkno, int nblocks, XLogRecPtr *lsns)
+{
+	LastWrittenLsnCacheEntry* entry;
+
+	Assert(lastWrittenLsnCacheSize != 0);
+
+	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+
+	if (relfilenode.relNumber != InvalidOid)
+	{
+		BufferTag key;
+		key.spcOid = relfilenode.spcOid;
+		key.dbOid = relfilenode.dbOid;
+		key.relNumber = relfilenode.relNumber;
+		key.forkNum = forknum;
+
+		for (int i = 0; i < nblocks; i++)
+		{
+			/* Maximal last written LSN among all non-cached pages */
+			key.blockNum = blkno + i;
+
+			entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
+
+			if (entry != NULL)
+				lsns[i] = entry->lsn;
+			else
+			{
+				lsns[i] = XLogCtl->maxLastWrittenLsn;
+
+				LWLockRelease(LastWrittenLsnLock);
+				SetLastWrittenLSNForBlock(lsns[i], relfilenode, forknum, blkno);
+				LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+			}
+		}
+	}
+	else
+	{
+		HASH_SEQ_STATUS seq;
+		XLogRecPtr lsn = XLogCtl->maxLastWrittenLsn;
+		/* Find maximum of all cached LSNs */
+		hash_seq_init(&seq, lastWrittenLsnCache);
+		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
+		{
+			if (entry->lsn > lsn)
+				lsn = entry->lsn;
+		}
+	}
+	LWLockRelease(LastWrittenLsnLock);
+}
+
+/*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
  * policy. Keeping last written LSN for each page allows to use old LSN when
@@ -6772,6 +6832,78 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumb
 	}
 	LWLockRelease(LastWrittenLsnLock);
 	return lsn;
+}
+
+/*
+ * SetLastWrittenLSNForBlockv -- Set maximal LSN of pages to their respective
+ * LSNs.
+ *
+ * We maintain cache of last written LSNs with limited size and LRU replacement
+ * policy. Keeping last written LSN for each page allows to use old LSN when
+ * requesting pages of unchanged or appended relations. Also it is critical for
+ * efficient work of prefetch in case massive update operations (like vacuum or remove).
+ */
+XLogRecPtr
+SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
+						   ForkNumber forknum, BlockNumber blockno,
+						   int nblocks)
+{
+	LastWrittenLsnCacheEntry* entry;
+	BufferTag	key;
+	bool		found;
+	XLogRecPtr	max = InvalidXLogRecPtr;
+
+	if (lsns == NULL || nblocks == 0 || lastWrittenLsnCacheSize == 0 ||
+		relfilenode.relNumber == InvalidOid)
+		return InvalidXLogRecPtr;
+
+	key.relNumber = relfilenode.relNumber;
+	key.dbOid = relfilenode.dbOid;
+	key.spcOid = relfilenode.spcOid;
+	key.forkNum = forknum;
+
+	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
+
+	for (int i = 0; i < nblocks; i++)
+	{
+		XLogRecPtr	lsn = lsns[i];
+		max = Max(max, lsn);
+
+		key.blockNum = blockno + i;
+		entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
+		if (found)
+		{
+			if (lsn > entry->lsn)
+				entry->lsn = lsn;
+			else
+				lsn = entry->lsn;
+			/* Unlink from LRU list */
+			dlist_delete(&entry->lru_node);
+		}
+		else
+		{
+			entry->lsn = lsn;
+			if (hash_get_num_entries(lastWrittenLsnCache) > lastWrittenLsnCacheSize)
+			{
+				/* Replace least recently used entry */
+				LastWrittenLsnCacheEntry* victim = dlist_container(LastWrittenLsnCacheEntry, lru_node, dlist_pop_head_node(&XLogCtl->lastWrittenLsnLRU));
+				/* Adjust max LSN for not cached relations/chunks if needed */
+				if (victim->lsn > XLogCtl->maxLastWrittenLsn)
+					XLogCtl->maxLastWrittenLsn = victim->lsn;
+
+				hash_search(lastWrittenLsnCache, victim, HASH_REMOVE, NULL);
+			}
+		}
+		/* Link to the end of LRU list */
+		dlist_push_tail(&XLogCtl->lastWrittenLsnLRU, &entry->lru_node);
+	}
+
+	if (max > XLogCtl->maxLastWrittenLsn)
+		XLogCtl->maxLastWrittenLsn = max;
+
+	LWLockRelease(LastWrittenLsnLock);
+
+	return max;
 }
 
 /*
