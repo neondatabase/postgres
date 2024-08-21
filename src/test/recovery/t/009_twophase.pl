@@ -337,7 +337,7 @@ is($psql_out, '0',
 $cur_primary->start;
 $cur_primary->psql('postgres', "
 SET synchronous_commit='remote_apply'; -- To ensure the standby is caught up
-COMMIT PREPARED 'xact_009_standby_mvcc'
+COMMIT PREPARED 'xact_009_standby_mvcc';
 ");
 
 # Still not visible to the old snapshot
@@ -351,7 +351,8 @@ $standby_session->query_safe("COMMIT");
 $psql_out = $standby_session->query_safe(
 	"SELECT count(*) FROM t_009_tbl_standby_mvcc");
 is($psql_out, '2',
-	"Committed prepared transaction is visible to new snapshot in standby");
+   "Committed prepared transaction is visible to new snapshot in standby");
+$standby_session->quit;
 
 ###############################################################################
 # Check for a lock conflict between prepared transaction with DDL inside and
