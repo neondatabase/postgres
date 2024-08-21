@@ -138,13 +138,13 @@ LINUX_CONFIGURE_FEATURES: &LINUX_CONFIGURE_FEATURES >-
 
 
 task:
-  name: Linux - Debian Bullseye
+  name: Linux - Debian Bookworm
 
   env:
     CPUS: 4
     BUILD_JOBS: 4
     TEST_JOBS: 8 # experimentally derived to be a decent choice
-    IMAGE_FAMILY: pg-ci-bullseye
+    IMAGE_FAMILY: pg-ci-bookworm
 
     CCACHE_DIR: /tmp/ccache_dir
     DEBUGINFOD_URLS: "https://debuginfod.debian.net"
@@ -208,7 +208,7 @@ task:
 
 
 task:
-  name: macOS - Ventura
+  name: macOS - Sonoma
 
   env:
     CPUS: 4 # always get that much for cirrusci macOS instances
@@ -217,7 +217,7 @@ task:
     # work OK. See
     # https://postgr.es/m/20220927040208.l3shfcidovpzqxfh%40awork3.anarazel.de
     TEST_JOBS: 8
-    IMAGE: ghcr.io/cirruslabs/macos-ventura-base:latest
+    IMAGE: ghcr.io/cirruslabs/macos-runner:sonoma
 
     CIRRUS_WORKING_DIR: ${HOME}/pgsql/
     CCACHE_DIR: ${HOME}/ccache
@@ -249,6 +249,13 @@ task:
   # updates macports every time.
   macports_cache:
     folder: ${MACPORTS_CACHE}
+    fingerprint_script: |
+      # Include the OS major version in the cache key.  If the OS image changes
+      # to a different major version, we need to reinstall.
+      sw_vers -productVersion | sed 's/\..*//'
+      # Also start afresh if we change our MacPorts install script.
+      md5 src/tools/ci/ci_macports_packages.sh
+    reupload_on_changes: true
   setup_additional_packages_script: |
     sh src/tools/ci/ci_macports_packages.sh \
       ccache \
@@ -353,6 +360,7 @@ task:
     MSBFLAGS: -m -verbosity:minimal "-consoleLoggerParameters:Summary;ForceNoAlign" /p:TrackFileAccess=false -nologo
 
     DISK_SIZE: 50
+    IMAGE_FAMILY: pg-ci-windows-ci
 
     # If tests hang forever, cirrus eventually times out. In that case log
     # output etc is not uploaded, making the problem hard to debug. Of course
@@ -376,7 +384,6 @@ task:
     # given that it explicitly prevents crash dumps from working...
     # 0x8001 is SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
     CIRRUS_WINDOWS_ERROR_MODE: 0x8001
-    IMAGE_FAMILY: pg-ci-windows-ci-vs-2019
 
   <<: *windows_task_template
 
@@ -451,12 +458,12 @@ task:
 
   # To limit unnecessary work only run this once the normal linux test succeeds
   depends_on:
-    - Linux - Debian Bullseye
+    - Linux - Debian Bookworm
 
   env:
     CPUS: 4
     BUILD_JOBS: 4
-    IMAGE_FAMILY: pg-ci-bullseye
+    IMAGE_FAMILY: pg-ci-bookworm
 
     # Use larger ccache cache, as this task compiles with multiple compilers /
     # flag combinations
