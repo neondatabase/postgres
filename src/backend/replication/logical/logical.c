@@ -46,6 +46,8 @@
 #include "utils/inval.h"
 #include "utils/memutils.h"
 
+void		(*Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
+
 /* data for errcontext callback */
 typedef struct LogicalErrorCallbackState
 {
@@ -182,6 +184,12 @@ StartupDecodingContext(List *output_plugin_options,
 	 */
 	if (!fast_forward)
 		LoadOutputPlugin(&ctx->callbacks, NameStr(slot->data.plugin));
+
+	/*
+	 * NEON: override page_read/segment_open/segment_close functions to support on-demand WAL download
+	 */
+	if (Custom_XLogReaderRoutines != NULL)
+		Custom_XLogReaderRoutines(xl_routine);
 
 	/*
 	 * Now that the slot's xmin has been set, we can announce ourselves as a

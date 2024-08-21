@@ -37,7 +37,6 @@ extern PGDLLIMPORT int wal_sender_timeout;
 extern PGDLLIMPORT bool log_replication_commands;
 
 struct XLogReaderRoutine;
-extern PGDLLIMPORT void (*WalSender_Custom_XLogReaderRoutines)(struct XLogReaderRoutine *xlr);
 
 extern void InitWalSender(void);
 extern bool exec_replication_command(const char *cmd_string);

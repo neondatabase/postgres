@@ -24,6 +24,7 @@
 #include "utils/guc.h"
 #include "utils/pg_lsn.h"
 
+
 /*
  * Helper function for creating a new physical replication slot with
  * given arguments. Note that this function doesn't release the created
