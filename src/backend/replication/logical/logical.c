@@ -2076,6 +2076,14 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 
 	PG_TRY();
 	{
+		XLogReaderRoutine xlr;
+		xlr.page_read = read_local_xlog_page;
+		xlr.segment_open = wal_segment_open;
+		xlr.segment_close = wal_segment_close;
+
+		if (SlotFuncs_Custom_XLogReaderRoutines != NULL)
+			SlotFuncs_Custom_XLogReaderRoutines(&xlr);
+
 		/*
 		 * Create our decoding context in fast_forward mode, passing start_lsn
 		 * as InvalidXLogRecPtr, so that we start processing from my slot's
@@ -2084,9 +2092,7 @@ LogicalSlotAdvanceAndCheckSnapState(XLogRecPtr moveto,
 		ctx = CreateDecodingContext(InvalidXLogRecPtr,
 									NIL,
 									true,	/* fast_forward */
-									XL_ROUTINE(.page_read = read_local_xlog_page,
-											   .segment_open = wal_segment_open,
-											   .segment_close = wal_segment_close),
+									&xlr,
 									NULL, NULL, NULL);
 
 		/*
