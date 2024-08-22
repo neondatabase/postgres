@@ -728,13 +728,6 @@ CheckPubRelationColumnList(char *pubname, List *tables,
 	}
 }
 
-static bool
-is_neon_superuser(void)
-{
-	Oid neon_superuser_oid = get_role_oid("neon_superuser", true /*missing_ok*/);
-	return neon_superuser_oid != InvalidOid && has_privs_of_role(GetUserId(), neon_superuser_oid);
-}
-
 /*
  * Create new publication.
  */
