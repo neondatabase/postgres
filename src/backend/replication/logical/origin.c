@@ -1144,7 +1144,6 @@ replorigin_session_setup(RepOriginId node, int acquired_by)
 
 		/* ok, found slot */
 		session_replication_state = curstate;
-		break;
 	}
 
 
