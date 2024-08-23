@@ -616,6 +616,7 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not write to file \"%s\": %m",
 						tmppath)));
 	}
+
 	COMP_CRC32C(crc, &magic, sizeof(magic));
 
 	/* prevent concurrent creations/drops */
@@ -658,6 +659,7 @@ CheckPointReplicationOrigin(void)
 					 errmsg("could not write to file \"%s\": %m",
 							tmppath)));
 		}
+
 		COMP_CRC32C(crc, &disk_state, sizeof(disk_state));
 	}
 
