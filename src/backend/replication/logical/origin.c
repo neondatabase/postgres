@@ -83,7 +83,6 @@
 #include "nodes/execnodes.h"
 #include "pgstat.h"
 #include "replication/logical.h"
-#include "replication/message.h"
 #include "replication/origin.h"
 #include "storage/condition_variable.h"
 #include "storage/copydir.h"
@@ -616,7 +615,6 @@ CheckPointReplicationOrigin(void)
 				 errmsg("could not write to file \"%s\": %m",
 						tmppath)));
 	}
-
 	COMP_CRC32C(crc, &magic, sizeof(magic));
 
 	/* prevent concurrent creations/drops */
