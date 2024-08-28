@@ -82,7 +82,6 @@
 #include "nodes/execnodes.h"
 #include "pgstat.h"
 #include "replication/logical.h"
-#include "replication/message.h"
 #include "replication/origin.h"
 #include "storage/condition_variable.h"
 #include "storage/copydir.h"
