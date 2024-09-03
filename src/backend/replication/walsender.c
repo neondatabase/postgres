@@ -967,6 +967,7 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 	{
 		LogicalDecodingContext *ctx;
 		bool		need_full_snapshot = false;
+		XLogReaderRoutine xlr;
 
 		/*
 		 * Do options check early so that we can bail before calling the
@@ -1011,11 +1012,15 @@ CreateReplicationSlot(CreateReplicationSlotCmd *cmd)
 			need_full_snapshot = true;
 		}
 
+		xlr.page_read = logical_read_xlog_page;
+		xlr.segment_open = WalSndSegmentOpen;
+		xlr.segment_close = wal_segment_close;
+		if (WalSender_Custom_XLogReaderRoutines != NULL)
+			WalSender_Custom_XLogReaderRoutines(&xlr);
+
 		ctx = CreateInitDecodingContext(cmd->plugin, NIL, need_full_snapshot,
 										InvalidXLogRecPtr,
-										XL_ROUTINE(.page_read = logical_read_xlog_page,
-												   .segment_open = WalSndSegmentOpen,
-												   .segment_close = wal_segment_close),
+										&xlr,
 										WalSndPrepareWrite, WalSndWriteData,
 										WalSndUpdateProgress);
 
