@@ -1692,7 +1692,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		if (api_version >= PGSS_V1_9)
 			values[i++] = BoolGetDatum(entry->key.toplevel);
 
-		if (is_allowed_role || entry->key.userid == userid)
+		if (is_allowed_role || has_privs_of_role(userid, entry->key.userid))
 		{
 			if (api_version >= PGSS_V1_2)
 				values[i++] = Int64GetDatumFast(queryid);
