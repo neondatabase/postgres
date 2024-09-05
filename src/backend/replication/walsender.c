@@ -2990,7 +2990,16 @@ InitWalSenderSlot(void)
 		}
 	}
 
-	Assert(MyWalSnd != NULL);
+	/*
+	 * neon: in vanilla this doesn't happen because walsenders register in
+	 * InitProcess walsenderFreeProcs which is also limited by max_wal_senders.
+	 * However, in neon walproposer occupies walsender slot but doesn't register
+	 * in walsenderFreeProcs (it's a bgworker).
+	 */
+	if (!MyWalSnd)
+	{
+		elog(ERROR, "out of walsender slots, consider increasing max_wal_senders");
+	}
 
 	/* Arrange to clean up at walsender exit */
 	on_shmem_exit(WalSndKill, 0);
