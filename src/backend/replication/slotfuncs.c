@@ -123,13 +123,6 @@ create_logical_replication_slot(char *name, char *plugin,
 								bool find_startpoint)
 {
 	LogicalDecodingContext *ctx = NULL;
-	XLogReaderRoutine xlr;
-	xlr.page_read = read_local_xlog_page;
-	xlr.segment_open = wal_segment_open;
-	xlr.segment_close = wal_segment_close;
-
-	if (SlotFuncs_Custom_XLogReaderRoutines != NULL)
-		SlotFuncs_Custom_XLogReaderRoutines(&xlr);
 
 	Assert(!MyReplicationSlot);
 
@@ -154,7 +147,9 @@ create_logical_replication_slot(char *name, char *plugin,
 	ctx = CreateInitDecodingContext(plugin, NIL,
 									false,	/* just catalogs is OK */
 									restart_lsn,
-									&xlr,
+									XL_ROUTINE(.page_read = read_local_xlog_page,
+											   .segment_open = wal_segment_open,
+											   .segment_close = wal_segment_close),
 									NULL, NULL, NULL);
 
 	/*
