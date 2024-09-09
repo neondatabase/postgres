@@ -3542,6 +3542,9 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 
 		if (len != 0)
 		{
+			/* how many messages processed in a tight loop */
+			int n_processed = 0;
+
 			/* Loop to process all available data (without blocking). */
 			for (;;)
 			{
@@ -3596,9 +3599,26 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 						if (last_received < end_lsn)
 							last_received = end_lsn;
 
-						UpdateWorkerStats(last_received, send_time, false);
-
 						apply_dispatch(&s);
+
+						/*
+						 * Even under tight loop of data periodically send reply
+						 * to allow advancing the slot. Postgres walsender
+						 * normally sends 'k' if it hasn't seen replies for a
+						 * long time even if has more data to send, but we've
+						 * observed them missing when publiser was alloydb.
+						 */
+						n_processed++;
+						if (n_processed % 1000 == 0)
+						{
+							send_feedback(last_received, false, false);
+							UpdateWorkerStats(last_received, send_time, true);
+						}
+						else
+						{
+							UpdateWorkerStats(last_received, send_time, false);
+						}
+
 					}
 					else if (c == 'k')
 					{
