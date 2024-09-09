@@ -3555,6 +3555,9 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 
 		if (len != 0)
 		{
+			/* how many messages processed in a tight loop */
+			int n_processed = 0;
+
 			/* Loop to process all available data (without blocking). */
 			for (;;)
 			{
@@ -3612,9 +3615,18 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 						if (last_received < end_lsn)
 							last_received = end_lsn;
 
-						UpdateWorkerStats(last_received, send_time, false);
-
 						apply_dispatch(&s);
+
+						/*
+						 * Even in under tight loop of data periodically answer
+						 * to allow advancing the slot.
+						 */
+						n_processed++;
+						if (n_processed % 100 == 0)
+						{
+							send_feedback(last_received, false, false);
+							UpdateWorkerStats(last_received, send_time, true);
+						}
 					}
 					else if (c == 'k')
 					{
