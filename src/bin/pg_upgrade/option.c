@@ -57,6 +57,9 @@ parseCommandLine(int argc, char *argv[])
 		{"verbose", no_argument, NULL, 'v'},
 		{"clone", no_argument, NULL, 1},
 		{"copy", no_argument, NULL, 2},
+		{"neon_start", required_argument, NULL, 3},
+		{"neon_stop", required_argument, NULL, 4},
+		{"neon_initdb", required_argument, NULL, 5},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -198,7 +201,16 @@ parseCommandLine(int argc, char *argv[])
 			case 2:
 				user_opts.transfer_mode = TRANSFER_MODE_COPY;
 				break;
-
+			case 3:
+				old_cluster.neon_start = pg_strdup(optarg);
+				break;
+			case 4:
+				old_cluster.neon_stop = pg_strdup(optarg);
+				break;
+			case 5:
+				old_cluster.neon_initdb = pg_strdup(optarg);
+				new_cluster.neon_initdb = pg_strdup(optarg);
+				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
 						os_info.progname);

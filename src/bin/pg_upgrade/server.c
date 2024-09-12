@@ -235,6 +235,7 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 	 * crash, the new cluster has to be recreated anyway.  fsync=off is a big
 	 * win on ext4.
 	 */
+
 	snprintf(cmd, sizeof(cmd),
 			 "\"%s/pg_ctl\" -w -l \"%s/%s\" -D \"%s\" -o \"-p %d -b%s %s%s\" start",
 			 cluster->bindir,
@@ -243,6 +244,12 @@ start_postmaster(ClusterInfo *cluster, bool report_and_exit_on_error)
 			 (cluster == &new_cluster) ?
 			 " -c synchronous_commit=off -c fsync=off -c full_page_writes=off" : "",
 			 cluster->pgopts ? cluster->pgopts : "", socket_string);
+
+	// if neon_start was provided, use it instead
+	// We expect that all necessary flags are provided by caller
+	if (cluster->neon_start != NULL) {
+		strcpy(cmd, cluster->neon_start);
+	}
 
 	/*
 	 * Don't throw an error right away, let connecting throw the error because
@@ -328,6 +335,13 @@ stop_postmaster(bool in_atexit)
 	else
 		return;					/* no cluster running */
 
+	// if neon_stop was provided, use it instead
+	// We expect that all necessary flags are provided by caller
+	if (cluster->neon_stop != NULL) {
+		exec_prog(SERVER_STOP_LOG_FILE, NULL, !in_atexit, !in_atexit,
+				"%s", cluster->neon_stop);
+	}
+	else
 	exec_prog(SERVER_STOP_LOG_FILE, NULL, !in_atexit, !in_atexit,
 			  "\"%s/pg_ctl\" -w -D \"%s\" -o \"%s\" %s stop",
 			  cluster->bindir, cluster->pgconfig,

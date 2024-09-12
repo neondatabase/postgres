@@ -265,6 +265,9 @@ typedef struct
 	char	   *pgconfig;		/* pathname for cluster's config file
 								 * directory */
 	char	   *bindir;			/* pathname for cluster's executable directory */
+	char		*neon_start;		/* NEON specific method to start postgres instead of plain pg_ctl start*/
+	char 		*neon_stop;		/* NEON specific method to stop postgres instead of plain pg_ctl stop*/
+	char 		*neon_initdb;		/* NEON specific method to stop postgres instead of plain pg_ctl stop*/
 	char	   *pgopts;			/* options to pass to the server, like pg_ctl
 								 * -o */
 	char	   *sockdir;		/* directory for Unix Domain socket, if any */
