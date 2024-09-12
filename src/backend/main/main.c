@@ -234,6 +234,8 @@ main(int argc, char *argv[])
 		CallExtMain("neon_walredo", "WalRedoMain", argc, argv, false);
 	else if (argc > 1 && strcmp(argv[1], "--sync-safekeepers") == 0)
 		CallExtMain("neon", "WalProposerSync", argc, argv, true);
+	else if (argc > 1 && strcmp(argv[1], "--wal-log") == 0)
+		CallExtMain("neon", "WalLog", argc, argv, false);
 	else
 		PostmasterMain(argc, argv);
 	/* the functions above should not return */
