@@ -211,10 +211,11 @@ check_new_cluster(void)
 		case TRANSFER_MODE_CLONE:
 			check_file_clone();
 			break;
-		case TRANSFER_MODE_COPY:
-			break;
 		case TRANSFER_MODE_LINK:
 			check_hard_link();
+			break;
+		case TRANSFER_MODE_COPY:
+		case TRANSFER_MODE_NONE:
 			break;
 	}
 

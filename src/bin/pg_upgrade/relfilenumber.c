@@ -40,6 +40,9 @@ transfer_all_new_tablespaces(DbInfoArr *old_db_arr, DbInfoArr *new_db_arr,
 		case TRANSFER_MODE_LINK:
 			prep_status_progress("Linking user relation files");
 			break;
+		case TRANSFER_MODE_NONE:
+			prep_status_progress("Skipping user relation files");
+			return;
 	}
 
 	/*
@@ -254,6 +257,9 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 					pg_log(PG_VERBOSE, "linking \"%s\" to \"%s\"",
 						   old_file, new_file);
 					linkFile(old_file, new_file, map->nspname, map->relname);
+					break;
+				case TRANSFER_MODE_NONE:
+					pg_unreachable();
 			}
 	}
 }
