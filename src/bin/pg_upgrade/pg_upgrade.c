@@ -238,7 +238,7 @@ make_outputdirs(char *pgdata)
 	int			len;
 
 	log_opts.rootdir = (char *) pg_malloc0(MAXPGPATH);
-	len = snprintf(log_opts.rootdir, MAXPGPATH, "%s/%s", pgdata, BASE_OUTPUTDIR);
+	len = snprintf(log_opts.rootdir, MAXPGPATH, "/tmp/pg_upgrade_log/%s", BASE_OUTPUTDIR);
 	if (len >= MAXPGPATH)
 		pg_fatal("directory path for new cluster is too long");
 

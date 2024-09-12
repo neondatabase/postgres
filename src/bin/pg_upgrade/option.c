@@ -59,7 +59,8 @@ parseCommandLine(int argc, char *argv[])
 		{"copy", no_argument, NULL, 2},
 		{"neon_start", required_argument, NULL, 3},
 		{"neon_stop", required_argument, NULL, 4},
-		{"neon_initdb", required_argument, NULL, 5},
+		{"neon_start_new", required_argument, NULL, 5},
+		{"neon_stop_new", required_argument, NULL, 6},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -208,8 +209,10 @@ parseCommandLine(int argc, char *argv[])
 				old_cluster.neon_stop = pg_strdup(optarg);
 				break;
 			case 5:
-				old_cluster.neon_initdb = pg_strdup(optarg);
-				new_cluster.neon_initdb = pg_strdup(optarg);
+				new_cluster.neon_start = pg_strdup(optarg);
+				break;
+			case 6:
+				new_cluster.neon_stop = pg_strdup(optarg);
 				break;
 			default:
 				fprintf(stderr, _("Try \"%s --help\" for more information.\n"),
