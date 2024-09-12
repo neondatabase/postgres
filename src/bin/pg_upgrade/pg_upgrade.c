@@ -169,11 +169,16 @@ main(int argc, char **argv)
 	 * will link the old and new cluster data files, preventing the old
 	 * cluster from being safely started once the new cluster is started.
 	 */
-	if (user_opts.transfer_mode == TRANSFER_MODE_LINK)
-		disable_old_cluster();
 
-	transfer_all_new_tablespaces(&old_cluster.dbarr, &new_cluster.dbarr,
-								 old_cluster.pgdata, new_cluster.pgdata);
+	// If we're in a neon upgrade mode, we don't need to transfer any files
+	if (old_cluster.neon_start == NULL)
+	{
+		if (user_opts.transfer_mode == TRANSFER_MODE_LINK)
+			disable_old_cluster();
+
+		transfer_all_new_tablespaces(&old_cluster.dbarr, &new_cluster.dbarr,
+									old_cluster.pgdata, new_cluster.pgdata);
+	}
 
 	/*
 	 * Assuming OIDs are only used in system tables, there is no need to
