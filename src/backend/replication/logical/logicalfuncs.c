@@ -39,8 +39,6 @@
 #include "utils/regproc.h"
 #include "utils/resowner.h"
 
-void		(*LogicalFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
-
 /* private data for writing out data */
 typedef struct DecodingOutputState
 {
@@ -235,9 +233,6 @@ pg_logical_slot_get_changes_guts(FunctionCallInfo fcinfo, bool confirm, bool bin
 		xlr.page_read = read_local_xlog_page;
 		xlr.segment_open = wal_segment_open;
 		xlr.segment_close = wal_segment_close;
-
-		if (LogicalFuncs_Custom_XLogReaderRoutines != NULL)
-			LogicalFuncs_Custom_XLogReaderRoutines(&xlr);
 
 		/* restart at slot's confirmed_flush */
 		ctx = CreateDecodingContext(InvalidXLogRecPtr,
