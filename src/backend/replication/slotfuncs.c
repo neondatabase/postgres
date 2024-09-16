@@ -28,8 +28,6 @@
 #include "utils/pg_lsn.h"
 #include "utils/resowner.h"
 
-void		(*SlotFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
-
 /*
  * Helper function for creating a new physical replication slot with
  * given arguments. Note that this function doesn't release the created
