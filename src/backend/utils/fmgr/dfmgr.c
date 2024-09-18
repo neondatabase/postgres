@@ -166,6 +166,8 @@ neon_try_load(const char *name)
 
 	have_slash = (first_dir_separator(request_name) != NULL);
 
+	elog(DEBUG3, "neon_try_load: request_name: %s, pkglib_path %s", request_name, pkglib_path);
+
 	if (strncmp(request_name, "$libdir/", strlen("$libdir/")) == 0)
 	{
 		char *new_request_name = psprintf("%s", request_name + strlen("$libdir/"));
@@ -173,6 +175,16 @@ neon_try_load(const char *name)
 		request_name = new_request_name;
 
 		elog(DEBUG3, "neon_try_load: omit $libdir/: %s", request_name);
+	}
+	// if name contains pkglib_path as prefix, strip it and only request the file name
+	else if (pkglib_path[0] != '\0' &&
+			 strncmp(request_name, pkglib_path, strlen(pkglib_path)) == 0)
+	{
+		char *new_request_name = psprintf("%s", request_name + strlen(pkglib_path));
+		pfree(request_name);
+		request_name = new_request_name;
+
+		elog(DEBUG3, "neon_try_load: omit pkglib_path: %s", request_name);
 	}
 	else if (have_slash)
 	{
