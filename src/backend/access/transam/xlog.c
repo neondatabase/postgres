@@ -335,6 +335,7 @@ static TimestampTz recoveryTargetTime;
 const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
+bool        recoveryPauseOnMisconfig;
 
 /* options formerly taken from recovery.conf for XLOG streaming */
 bool		StandbyModeRequested = false;
@@ -6596,6 +6597,9 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 							   param_name,
 							   currValue,
 							   minValue)));
+
+			if (!recoveryPauseOnMisconfig)
+				return;
 
 			SetRecoveryPause(true);
 
