@@ -92,6 +92,7 @@ TimestampTz recoveryTargetTime;
 const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
+bool		allowReplicaMisconfig = true; /* NEON: GUC is defined in neon extension */
 
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
@@ -4868,6 +4869,12 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 							   currValue,
 							   minValue)));
 
+			if (allowReplicaMisconfig)
+			{
+				/* Сontinue replication even though it can cause problems later */
+				return;
+			}
+
 			SetRecoveryPause(true);
 
 			ereport(LOG,
@@ -4916,7 +4923,17 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 			ConditionVariableCancelSleep();
 		}
 
-		ereport(FATAL,
+		if (allowReplicaMisconfig)
+			ereport(WARNING,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("Insufficient parameter settings can cause problems during recovery"),
+		/* Repeat the detail from above so it's easy to find in the log. */
+					 errdetail("%s = %d is a lower setting than on the primary server, where its value was %d.",
+							   param_name,
+							   currValue,
+							   minValue)));
+		else
+			ereport(FATAL,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("recovery aborted because of insufficient parameter settings"),
 		/* Repeat the detail from above so it's easy to find in the log. */
