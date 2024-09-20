@@ -8034,23 +8034,38 @@ StartupXLOG(void)
 		}
 		else
 		{
-			int			offs = (EndRecPtr % XLOG_BLCKSZ);
+			int			offs = EndRecPtr % XLOG_BLCKSZ;
 			XLogRecPtr	lastPage = EndRecPtr - offs;
-			int lastPageSize = ((lastPage % wal_segment_size) == 0) ? SizeOfXLogLongPHD : SizeOfXLogShortPHD;
+			bool		isLongHeader = (lastPage % wal_segment_size) == 0;
+			int			lastPageSize = isLongHeader ? SizeOfXLogLongPHD : SizeOfXLogShortPHD;
 			int			idx = XLogRecPtrToBufIdx(lastPage);
-			XLogPageHeader xlogPageHdr = (XLogPageHeader) (XLogCtl->pages + idx * XLOG_BLCKSZ);
+			char	   *page = XLogCtl->pages + idx * XLOG_BLCKSZ;
+			XLogPageHeader xlogPageHdr = (XLogPageHeader) page;
 
 			xlogPageHdr->xlp_pageaddr = lastPage;
 			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
 			xlogPageHdr->xlp_tli = ThisTimeLineID;
+			xlogPageHdr->xlp_info = 0;
 			/*
 			 * If we start writing with offset from page beginning, pretend in
 			 * page header there is a record ending where actual data will
 			 * start.
 			 */
 			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
-			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+			if (xlogPageHdr->xlp_rem_len > 0)
+				xlogPageHdr->xlp_info |= XLP_FIRST_IS_CONTRECORD;
 			readOff = XLogSegmentOffset(lastPage, wal_segment_size);
+
+			if (isLongHeader)
+			{
+				XLogLongPageHeader longHdr = (XLogLongPageHeader) page;
+
+				longHdr->xlp_sysid = GetSystemIdentifier();
+				longHdr->xlp_seg_size = wal_segment_size;
+				longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+
+				xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+			}
 
 			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
 
