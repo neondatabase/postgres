@@ -52,7 +52,7 @@ hash_xlog_init_meta_page(XLogReaderState *record)
 	 * full page image of the metapage.
 	 */
 	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
-	if (forknum == INIT_FORKNUM)
+	if (forknum == INIT_FORKNUM && !am_wal_redo_postgres)
 		FlushOneBuffer(metabuf);
 
 	/* all done */
@@ -90,7 +90,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 	 * full page image of the metapage.
 	 */
 	XLogRecGetBlockTag(record, 0, NULL, &forknum, NULL);
-	if (forknum == INIT_FORKNUM)
+	if (forknum == INIT_FORKNUM && !am_wal_redo_postgres)
 		FlushOneBuffer(bitmapbuf);
 	UnlockReleaseBuffer(bitmapbuf);
 
@@ -114,7 +114,7 @@ hash_xlog_init_bitmap_page(XLogReaderState *record)
 		MarkBufferDirty(metabuf);
 
 		XLogRecGetBlockTag(record, 1, NULL, &forknum, NULL);
-		if (forknum == INIT_FORKNUM)
+		if (forknum == INIT_FORKNUM && !am_wal_redo_postgres)
 			FlushOneBuffer(metabuf);
 	}
 	if (BufferIsValid(metabuf))
