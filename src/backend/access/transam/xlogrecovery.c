@@ -4861,7 +4861,7 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 			ConditionVariableCancelSleep();
 		}
 
-		ereport(FATAL,
+		ereport(recoveryPauseOnMisconfig ? FATAL : WARNING,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("recovery aborted because of insufficient parameter settings"),
 		/* Repeat the detail from above so it's easy to find in the log. */
