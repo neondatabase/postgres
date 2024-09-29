@@ -187,6 +187,7 @@ typedef struct _dumpOptions
 	int			use_setsessauth;
 	int			enable_row_security;
 	int			load_via_partition_root;
+	int			neon_table_data_external;
 
 	/* default, if no "inclusion" switches appear, is to dump everything */
 	bool		include_everything;

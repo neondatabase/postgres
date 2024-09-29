@@ -432,6 +432,7 @@ main(int argc, char **argv)
 		{"table-and-children", required_argument, NULL, 12},
 		{"exclude-table-and-children", required_argument, NULL, 13},
 		{"exclude-table-data-and-children", required_argument, NULL, 14},
+		{"neon-table-data-external", no_argument, &dopt.neon_table_data_external, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -2518,6 +2519,37 @@ dumpTableData_insert(Archive *fout, const void *dcontext)
 	return 1;
 }
 
+
+/*
+ *	Dump a table's contents for loading by delegating to a Neon external tool
+ *	- this routine is called by the Archiver when it wants the table
+ *	  to be dumped.
+ * NB: this routine was copy-pasted then adjusted from dumpTableData_copy
+ */
+static int
+dumpTableData_neon(Archive *fout, const void *dcontext)
+{
+	TableDataInfo *tdinfo = (TableDataInfo *) dcontext;
+	TableInfo  *tbinfo = tdinfo->tdtable;
+	const char *classname = tbinfo->dobj.name;
+
+	/*
+	 * Use COPY (SELECT ...) TO when dumping a foreign table's data, and when
+	 * a filter condition was specified.  For other cases a simple COPY
+	 * suffices.
+	 */
+	if (tdinfo->filtercond || tbinfo->relkind == RELKIND_FOREIGN_TABLE)
+	{
+		pg_fatal("filter conditions or foreign tables are not supported (class %s)", classname);
+	}
+	else
+	{
+		/* do nothing */
+	}
+
+	return 1;
+}
+
 /*
  * getRootTableInfo:
  *     get the root TableInfo for the given partition table.
@@ -2611,15 +2643,24 @@ dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 	else
 		copyFrom = fmtQualifiedDumpable(tbinfo);
 
+	if (dopt->dump_inserts && dopt->neon_table_data_external) {
+		pg_fatal("dump_inserts and neon_table_data_external are mutually exclusive");
+	}
 	if (dopt->dump_inserts == 0)
 	{
 		/* Dump/restore using COPY */
-		dumpFn = dumpTableData_copy;
 		/* must use 2 steps here 'cause fmtId is nonreentrant */
 		printfPQExpBuffer(copyBuf, "COPY %s ",
-						  copyFrom);
-		appendPQExpBuffer(copyBuf, "%s FROM stdin;\n",
-						  fmtCopyColumnList(tbinfo, clistBuf));
+						copyFrom);
+		appendPQExpBuffer(copyBuf, "%s ",
+						fmtCopyColumnList(tbinfo, clistBuf));
+		if (dopt->neon_table_data_external) {
+			appendPQExpBuffer(copyBuf, "FROMNEON;\n");
+			dumpFn = dumpTableData_neon;
+		} else {
+			appendPQExpBuffer(copyBuf, "FROM stdin;\n");
+			dumpFn = dumpTableData_copy;
+		}
 		copyStmt = copyBuf->data;
 	}
 	else
