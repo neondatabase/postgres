@@ -330,4 +330,7 @@ extern restore_running_xacts_callback_t restore_running_xacts_callback;
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
 
+typedef void(*CustomCheckpointHookType)(int flags);
+extern CustomCheckpointHookType CustomCheckpointHook;
+
 #endif							/* XLOG_H */
