@@ -139,6 +139,8 @@ bool		track_wal_io_timing = false;
 uint64		predefined_sysidentifier;
 int			lastWrittenLsnCacheSize;
 
+CustomCheckpointHookType CustomCheckpointHook;
+
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
 #endif
@@ -7968,6 +7970,8 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 static void
 CheckPointReplicationState(int flags)
 {
+	if (CustomCheckpointHook)
+		CustomCheckpointHook(flags);
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
 	{
 		CheckPointRelationMap();
