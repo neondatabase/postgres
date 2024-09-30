@@ -2650,12 +2650,16 @@ dumpTableData(Archive *fout, const TableDataInfo *tdinfo)
 	{
 		/* Dump/restore using COPY */
 		/* must use 2 steps here 'cause fmtId is nonreentrant */
-		printfPQExpBuffer(copyBuf, "COPY %s ",
+		printfPQExpBuffer(copyBuf, "ALTER TABLE ... SET UNLOGGED; COPY %s ",
 						copyFrom);
 		appendPQExpBuffer(copyBuf, "%s ",
 						fmtCopyColumnList(tbinfo, clistBuf));
 		if (dopt->neon_table_data_external) {
-			appendPQExpBuffer(copyBuf, "FROMNEON;\n");
+			// tl;dr: defer the copy command that copyTableData_copy would have run
+			// into a COPY FROM PROGRAM command that runs on the receiving-side postgres
+			appendPQExpBuffer(copyBuf, "FROM PROGRAM 'psql -h src -p srcport -c 'copy %s %s to stdout'';\n",
+							  fmtQualifiedDumpable(tbinfo),
+							  clistBuf->data);
 			dumpFn = dumpTableData_neon;
 		} else {
 			appendPQExpBuffer(copyBuf, "FROM stdin;\n");
