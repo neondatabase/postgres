@@ -108,7 +108,6 @@ wallog_file_descriptor(char const* path, int fd, uint64_t limit)
 	else
 	{
 		off_t size = lseek(fd, 0, SEEK_END);
-		char* buf;
 		elog(DEBUG1, "neon: writing contents of file %s, size %ld", path, (long)size);
 		if (size < 0)
 			elog(ERROR, "Failed to get size of file %s: %m", path);
