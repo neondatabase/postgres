@@ -7473,7 +7473,7 @@ CreateCheckPoint(int flags)
 	SyncPreCheckpoint();
 
 	/*
-	 * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
+	 * NEON: perform checkpoint action requiring write to the WAL before we determine the REDO pointer.
 	 */
 	PreCheckPointGuts(flags);
 
@@ -8063,7 +8063,15 @@ static void
 PreCheckPointGuts(int flags)
 {
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	{
 		CheckPointReplicationState(flags);
+		/*
+		 * pgstat_write_statsfile will be called later by before_shmem_exit() hook, but by then it's too late
+		 * to write WAL records. In Neon, pgstat_write_statsfile() writes the pgstats file to the WAL, so we have
+		 * to call it earlier. (The call that happens later is useless, but it doesn't do any harm either)  
+		 */
+		pgstat_write_statsfile();
+	}
 }
 
 /*
