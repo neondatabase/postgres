@@ -31,10 +31,13 @@
 
 #include "postgres.h"
 
+#include <unistd.h>
+
 #include "access/xact.h"
 #include "access/xloginsert.h"
 #include "miscadmin.h"
 #include "replication/message.h"
+#include "storage/fd.h"
 
 /*
  * Write logical decoding message into XLog.
@@ -92,4 +95,58 @@ logicalmsg_redo(XLogReaderState *record)
 		elog(PANIC, "logicalmsg_redo: unknown op code %u", info);
 
 	/* This is only interesting for logical decoding, see decode.c. */
+}
+
+/*
+ * NEON: persist file in WAL to save it in persistent storage.
+ * If fd < 0, then remote entry from page server.
+ */
+void
+wallog_file_descriptor(char const* path, int fd, uint64_t limit)
+{
+	char	prefix[MAXPGPATH];
+	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
+	if (fd < 0)
+	{
+		elog(DEBUG1, "neon: deleting contents of file %s", path);
+		/* unlink file */
+		LogLogicalMessage(prefix, NULL, 0, false, true);
+	}
+	else
+	{
+		off_t size = lseek(fd, 0, SEEK_END);
+		elog(DEBUG1, "neon: writing contents of file %s, size %ld", path, (long)size);
+		if (size < 0)
+			elog(ERROR, "Failed to get size of file %s: %m", path);
+		if ((uint64_t)size > limit)
+		{
+			elog(WARNING, "Size of file %s %ld is larger than limit %ld", path, (long)size, (long)limit);
+		}
+		else
+		{
+			char* buf = palloc((size_t)size);
+			lseek(fd, 0, SEEK_SET);
+			if (read(fd, buf, (size_t)size) != size)
+				elog(ERROR, "Failed to read file %s: %m", path);
+			LogLogicalMessage(prefix, buf, (size_t)size, false, true);
+			pfree(buf);
+		}
+	}
+}
+
+void
+wallog_file(char const* path, uint64_t limit)
+{
+	int fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
+	if (fd < 0)
+	{
+		ereport(LOG,
+				(errcode_for_file_access(),
+				 errmsg("could not create file \"%s\": %m", path)));
+	}
+	else
+	{
+		wallog_file_descriptor(path, fd, limit);
+		CloseTransientFile(fd);
+	}
 }

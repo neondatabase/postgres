@@ -7393,10 +7393,10 @@ CreateCheckPoint(int flags)
 	 */
 	SyncPreCheckpoint();
 
-	/*
-	 * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
-	 */
-	PreCheckPointGuts(flags);
+   /*
+    * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
+    */
+    PreCheckPointGuts(flags);
 
 	/*
 	 * Use a critical section to force system panic if we have trouble.
@@ -7968,16 +7968,13 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 static void
 CheckPointReplicationState(int flags)
 {
+	CheckPointRelationMap();
+	CheckPointReplicationSlots((flags & CHECKPOINT_IS_SHUTDOWN) != 0);
+	CheckPointSnapBuild();
+	CheckPointLogicalRewriteHeap();
+	CheckPointReplicationOrigin();
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
-	{
-		CheckPointRelationMap();
-		CheckPointReplicationSlots(true);
-		CheckPointSnapBuild();
-		CheckPointLogicalRewriteHeap();
-		CheckPointReplicationOrigin();
-	}
-	else
-		CheckPointReplicationSlots(false);
+		pgstat_write_statsfile();
 }
 
 /*
@@ -8001,7 +7998,8 @@ PreCheckPointGuts(int flags)
 static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
-	CheckPointReplicationState(flags);
+	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
+		CheckPointReplicationState(flags);
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);
