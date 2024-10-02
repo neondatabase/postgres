@@ -106,6 +106,7 @@
 #include "access/xact.h"
 #include "lib/dshash.h"
 #include "pgstat.h"
+#include "replication/message.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
@@ -180,7 +181,6 @@ typedef struct PgStat_SnapshotEntry
  * ----------
  */
 
-static void pgstat_write_statsfile(void);
 static void pgstat_read_statsfile(void);
 
 static void pgstat_init_snapshot_fixed(void);
@@ -203,7 +203,7 @@ static inline bool pgstat_is_kind_valid(PgStat_Kind kind);
 
 bool		pgstat_track_counts = false;
 int			pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_CACHE;
-
+int         neon_pgstat_file_size_limit;
 
 /* ----------
  * state shared with pgstat_*.c
@@ -1566,7 +1566,7 @@ write_chunk(FILE *fpout, void *ptr, size_t len)
  * This function is called in the last process that is accessing the shared
  * stats so locking is not required.
  */
-static void
+void
 pgstat_write_statsfile(void)
 {
 	FILE	   *fpout;
@@ -1732,6 +1732,10 @@ pgstat_write_statsfile(void)
 	{
 		/* durable_rename already emitted log message */
 		unlink(tmpfile);
+	}
+	else if (XLogInsertAllowed() && neon_pgstat_file_size_limit != 0)
+	{
+		wallog_file(statfile, (uint64_t) neon_pgstat_file_size_limit * 1024);
 	}
 }
 
