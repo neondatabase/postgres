@@ -467,6 +467,7 @@ extern void StatsShmemInit(void);
 extern void pgstat_restore_stats(void);
 extern void pgstat_discard_stats(void);
 extern void pgstat_before_server_shutdown(int code, Datum arg);
+extern void pgstat_write_statsfile(void);
 
 /* Functions for backend initialization */
 extern void pgstat_initialize(void);
@@ -727,7 +728,7 @@ extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_fetch_consistency;
-
+extern PGDLLIMPORT int neon_pgstat_file_size_limit;
 
 /*
  * Variables in pgstat_bgwriter.c
