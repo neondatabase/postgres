@@ -95,34 +95,41 @@ logicalmsg_redo(XLogReaderState *record)
  * If fd < 0, then remote entry from page server.
  */
 void
-wallog_file_descriptor(char const* path, int fd)
+wallog_file_descriptor(char const* path, int fd, uint64_t limit)
 {
 	char	prefix[MAXPGPATH];
 	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 	if (fd < 0)
 	{
-		elog(DEBUG1, "neon: deleting contents of rewrite file %s", path);
+		elog(DEBUG1, "neon: deleting contents of file %s", path);
 		/* unlink file */
-		LogLogicalMessage(prefix, NULL, 0, false);
+		XLogFlush(LogLogicalMessage(prefix, NULL, 0, false));
 	}
 	else
 	{
 		off_t size = lseek(fd, 0, SEEK_END);
 		char* buf;
-		elog(DEBUG1, "neon: writing contents of rewrite file %s, size %ld", path, (long)size);
+		elog(DEBUG1, "neon: writing contents of file %s, size %ld", path, (long)size);
 		if (size < 0)
-			elog(ERROR, "Failed to get size of mapping file: %m");
-		buf = palloc((size_t)size);
-		lseek(fd, 0, SEEK_SET);
-		if (read(fd, buf, (size_t)size) != size)
-			elog(ERROR, "Failed to read mapping file: %m");
-		XLogFlush(LogLogicalMessage(prefix, buf, (size_t)size, false));
-		pfree(buf);
+			elog(ERROR, "Failed to get size of file %s: %m", path);
+		if ((uint64_t)size > limit)
+		{
+			elog(WARNING, "Size of file %s %ld is larger than limit %ld", path, (long)size, (long)limit);
+		}
+		else
+		{
+			char* buf = palloc((size_t)size);
+			lseek(fd, 0, SEEK_SET);
+			if (read(fd, buf, (size_t)size) != size)
+				elog(ERROR, "Failed to read file %s: %m", path);
+			XLogFlush(LogLogicalMessage(prefix, buf, (size_t)size, false));
+			pfree(buf);
+		}
 	}
 }
 
 void
-wallog_file(char const* path)
+wallog_file(char const* path, uint64_t limit)
 {
 	int fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
@@ -133,7 +140,7 @@ wallog_file(char const* path)
 	}
 	else
 	{
-		wallog_file_descriptor(path, fd);
+		wallog_file_descriptor(path, fd, limit);
 		CloseTransientFile(fd);
 	}
 }

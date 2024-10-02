@@ -728,7 +728,7 @@ extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_fetch_consistency;
-
+extern PGDLLIMPORT int neon_pgstat_file_size_limit;
 
 /*
  * Variables in pgstat_bgwriter.c

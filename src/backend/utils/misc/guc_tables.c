@@ -3505,6 +3505,17 @@ struct config_int ConfigureNamesInt[] =
 	},
 
 	{
+		{"neon_pgstat_file_size_limit", PGC_SIGHUP, STATS_CUMULATIVE,
+			gettext_noop("Maximal size of pg_stat file saved in Neon storage."),
+			NULL,
+			GUC_UNIT_KB
+		},
+		&neon_pgstat_file_size_limit,
+		1024, 100, 1048576,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"gin_pending_list_limit", PGC_USERSET, CLIENT_CONN_STATEMENT,
 			gettext_noop("Sets the maximum size of the pending list for GIN index."),
 			NULL,

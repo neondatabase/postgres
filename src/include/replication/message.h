@@ -32,8 +32,8 @@ typedef struct xl_logical_message
 extern XLogRecPtr LogLogicalMessage(const char *prefix, const char *message,
 									size_t size, bool transactional);
 
-extern void wallog_file(char const* path);
-extern void wallog_file_descriptor(char const* path, int fd);
+extern void wallog_file(char const* path, uint64_t limit);
+extern void wallog_file_descriptor(char const* path, int fd, uint64_t limit);
 
 /* RMGR API */
 #define XLOG_LOGICAL_MESSAGE	0x00
