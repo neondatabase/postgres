@@ -921,7 +921,7 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 					 errmsg("could not write to file \"%s\", wrote %d of %d: %m", src->path,
 							written, len)));
 		src->off += len;
-		wallog_file_descriptor(src->path, FileGetRawDesc(src->vfd));
+		wallog_file_descriptor(src->path, FileGetRawDesc(src->vfd), -1);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&xlrec), sizeof(xlrec));
@@ -1174,7 +1174,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 				 errmsg("could not fsync file \"%s\": %m", path)));
 	pgstat_report_wait_end();
 
-	wallog_file_descriptor(path, fd);
+	wallog_file_descriptor(path, fd, -1);
 
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
@@ -1251,7 +1251,7 @@ CheckPointLogicalRewriteHeap(void)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m", path)));
-			wallog_file_descriptor(path, -1);
+			wallog_file_descriptor(path, -1, -1);
 		}
 		else
 		{
@@ -1280,7 +1280,7 @@ CheckPointLogicalRewriteHeap(void)
 						 errmsg("could not fsync file \"%s\": %m", path)));
 			pgstat_report_wait_end();
 
-			wallog_file_descriptor(path, fd);
+			wallog_file_descriptor(path, fd, -1);
 
 			if (CloseTransientFile(fd) != 0)
 				ereport(ERROR,

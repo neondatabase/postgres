@@ -185,7 +185,7 @@ static inline bool pgstat_is_kind_valid(int ikind);
 
 bool		pgstat_track_counts = false;
 int			pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_CACHE;
-
+int         neon_pgstat_file_size_limit;
 
 /* ----------
  * state shared with pgstat_*.c
@@ -1435,7 +1435,7 @@ pgstat_write_statsfile(void)
 	}
 	else if (XLogInsertAllowed())
 	{
-		wallog_file(statfile);
+		wallog_file(statfile, (uint64_t)neon_pgstat_file_size_limit * 1024);
 	}
 }
 
