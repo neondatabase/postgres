@@ -6693,10 +6693,10 @@ CreateCheckPoint(int flags)
 	 */
 	SyncPreCheckpoint();
 
-	/*
-	 * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
-	 */
-	PreCheckPointGuts(flags);
+   /*
+    * NEON: perform checkpiont action requiring write to the WAL before we determine the REDO pointer.
+    */
+    PreCheckPointGuts(flags);
 
 	/*
 	 * Use a critical section to force system panic if we have trouble.
@@ -7213,25 +7213,27 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 }
 
 static void
-CheckPointReplicationState(void)
+CheckPointReplicationState(int flags)
 {
 	CheckPointRelationMap();
 	CheckPointReplicationSlots();
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+		pgstat_write_statsfile();
 }
 
 /*
  * NEON:  we use logical records to persist information of about slots, origins, relation map...
  * If it is done inside shutdown checkpoint, then Postgres panics: "concurrent write-ahead log activity while database system is shutting down"
- * So it before checkpoint REDO position is determined.
+ * So do it before checkpoint REDO position is determined.
  */
 static void
 PreCheckPointGuts(int flags)
 {
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
-		CheckPointReplicationState();
+		CheckPointReplicationState(flags);
 }
 
 /*
@@ -7244,7 +7246,7 @@ static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
-		CheckPointReplicationState();
+		CheckPointReplicationState(flags);
 
 	/* Write out all dirty data in SLRUs and the main buffer pool */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_START(flags);

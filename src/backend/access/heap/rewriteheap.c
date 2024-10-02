@@ -787,36 +787,6 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
  */
 
 /*
- * NEON: we need to persist mapping file in WAL
- */
-static void
-wallog_mapping_file(char const* path, int fd)
-{
-	char	prefix[MAXPGPATH];
-	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-	if (fd < 0)
-	{
-		elog(DEBUG1, "neon: deleting contents of rewrite file %s", path);
-		/* unlink file */
-		LogLogicalMessage(prefix, NULL, 0, false);
-	}
-	else
-	{
-		off_t size = lseek(fd, 0, SEEK_END);
-		char* buf;
-		elog(DEBUG1, "neon: writing contents of rewrite file %s, size %ld", path, (long)size);
-		if (size < 0)
-			elog(ERROR, "Failed to get size of mapping file: %m");
-		buf = palloc((size_t)size);
-		lseek(fd, 0, SEEK_SET);
-		if (read(fd, buf, (size_t)size) != size)
-			elog(ERROR, "Failed to read mapping file: %m");
-		LogLogicalMessage(prefix, buf, (size_t)size, false);
-		pfree(buf);
-	}
-}
-
-/*
  * Do preparations for logging logical mappings during a rewrite if
  * necessary. If we detect that we don't need to log anything we'll prevent
  * any further action by the various logical rewrite functions.
@@ -951,7 +921,7 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 					 errmsg("could not write to file \"%s\", wrote %d of %d: %m", src->path,
 							written, len)));
 		src->off += len;
-		wallog_mapping_file(src->path, FileGetRawDesc(src->vfd));
+		wallog_file_descriptor(src->path, FileGetRawDesc(src->vfd), -1);
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) (&xlrec), sizeof(xlrec));
@@ -1204,7 +1174,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 				 errmsg("could not fsync file \"%s\": %m", path)));
 	pgstat_report_wait_end();
 
-	wallog_mapping_file(path, fd);
+	wallog_file_descriptor(path, fd, -1);
 
 	if (CloseTransientFile(fd) != 0)
 		ereport(ERROR,
@@ -1281,7 +1251,7 @@ CheckPointLogicalRewriteHeap(void)
 				ereport(ERROR,
 						(errcode_for_file_access(),
 						 errmsg("could not remove file \"%s\": %m", path)));
-			wallog_mapping_file(path, -1);
+			wallog_file_descriptor(path, -1, -1);
 		}
 		else
 		{
@@ -1310,7 +1280,7 @@ CheckPointLogicalRewriteHeap(void)
 						 errmsg("could not fsync file \"%s\": %m", path)));
 			pgstat_report_wait_end();
 
-			wallog_mapping_file(path, fd);
+			wallog_file_descriptor(path, fd, -1);
 
 			if (CloseTransientFile(fd) != 0)
 				ereport(ERROR,
