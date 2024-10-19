@@ -1763,9 +1763,13 @@ SnapBuildSerialize(SnapBuild *builder, XLogRecPtr lsn)
 				(errcode_for_file_access(),
 				 errmsg("could not open file \"%s\": %m", tmppath)));
 
-	/* NEON specific: persist snapshot in storage using logical message */
-	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-	XLogFlush(LogLogicalMessage(prefix, (char*)ondisk, needed_length, false));
+	/* Do not wallog AUX file at replica */
+	if (XLogInsertAllowed())
+	{
+		/* NEON specific: persist snapshot in storage using logical message */
+		snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
+		XLogFlush(LogLogicalMessage(prefix, (char*)ondisk, needed_length, false));
+	}
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_SNAPBUILD_WRITE);
@@ -2129,9 +2133,13 @@ CheckPointSnapBuild(void)
 		{
 			elog(DEBUG1, "removing snapbuild snapshot %s", path);
 
-			/* NEON specific: delete file from storage using logical message */
-			snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-			XLogFlush(LogLogicalMessage(prefix, NULL, 0, false));
+			/* Do not wallog AUX file at replica */
+			if (XLogInsertAllowed())
+			{
+				/* NEON specific: delete file from storage using logical message */
+				snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
+				XLogFlush(LogLogicalMessage(prefix, NULL, 0, false));
+			}
 
 			/*
 			 * It's not particularly harmful, though strange, if we can't
