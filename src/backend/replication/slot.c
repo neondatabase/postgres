@@ -1584,7 +1584,11 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 		/* NEON specific: persist slot in storage using logical message */
 		char		prefix[MAXPGPATH];
 		snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
-		elog(LOG, "Save replication slot at %s restart_lsn=%X/%X", path, 	LSN_FORMAT_ARGS(cp.slotdata.restart_lsn));
+		elog(LOG,
+			 "Save replication slot at %s restart_lsn=%X/%X confirmed_flush=%X/%X",
+			 path,
+			 LSN_FORMAT_ARGS(cp.slotdata.restart_lsn),
+			 LSN_FORMAT_ARGS(cp.slotdata.confirmed_flush));
 		XLogFlush(LogLogicalMessage(prefix, (char*)&cp, sizeof cp, false));
 	}
 
