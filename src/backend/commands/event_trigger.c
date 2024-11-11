@@ -119,7 +119,7 @@ CreateEventTrigger(CreateEventTrigStmt *stmt)
 	 * this, but there are obvious privilege escalation risks which would have
 	 * to somehow be plugged first.
 	 */
-	if (!superuser())
+	if (!superuser() && !is_neon_superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create event trigger \"%s\"",

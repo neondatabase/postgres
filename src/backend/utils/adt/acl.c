@@ -123,6 +123,19 @@ static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
 static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue);
 
+bool
+is_neon_superuser(void)
+{
+	return is_neon_superuser_arg(GetUserId());
+}
+
+bool
+is_neon_superuser_arg(Oid roleid)
+{
+	Oid neon_superuser_oid = get_role_oid("neon_superuser", true /*missing_ok*/);
+	return neon_superuser_oid != InvalidOid && has_privs_of_role(roleid, neon_superuser_oid);
+}
+
 
 /*
  * getid
