@@ -793,6 +793,11 @@ static void
 wallog_mapping_file(char const* path, int fd)
 {
 	char	prefix[MAXPGPATH];
+
+	/* Do not wallog AUX file at replica */
+	if (!XLogInsertAllowed())
+		return;
+
 	snprintf(prefix, sizeof(prefix), "neon-file:%s", path);
 	if (fd < 0)
 	{
