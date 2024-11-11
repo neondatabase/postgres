@@ -127,10 +127,6 @@ typedef struct f_smgr
 								  BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 
-	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
-	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
-	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
-
 	int  		(*smgr_read_slru_segment) (SMgrRelation reln, const char *path, int segno, void* buffer);
 } f_smgr;
 

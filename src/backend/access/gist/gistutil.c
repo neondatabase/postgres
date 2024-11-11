@@ -793,13 +793,15 @@ gistcheckpage(Relation rel, Buffer buf)
 	 * case, however.
 	 */
 	if (PageIsNew(page))
+	{
 		ereport(ERROR,
 				(errcode(ERRCODE_INDEX_CORRUPTED),
-				 errmsg("index \"%s\" contains unexpected zero page at block %u",
+				 errmsg("index \"%s\" (%d) contains unexpected zero page at block %u",
 						RelationGetRelationName(rel),
+						RelationGetRelid(rel),
 						BufferGetBlockNumber(buf)),
 				 errhint("Please REINDEX it.")));
-
+	}
 	/*
 	 * Additionally check that the special area looks sane.
 	 */

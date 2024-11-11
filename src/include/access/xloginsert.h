@@ -67,4 +67,8 @@ extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void InitXLogInsert(void);
 
+typedef void (*log_newpage_range_callback_t)(Relation rel, ForkNumber forknum);
+extern log_newpage_range_callback_t log_newpage_range_callback;
+
+
 #endif							/* XLOGINSERT_H */
