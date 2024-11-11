@@ -418,7 +418,7 @@ XLogReadBufferForRedoExtended(XLogReaderState *record,
 		 * The page may be uninitialized. If so, we can't set the LSN because
 		 * that would corrupt the page.
 		 */
-		if (!PageIsNew(page))
+		if (!(XLogRecGetBlock(record, block_id)->flags & BKPBLOCK_OPAQUE) && !PageIsNew(page))
 		{
 			PageSetLSN(page, lsn);
 		}

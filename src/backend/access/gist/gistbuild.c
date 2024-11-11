@@ -685,7 +685,7 @@ gist_indexsortbuild_flush_ready_pages(GISTBuildState *state)
 
 	if (RelationNeedsWAL(state->indexrel))
 		log_newpages(&state->indexrel->rd_locator, MAIN_FORKNUM, state->ready_num_pages,
-					 state->ready_blknos, state->ready_pages, true);
+					 state->ready_blknos, state->ready_pages, REGBUF_STANDARD);
 
 	for (int i = 0; i < state->ready_num_pages; i++)
 		pfree(state->ready_pages[i]);

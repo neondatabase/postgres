@@ -190,11 +190,12 @@ typedef struct XLogRecordBlockCompressHeader
 	 sizeof(BlockNumber))
 
 /*
- * The fork number fits in the lower 4 bits in the fork_flags field. The upper
+ * The fork number fits in the lower 3 bits in the fork_flags field. The upper
  * bits are used for flags.
  */
-#define BKPBLOCK_FORK_MASK	0x0F
-#define BKPBLOCK_FLAG_MASK	0xF0
+#define BKPBLOCK_FORK_MASK	0x07
+#define BKPBLOCK_FLAG_MASK	0xF8
+#define BKPBLOCK_OPAQUE     0x08
 #define BKPBLOCK_HAS_IMAGE	0x10	/* block data is an XLogRecordBlockImage */
 #define BKPBLOCK_HAS_DATA	0x20
 #define BKPBLOCK_WILL_INIT	0x40	/* redo will re-init the page */
