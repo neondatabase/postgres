@@ -17,7 +17,7 @@ dnl Read the Autoconf manual for details.
 dnl
 m4_pattern_forbid(^PGAC_)dnl to catch undefined macros
 
-AC_INIT([PostgreSQL], [14.13], [pgsql-bugs@lists.postgresql.org], [], [https://www.postgresql.org/])
+AC_INIT([PostgreSQL], [14.14], [pgsql-bugs@lists.postgresql.org], [], [https://www.postgresql.org/])
 
 m4_if(m4_defn([m4_PACKAGE_VERSION]), [2.69], [], [m4_fatal([Autoconf version 2.69 is required.
 Untested combinations of 'autoconf' and PostgreSQL versions are not
@@ -1954,6 +1954,7 @@ if test "$PORTNAME" = "win32"; then
   AC_LIBOBJ(win32common)
   AC_LIBOBJ(win32env)
   AC_LIBOBJ(win32error)
+  AC_LIBOBJ(win32ntdll)
   AC_LIBOBJ(win32security)
   AC_LIBOBJ(win32setlocale)
   AC_LIBOBJ(win32stat)
