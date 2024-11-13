@@ -1982,6 +1982,16 @@ static struct config_bool ConfigureNamesBool[] =
 	},
 
 	{
+		{"recovery_pause_on_misconfig", PGC_POSTMASTER, WAL_RECOVERY_TARGET,
+			gettext_noop("Pause recovery if values of critical GUCs at replica are smaller than on primary."),
+			NULL
+		},
+		&recoveryPauseOnMisconfig,
+		false,
+		NULL, NULL, NULL
+	},
+
+	{
 		{"hot_standby", PGC_POSTMASTER, REPLICATION_STANDBY,
 			gettext_noop("Allows connections and queries during recovery."),
 			NULL
