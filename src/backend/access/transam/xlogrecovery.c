@@ -91,6 +91,7 @@ TimestampTz recoveryTargetTime;
 const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
+bool		recoveryPauseOnMisconfig = false;
 
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
@@ -4860,6 +4861,9 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 							   currValue,
 							   minValue)));
 
+			if (!recoveryPauseOnMisconfig)
+				return;
+
 			SetRecoveryPause(true);
 
 			ereport(LOG,
@@ -4908,7 +4912,7 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 			ConditionVariableCancelSleep();
 		}
 
-		ereport(FATAL,
+		ereport(recoveryPauseOnMisconfig ? FATAL : WARNING,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("recovery aborted because of insufficient parameter settings"),
 		/* Repeat the detail from above so it's easy to find in the log. */
