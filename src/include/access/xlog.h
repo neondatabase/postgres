@@ -139,6 +139,7 @@ extern char *PrimarySlotName;
 extern bool wal_receiver_create_temp_slot;
 extern bool track_wal_io_timing;
 extern int  lastWrittenLsnCacheSize;
+extern bool recoveryPauseOnMisconfig;
 
 /* indirectly set via GUC system */
 extern TransactionId recoveryTargetXid;
