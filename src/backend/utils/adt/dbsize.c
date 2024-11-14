@@ -316,11 +316,8 @@ pg_tablespace_size_name(PG_FUNCTION_ARGS)
  * is no check here or at the call sites for that.
  */
 static int64
-calculate_relation_size(RelFileLocator *rfn, BackendId backend,
-						ForkNumber forknum, char relpersistence)
+calculate_relation_size(SMgrRelation srel, ForkNumber forknum)
 {
-	SMgrRelation srel = smgropen(*rfn, backend, relpersistence);
-
 	if (smgrexists(srel, forknum))
 	{
 		BlockNumber n = smgrnblocks(srel, forknum);
@@ -337,6 +334,7 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	text	   *forkName = PG_GETARG_TEXT_PP(1);
 	Relation	rel;
 	int64		size;
+	SMgrRelation	srel;
 
 	rel = try_relation_open(relOid, AccessShareLock);
 
@@ -350,9 +348,9 @@ pg_relation_size(PG_FUNCTION_ARGS)
 	if (rel == NULL)
 		PG_RETURN_NULL();
 
-	size = calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
-								   forkname_to_number(text_to_cstring(forkName)),
-								   rel->rd_rel->relpersistence);
+	srel = smgropen(rel->rd_locator, rel->rd_backend, rel->rd_rel->relpersistence);
+	size = calculate_relation_size(srel, forkname_to_number(text_to_cstring(forkName)));
+	smgrclose(srel);
 
 	relation_close(rel, AccessShareLock);
 
@@ -371,14 +369,15 @@ calculate_toast_table_size(Oid toastrelid)
 	ForkNumber	forkNum;
 	ListCell   *lc;
 	List	   *indexlist;
+	SMgrRelation	srel;
 
 	toastRel = relation_open(toastrelid, AccessShareLock);
 
 	/* toast heap size, including FSM and VM size */
+	srel = smgropen(toastRel->rd_locator, toastRel->rd_backend, toastRel->rd_rel->relpersistence);
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(toastRel->rd_locator),
-										toastRel->rd_backend, forkNum,
-										toastRel->rd_rel->relpersistence);
+		size += calculate_relation_size(srel, forkNum);
+	smgrclose(srel);
 
 	/* toast index size, including FSM and VM size */
 	indexlist = RelationGetIndexList(toastRel);
@@ -390,10 +389,10 @@ calculate_toast_table_size(Oid toastrelid)
 
 		toastIdxRel = relation_open(lfirst_oid(lc),
 									AccessShareLock);
+		srel = smgropen(toastIdxRel->rd_locator, toastIdxRel->rd_backend, toastIdxRel->rd_rel->relpersistence);
 		for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-			size += calculate_relation_size(&(toastIdxRel->rd_locator),
-											toastIdxRel->rd_backend, forkNum,
-											toastIdxRel->rd_rel->relpersistence);
+			size += calculate_relation_size(srel, forkNum);
+		smgrclose(srel);
 
 		relation_close(toastIdxRel, AccessShareLock);
 	}
@@ -416,13 +415,15 @@ calculate_table_size(Relation rel)
 {
 	int64		size = 0;
 	ForkNumber	forkNum;
+	SMgrRelation	srel;
 
 	/*
 	 * heap size, including FSM and VM
 	 */
+	srel = smgropen(rel->rd_locator, rel->rd_backend, rel->rd_rel->relpersistence);
 	for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-		size += calculate_relation_size(&(rel->rd_locator), rel->rd_backend,
-										forkNum, rel->rd_rel->relpersistence);
+		size += calculate_relation_size(srel, forkNum);
+	smgrclose(srel);
 
 	/*
 	 * Size of toast relation
@@ -456,14 +457,14 @@ calculate_indexes_size(Relation rel)
 			Oid			idxOid = lfirst_oid(cell);
 			Relation	idxRel;
 			ForkNumber	forkNum;
+			SMgrRelation	srel;
 
 			idxRel = relation_open(idxOid, AccessShareLock);
 
+			srel = smgropen(idxRel->rd_locator, idxRel->rd_backend, idxRel->rd_rel->relpersistence);
 			for (forkNum = 0; forkNum <= MAX_FORKNUM; forkNum++)
-				size += calculate_relation_size(&(idxRel->rd_locator),
-												idxRel->rd_backend,
-												forkNum,
-												idxRel->rd_rel->relpersistence);
+				size += calculate_relation_size(srel, forkNum);
+			smgrclose(srel);
 
 			relation_close(idxRel, AccessShareLock);
 		}
