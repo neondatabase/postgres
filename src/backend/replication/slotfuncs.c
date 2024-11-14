@@ -26,8 +26,6 @@
 #include "utils/pg_lsn.h"
 #include "utils/resowner.h"
 
-void		(*SlotFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
-
 /*
  * Helper function for creating a new physical replication slot with
  * given arguments. Note that this function doesn't release the created
@@ -127,9 +125,6 @@ create_logical_replication_slot(char *name, char *plugin,
 	xlr.page_read = read_local_xlog_page;
 	xlr.segment_open = wal_segment_open;
 	xlr.segment_close = wal_segment_close;
-
-	if (SlotFuncs_Custom_XLogReaderRoutines != NULL)
-		SlotFuncs_Custom_XLogReaderRoutines(&xlr);
 
 	Assert(!MyReplicationSlot);
 
@@ -489,9 +484,6 @@ pg_logical_replication_slot_advance(XLogRecPtr moveto)
 		xlr.page_read = read_local_xlog_page;
 		xlr.segment_open = wal_segment_open;
 		xlr.segment_close = wal_segment_close;
-
-		if (SlotFuncs_Custom_XLogReaderRoutines != NULL)
-			SlotFuncs_Custom_XLogReaderRoutines(&xlr);
 
 		/*
 		 * Create our decoding context in fast_forward mode, passing start_lsn
