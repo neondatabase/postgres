@@ -168,8 +168,6 @@ typedef struct ReplicationSlot
 #define SlotIsPhysical(slot) ((slot)->data.database == InvalidOid)
 #define SlotIsLogical(slot) ((slot)->data.database != InvalidOid)
 
-extern void		(*SlotFuncs_Custom_XLogReaderRoutines)(XLogReaderRoutine *xlr);
-
 /*
  * Shared memory control area for all of replication slots.
  */
