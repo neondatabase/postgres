@@ -236,9 +236,10 @@ read_stream_start_pending_read(ReadStream *stream, bool suppress_advice)
 	 * If advice hasn't been suppressed, this system supports it, and this
 	 * isn't a strictly sequential pattern, then we'll issue advice.
 	 */
+	/* NEON: disabled seqscan detection */
 	if (!suppress_advice &&
 		stream->advice_enabled &&
-		stream->pending_read_blocknum != stream->seq_blocknum)
+		true /* stream->pending_read_blocknum != stream->seq_blocknum */)
 		flags = READ_BUFFERS_ISSUE_ADVICE;
 	else
 		flags = 0;
@@ -403,6 +404,12 @@ read_stream_begin_relation(int flags,
 	uint32		max_pinned_buffers;
 	Oid			tablespace_id;
 	SMgrRelation smgr;
+
+	/*
+	 * NEON: We don't benefit from the OS readahead that callers with
+	 * READ_STREAM_SEQUENTIAL expect, so we disable that flag.
+  	 */
+	flags &= ~READ_STREAM_SEQUENTIAL;
 
 	smgr = RelationGetSmgr(rel);
 
