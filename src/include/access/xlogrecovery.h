@@ -57,7 +57,7 @@ extern PGDLLIMPORT char *PrimarySlotName;
 extern PGDLLIMPORT char *recoveryRestoreCommand;
 extern PGDLLIMPORT char *recoveryEndCommand;
 extern PGDLLIMPORT char *archiveCleanupCommand;
-extern PGDLLIMPORT bool recoveryPauseOnMisconfig;
+extern PGDLLIMPORT bool allowReplicaMisconfig;
 
 /* indirectly set via GUC system */
 extern PGDLLIMPORT TransactionId recoveryTargetXid;
