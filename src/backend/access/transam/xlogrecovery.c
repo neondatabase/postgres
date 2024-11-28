@@ -91,7 +91,7 @@ TimestampTz recoveryTargetTime;
 const char *recoveryTargetName;
 XLogRecPtr	recoveryTargetLSN;
 int			recovery_min_apply_delay = 0;
-bool		allowReplicaMisconfig = false;
+bool		allowReplicaMisconfig = false; /* NEON: GUC is defined in neon extension */
 
 /* options formerly taken from recovery.conf for XLOG streaming */
 char	   *PrimaryConnInfo = NULL;
@@ -4862,9 +4862,9 @@ RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue
 							   currValue,
 							   minValue)));
 
-			if (!allowReplicaMisconfig)
+			if (allowReplicaMisconfig)
 			{
-				/* Сontinue replication even though it can cause problerms later */
+				/* Сontinue replication even though it can cause problems later */
 				return;
 			}
 
