@@ -432,6 +432,75 @@ btree_xlog_split(bool newitemonleft, XLogReaderState *record)
 		MarkBufferDirty(buf);
 	}
 
+	/*
+	 * NEON: If the original page was supposed to be recovered from FPI,
+	 * then we need to correct the cycle ID (see _bt_split for reasons)
+	 *
+	 * Note that we can't just use the buffer in WALRedo on Pageserver,
+	 * as that may be InvalidBuffer when the original (left) page of the
+	 * split wasn't requested.
+	 */
+	if (XLogRecGetBlock(record, 0)->has_image)
+	{
+		/*
+		 * btree split FPIs may contain important cycle IDs on the original
+		 * page's FPI; make sure we correctly transfer this over
+		 */
+		
+		/*
+		 * Because we don't want to decompress the page if it's not needed, or
+		 * reconstruct a whole 8kB page when we're only interested in the 2
+		 * bytes of the bkpimg, we recognise there are 3 different ways we can
+		 * get the data, in order of efficiency (from most efficient to least
+		 * efficient):
+		 *  - There is an original (left) page in the buffer
+		 *  - There is original buffer, the logged FPI was not compressed
+		 *  - There is original buffer, the logged FPI was compressed
+		 */
+		if (BufferIsValid(buf))
+		{
+			/*
+			 * Neat, we can just use the buffer to copy the cycle ID
+			 */
+			BTPageOpaque oopaque = BTPageGetOpaque(BufferGetPage(buf));
+			ropaque->btpo_cycleid = oopaque->btpo_cycleid;
+		}
+		else if (!BKPIMAGE_COMPRESSED(XLogRecGetBlock(record, 0)->bimg_info))
+		{
+			/*
+			 * Good, we don't have to decompress the data, so we can use
+			 * calculated offsets into bkpb->bkp_image
+			 */
+
+			/*
+			 * offset of the start of cycleid relative to the end of the page,
+			 * which is also relative to the end of the FPI
+			 */
+			const int cycleid_off = MAXALIGN(sizeof(BTPageOpaqueData))
+				- offsetof(BTPageOpaqueData, btpo_cycleid);
+			char *cycleid_ptr;	/* may not be aligned */
+			DecodedBkpBlock *bkpb = XLogRecGetBlock(record, 0);
+
+			cycleid_ptr = &bkpb->bkp_image[bkpb->bimg_len - cycleid_off];
+
+			memcpy(&ropaque->btpo_cycleid, cycleid_ptr, sizeof(BTCycleId));
+		}
+		else
+		{
+			/*
+			 * Bummer, we have to decompress the data.
+			 */
+			PGAlignedBlock tmp;
+			BTPageOpaque oopaque;
+
+			/* Expensive decompression of data */
+			RestoreBlockImage(record, 0, tmp.data);
+
+			oopaque = BTPageGetOpaque(tmp.data);
+			ropaque->btpo_cycleid = oopaque->btpo_cycleid;
+		}
+	}
+
 	/* Fix left-link of the page to the right of the new right sibling */
 	if (spagenumber != P_NONE)
 	{
