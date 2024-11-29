@@ -533,7 +533,7 @@ XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 	{
 		bool timeout;
 		timeout = ConditionVariableTimedSleep(&XLogRecoveryCtl->replayProgressCV,
-											  10000000, /* 10 seconds */
+											  10000, /* 10 seconds, in millis */
 											  WAIT_EVENT_RECOVERY_WAL_STREAM);
 
 		replayRecPtr = GetXLogReplayRecPtr(NULL);
