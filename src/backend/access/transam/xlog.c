@@ -7993,16 +7993,11 @@ CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn, XLogRecPtr pagePtr,
 static void
 CheckPointReplicationState(int flags)
 {
-	if (flags & CHECKPOINT_IS_SHUTDOWN)
-	{
-		CheckPointRelationMap();
-		CheckPointReplicationSlots(true);
-		CheckPointSnapBuild();
-		CheckPointLogicalRewriteHeap();
-		CheckPointReplicationOrigin();
-	}
-	else
-		CheckPointReplicationSlots(false);
+	CheckPointRelationMap();
+	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
+	CheckPointSnapBuild();
+	CheckPointLogicalRewriteHeap();
+	CheckPointReplicationOrigin();
 }
 
 /*
