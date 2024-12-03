@@ -7994,7 +7994,7 @@ static void
 CheckPointReplicationState(int flags)
 {
 	CheckPointRelationMap();
-	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
+	CheckPointReplicationSlots((flags & CHECKPOINT_IS_SHUTDOWN) != 0);
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
