@@ -405,13 +405,14 @@ read_stream_begin_relation(int flags,
 	Oid			tablespace_id;
 	SMgrRelation smgr;
 
+	smgr = RelationGetSmgr(rel);
+
 	/*
 	 * NEON: We don't benefit from the OS readahead that callers with
 	 * READ_STREAM_SEQUENTIAL expect, so we disable that flag.
   	 */
-	flags &= ~READ_STREAM_SEQUENTIAL;
-
-	smgr = RelationGetSmgr(rel);
+	if (!SmgrIsTemp(smgr))
+		flags &= ~READ_STREAM_SEQUENTIAL;
 
 	/*
 	 * Decide how many I/Os we will allow to run at the same time.  That
