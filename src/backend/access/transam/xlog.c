@@ -6747,15 +6747,17 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 	Assert(nblocks > 0);
 	Assert(PointerIsValid(lsns));
 
-	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
-
 	if (relfilenode.relNumber != InvalidOid)
 	{
 		BufferTag key;
+		XLogRecPtr max_lsn;
+
 		key.spcOid = relfilenode.spcOid;
 		key.dbOid = relfilenode.dbOid;
 		key.relNumber = relfilenode.relNumber;
 		key.forkNum = forknum;
+
+		LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
 
 		for (int i = 0; i < nblocks; i++)
 		{
@@ -6764,16 +6766,18 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 
-			if (entry != NULL)
-				lsns[i] = entry->lsn;
-			else
-			{
-				XLogRecPtr lsn;
-				lsns[i] = lsn = XLogCtl->maxLastWrittenLsn;
+			lsns[i] = (entry != NULL) ? entry->lsn : InvalidXLogRecPtr;
+		}
+		max_lsn = XLogCtl->maxLastWrittenLsn;
 
-				LWLockRelease(LastWrittenLsnLock);
-				SetLastWrittenLSNForBlock(lsn, relfilenode, forknum, key.blockNum);
-				LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+		LWLockRelease(LastWrittenLsnLock);
+
+		for (int i = 0; i < nblocks; i++)
+		{
+			if (lsns[i] == InvalidXLogRecPtr)
+			{
+				lsns[i] = max_lsn;
+				SetLastWrittenLSNForBlock(max_lsn, relfilenode, forknum, key.blockNum);
 			}
 		}
 	}
@@ -6781,6 +6785,9 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 	{
 		HASH_SEQ_STATUS seq;
 		XLogRecPtr lsn = XLogCtl->maxLastWrittenLsn;
+
+		LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+
 		/* Find maximum of all cached LSNs */
 		hash_seq_init(&seq, lastWrittenLsnCache);
 		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
@@ -6788,11 +6795,11 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 			if (entry->lsn > lsn)
 				lsn = entry->lsn;
 		}
+		LWLockRelease(LastWrittenLsnLock);
 
 		for (int i = 0; i < nblocks; i++)
 			lsns[i] = lsn;
 	}
-	LWLockRelease(LastWrittenLsnLock);
 }
 
 /*
