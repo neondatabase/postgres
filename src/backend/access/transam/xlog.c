@@ -6720,6 +6720,9 @@ GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno
 			 * last-written-lsn which is changed frequently as far as we are writing pages of destination table.
 			 * As a result request-lsn for the prefetch and request-let when this page is actually needed are different
 			 * and we got exported prefetch request. So it actually disarms prefetch.
+			 * To prevent that, we re-insert the page with the latest LSN, so that it's
+			 * less likely the LSN for this page will get evicted from the LwLsnCache
+			 * before the page is read.
 			 */
 			 lsn = SetLastWrittenLSNForBlockRangeInternal(lsn, rlocator, forknum, blkno, 1);
 		}
