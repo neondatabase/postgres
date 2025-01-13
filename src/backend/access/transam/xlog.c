@@ -6711,6 +6711,8 @@ GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno
 			lsn = entry->lsn;
 		else
 		{
+			LWLockRelease(LastWrittenLsnLock);
+			LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
 			/*
 			 * In case of statements CREATE TABLE AS SELECT... or INSERT FROM SELECT... we are fetching data from source table
 			 * and storing it in destination table. It cause problems with prefetch last-written-lsn is known for the pages of
@@ -6764,6 +6766,7 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 	if (relfilenode.relNumber != InvalidOid)
 	{
 		BufferTag key;
+		bool missed_keys = false;
 
 		key.spcOid = relfilenode.spcOid;
 		key.dbOid = relfilenode.dbOid;
@@ -6776,15 +6779,29 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 			key.blockNum = blkno + i;
 
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
-
 			if (entry != NULL)
 			{
 				lsns[i] = entry->lsn;
 			}
 			else
 			{
-				lsns[i] = lsn;
-				SetLastWrittenLSNForBlockRangeInternal(lsn, relfilenode, forknum, key.blockNum, 1);
+				lsns[i] = InvalidXLogRecPtr;
+				missed_keys = true;
+			}
+		}
+		if (missed_keys)
+		{
+			LWLockRelease(LastWrittenLsnLock);
+			LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
+
+			lsn = XLogCtl->maxLastWrittenLsn;
+
+			for (int i = 0; i < nblocks; i++)
+			{
+				if (lsns[i] == InvalidXLogRecPtr)
+				{
+					SetLastWrittenLSNForBlockRangeInternal(lsn, relfilenode, forknum, key.blockNum, 1);
+				}
 			}
 		}
 	}
@@ -6792,6 +6809,7 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 	{
 		HASH_SEQ_STATUS seq;
 
+		lsn = XLogCtl->maxLastWrittenLsn;
 		/* Find maximum of all cached LSNs */
 		hash_seq_init(&seq, lastWrittenLsnCache);
 		while ((entry = (LastWrittenLsnCacheEntry *) hash_seq_search(&seq)) != NULL)
