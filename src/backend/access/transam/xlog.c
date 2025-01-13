@@ -6800,7 +6800,7 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 			{
 				if (lsns[i] == InvalidXLogRecPtr)
 				{
-					SetLastWrittenLSNForBlockRangeInternal(lsn, relfilenode, forknum, key.blockNum, 1);
+					SetLastWrittenLSNForBlockRangeInternal(XLogCtl->maxLastWrittenLsn, relfilenode, forknum, blkno + i, 1);
 				}
 			}
 		}
