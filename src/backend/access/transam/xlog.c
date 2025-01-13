@@ -6683,7 +6683,7 @@ GetInsertRecPtr(void)
  * either from a cached last written LSN or a global maximum last written LSN.
  * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
  * If cache is large enough, iterating through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
+ * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
  */
 XLogRecPtr
 GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno)
@@ -6746,7 +6746,7 @@ GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno
  * either from a cached last written LSN or a global maximum last written LSN.
  * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
  * If cache is large enough, iterating through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by zenith_dbsize which is not performance critical.
+ * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
  */
 void
 GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
