@@ -764,7 +764,11 @@ static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
 
-static XLogRecPtr SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+static XLogRecPtr SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn,
+														 RelFileLocator rlocator,
+														 ForkNumber forknum,
+														 BlockNumber from,
+														 BlockNumber n_blocks);
 
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
@@ -6832,7 +6836,11 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
  * Caller must ensure LastWrittenLsnLock is held in exclusive mode.
  */
 static XLogRecPtr
-SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
+SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn,
+									   RelFileLocator rlocator,
+									   ForkNumber forknum,
+									   BlockNumber from,
+									   BlockNumber n_blocks)
 {
 	if (rlocator.relNumber == InvalidOid)
 	{
