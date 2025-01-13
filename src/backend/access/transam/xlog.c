@@ -6824,6 +6824,10 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 	LWLockRelease(LastWrittenLsnLock);
 }
 
+/*
+ * Guts for SetLastWrittenLSNForBlockRange.
+ * Caller must ensure LastWrittenLsnLock is held in exclusive mode.
+ */
 static XLogRecPtr
 SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
