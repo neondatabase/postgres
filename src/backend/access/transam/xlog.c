@@ -6782,10 +6782,16 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 			}
 			else
 			{
+				/* Mark this block's LSN as missing - we'll update the LwLSN for missing blocks in bulk later */
 				lsns[i] = InvalidXLogRecPtr;
 				missed_keys = true;
 			}
 		}
+
+		/*
+		 * If we had any missing LwLSN entries, we add the missing ones now.
+		 * By doing the insertions in one batch, we decrease lock contention.
+		 */
 		if (missed_keys)
 		{
 			LWLockRelease(LastWrittenLsnLock);
