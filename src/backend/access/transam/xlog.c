@@ -764,6 +764,8 @@ static void WALInsertLockAcquireExclusive(void);
 static void WALInsertLockRelease(void);
 static void WALInsertLockUpdateInsertingAt(XLogRecPtr insertingAt);
 
+static XLogRecPtr SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+
 /*
  * Insert an XLOG record represented by an already-constructed chain of data
  * chunks.  This is a low-level routine; to construct the WAL record header
@@ -6709,8 +6711,15 @@ GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno
 			lsn = entry->lsn;
 		else
 		{
-			LWLockRelease(LastWrittenLsnLock);
-			return SetLastWrittenLSNForBlock(lsn, rlocator, forknum, blkno);
+			/*
+			 * In case of statements CREATE TABLE AS SELECT... or INSERT FROM SELECT... we are fetching data from source table
+			 * and storing it in destination table. It cause problems with prefetch last-written-lsn is known for the pages of
+			 * source table (which for example happens after compute restart). In this case we get get global value of
+			 * last-written-lsn which is changed frequently as far as we are writing pages of destination table.
+			 * As a result request-lsn for the prefetch and request-let when this page is actually needed are different
+			 * and we got exported prefetch request. So it actually disarms prefetch.
+			 */
+			 lsn = SetLastWrittenLSNForBlockRangeInternal(lsn, rlocator, forknum, blkno, 1);
 		}
 	}
 	else
@@ -6742,22 +6751,24 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 				   BlockNumber blkno, int nblocks, XLogRecPtr *lsns)
 {
 	LastWrittenLsnCacheEntry* entry;
+	XLogRecPtr lsn;
 
 	Assert(lastWrittenLsnCacheSize != 0);
 	Assert(nblocks > 0);
 	Assert(PointerIsValid(lsns));
 
+	LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
+
+	lsn = XLogCtl->maxLastWrittenLsn;
+
 	if (relfilenode.relNumber != InvalidOid)
 	{
 		BufferTag key;
-		XLogRecPtr max_lsn;
 
 		key.spcOid = relfilenode.spcOid;
 		key.dbOid = relfilenode.dbOid;
 		key.relNumber = relfilenode.relNumber;
 		key.forkNum = forknum;
-
-		LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
 
 		for (int i = 0; i < nblocks; i++)
 		{
@@ -6766,27 +6777,20 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 
 			entry = hash_search(lastWrittenLsnCache, &key, HASH_FIND, NULL);
 
-			lsns[i] = (entry != NULL) ? entry->lsn : InvalidXLogRecPtr;
-		}
-		max_lsn = XLogCtl->maxLastWrittenLsn;
-
-		LWLockRelease(LastWrittenLsnLock);
-
-		for (int i = 0; i < nblocks; i++)
-		{
-			if (lsns[i] == InvalidXLogRecPtr)
+			if (entry != NULL)
 			{
-				lsns[i] = max_lsn;
-				SetLastWrittenLSNForBlock(max_lsn, relfilenode, forknum, key.blockNum);
+				lsns[i] = entry->lsn;
+			}
+			else
+			{
+				lsns[i] = lsn;
+				SetLastWrittenLSNForBlockRangeInternal(lsn, relfilenode, forknum, key.blockNum, 1);
 			}
 		}
 	}
 	else
 	{
 		HASH_SEQ_STATUS seq;
-		XLogRecPtr lsn = XLogCtl->maxLastWrittenLsn;
-
-		LWLockAcquire(LastWrittenLsnLock, LW_SHARED);
 
 		/* Find maximum of all cached LSNs */
 		hash_seq_init(&seq, lastWrittenLsnCache);
@@ -6795,30 +6799,16 @@ GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
 			if (entry->lsn > lsn)
 				lsn = entry->lsn;
 		}
-		LWLockRelease(LastWrittenLsnLock);
 
 		for (int i = 0; i < nblocks; i++)
 			lsns[i] = lsn;
 	}
+	LWLockRelease(LastWrittenLsnLock);
 }
 
-/*
- * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. Keeping last written LSN for each page allows to use old LSN when
- * requesting pages of unchanged or appended relations. Also it is critical for
- * efficient work of prefetch in case massive update operations (like vacuum or remove).
- *
- * rlocator.relNumber can be InvalidOid, in this case maxLastWrittenLsn is updated.
- * SetLastWrittenLsn with dummy rlocator is used by createdb and dbase_redo functions.
- */
-XLogRecPtr
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
+static XLogRecPtr
+SetLastWrittenLSNForBlockRangeInternal(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
-	if (lsn == InvalidXLogRecPtr || n_blocks == 0 || lastWrittenLsnCacheSize == 0)
-		return lsn;
-
-	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
 	if (rlocator.relNumber == InvalidOid)
 	{
 		if (lsn > XLogCtl->maxLastWrittenLsn)
@@ -6868,7 +6858,29 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumb
 			dlist_push_tail(&XLogCtl->lastWrittenLsnLRU, &entry->lru_node);
 		}
 	}
+	return lsn;
+}
+
+/*
+ * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
+ * We maintain cache of last written LSNs with limited size and LRU replacement
+ * policy. Keeping last written LSN for each page allows to use old LSN when
+ * requesting pages of unchanged or appended relations. Also it is critical for
+ * efficient work of prefetch in case massive update operations (like vacuum or remove).
+ *
+ * rlocator.relNumber can be InvalidOid, in this case maxLastWrittenLsn is updated.
+ * SetLastWrittenLsn with dummy rlocator is used by createdb and dbase_redo functions.
+ */
+XLogRecPtr
+SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
+{
+	if (lsn == InvalidXLogRecPtr || n_blocks == 0 || lastWrittenLsnCacheSize == 0)
+		return lsn;
+
+	LWLockAcquire(LastWrittenLsnLock, LW_EXCLUSIVE);
+	lsn = SetLastWrittenLSNForBlockRangeInternal(lsn, rlocator, forknum, from, n_blocks);
 	LWLockRelease(LastWrittenLsnLock);
+
 	return lsn;
 }
 
