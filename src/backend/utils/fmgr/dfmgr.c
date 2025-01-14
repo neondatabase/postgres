@@ -151,6 +151,11 @@ neon_try_load(const char *name)
 {
 	bool have_slash;
 	char *request_name;
+	size_t pkglib_path_len;
+
+#define LIBDIR_PLACEHOLDER_LEN (sizeof("$libdir") - 1)
+
+	pkglib_path_len = strlen(pkglib_path);
 
 	// add .so suffix if it is not present
 	if (strstr(name, DLSUFFIX) == NULL)
@@ -168,9 +173,9 @@ neon_try_load(const char *name)
 
 	elog(DEBUG3, "neon_try_load: request_name: %s, pkglib_path %s", request_name, pkglib_path);
 
-	if (strncmp(request_name, "$libdir/", strlen("$libdir/")) == 0)
+	if (strncmp(request_name, "$libdir/", LIBDIR_PLACEHOLDER_LEN + 1) == 0)
 	{
-		char *new_request_name = psprintf("%s", request_name + strlen("$libdir/"));
+		char *new_request_name = psprintf("%s", request_name + LIBDIR_PLACEHOLDER_LEN + 1);
 		pfree(request_name);
 		request_name = new_request_name;
 
@@ -178,9 +183,15 @@ neon_try_load(const char *name)
 	}
 	// if name contains pkglib_path as prefix, strip it and only request the file name
 	else if (pkglib_path[0] != '\0' &&
-			 strncmp(request_name, pkglib_path, strlen(pkglib_path)) == 0)
+			 strncmp(request_name, pkglib_path, pkglib_path_len) == 0)
 	{
-		char *new_request_name = psprintf("%s", request_name + strlen(pkglib_path));
+		bool have_slash;
+		char *new_request_name;
+
+		/* If there is a directory separator, it should be removed. */
+		have_slash = request_name[pkglib_path_len] == '/';
+
+		new_request_name = psprintf("%s", request_name + pkglib_path_len + (int)have_slash);
 		pfree(request_name);
 		request_name = new_request_name;
 
@@ -197,6 +208,8 @@ neon_try_load(const char *name)
 	elog(DEBUG3, "neon_try_load: final request_name: %s", request_name);
 
 	download_extension_file_hook(request_name, true);
+
+#undef LIBDIR_PLACEHOLDER_LEN
 }
 
 /*
