@@ -185,13 +185,13 @@ neon_try_load(const char *name)
 	else if (pkglib_path[0] != '\0' &&
 			 strncmp(request_name, pkglib_path, pkglib_path_len) == 0)
 	{
-		bool have_slash;
+		bool trailing_slash;
 		char *new_request_name;
 
 		/* If there is a directory separator, it should be removed. */
-		have_slash = request_name[pkglib_path_len] == '/';
+		trailing_slash = request_name[pkglib_path_len] == '/';
 
-		new_request_name = psprintf("%s", request_name + pkglib_path_len + (int)have_slash);
+		new_request_name = psprintf("%s", request_name + pkglib_path_len + (int)trailing_slash);
 		pfree(request_name);
 		request_name = new_request_name;
 
