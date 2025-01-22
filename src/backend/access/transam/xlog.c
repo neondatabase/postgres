@@ -6938,7 +6938,6 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 	LastWrittenLsnCacheEntry* entry;
 	BufferTag	key;
 	bool		found;
-	XLogRecPtr	max = InvalidXLogRecPtr;
 
 	if (lsns == NULL || nblocks == 0 || lastWrittenLsnCacheSize == 0 ||
 		relfilenode.relNumber == InvalidOid)
@@ -6954,7 +6953,6 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 	for (int i = 0; i < nblocks; i++)
 	{
 		XLogRecPtr	lsn = lsns[i];
-		max = Max(max, lsn);
 
 		key.blockNum = blockno + i;
 		entry = hash_search(lastWrittenLsnCache, &key, HASH_ENTER, &found);
@@ -6985,12 +6983,9 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 		dlist_push_tail(&XLogCtl->lastWrittenLsnLRU, &entry->lru_node);
 	}
 
-	if (max > XLogCtl->maxLastWrittenLsn)
-		XLogCtl->maxLastWrittenLsn = max;
-
 	LWLockRelease(LastWrittenLsnLock);
 
-	return max;
+	return lsn;
 }
 
 /*
