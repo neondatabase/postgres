@@ -905,6 +905,9 @@ skip_invalid:
 			SKIP_INVALID_RECORD(RecPtr);
 		}
 
+		if (state->force_record_reassemble)
+			memcpy(state->readRecordBuf, record, total_len);
+
 		state->NextRecPtr = RecPtr + MAXALIGN(total_len);
 
 		state->DecodeRecPtr = RecPtr;
