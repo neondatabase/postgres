@@ -220,6 +220,7 @@ struct XLogReaderState
 	bool skip_page_validation;
 	bool skip_invalid_records;
 	bool skip_lsn_checks;
+	bool force_record_reassemble;
 
 	/* ----------------------------------------
 	 * Decoded representation of current record
