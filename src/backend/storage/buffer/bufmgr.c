@@ -533,7 +533,7 @@ static inline BufferDesc *BufferAlloc(SMgrRelation smgr,
 static bool AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress);
 static void CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete);
 static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
-static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
+static void FlushBuffer(BufferDesc *buf, BufferTag *tag, SMgrRelation reln,
 						IOObject io_object, IOContext io_context);
 static void FindAndDropRelationBuffers(RelFileLocator rlocator,
 									   ForkNumber forkNum,
@@ -683,6 +683,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 				 Buffer recent_buffer)
 {
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	BufferTag	tag;
 	uint32		buf_state;
 	bool		have_private_ref;
@@ -698,10 +699,11 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 		int			b = -recent_buffer - 1;
 
 		bufHdr = GetLocalBufferDescriptor(b);
+		bufTag = GetLocalBufferTag(b);
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		/* Is it still valid and holding the right tag? */
-		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, &bufHdr->tag))
+		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, bufTag))
 		{
 			PinLocalBuffer(bufHdr, true);
 
@@ -713,6 +715,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	else
 	{
 		bufHdr = GetBufferDescriptor(recent_buffer - 1);
+		bufTag = GetBufferTag(recent_buffer - 1);
 		have_private_ref = GetPrivateRefCount(recent_buffer) > 0;
 
 		/*
@@ -725,7 +728,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 		else
 			buf_state = LockBufHdr(bufHdr);
 
-		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, &bufHdr->tag))
+		if ((buf_state & BM_VALID) && BufferTagsEqual(&tag, bufTag))
 		{
 			/*
 			 * It's now safe to pin the buffer.  We can't pin first and ask
@@ -2008,6 +2011,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	int			existing_buf_id;
 	Buffer		victim_buffer;
 	BufferDesc *victim_buf_hdr;
+	BufferTag  *victim_buf_tag;
 	uint32		victim_buf_state;
 
 	/* Make sure we will have room to remember the buffer pin */
@@ -2069,6 +2073,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 */
 	victim_buffer = GetVictimBuffer(strategy, io_context);
 	victim_buf_hdr = GetBufferDescriptor(victim_buffer - 1);
+	victim_buf_tag = GetBufferTag(victim_buffer - 1);
 
 	/*
 	 * Try to make a hashtable entry for the buffer under its new tag. If
@@ -2133,7 +2138,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	Assert(BUF_STATE_GET_REFCOUNT(victim_buf_state) == 1);
 	Assert(!(victim_buf_state & (BM_TAG_VALID | BM_VALID | BM_DIRTY | BM_IO_IN_PROGRESS)));
 
-	victim_buf_hdr->tag = newTag;
+	*victim_buf_tag = newTag;
 
 	/*
 	 * Make sure BM_PERMANENT is set for buffers that must be written at every
@@ -2175,7 +2180,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
  * to acquire the necessary locks; if so, don't mess it up.
  */
 static void
-InvalidateBuffer(BufferDesc *buf)
+InvalidateBuffer(BufferDesc *buf, BufferTag *tag)
 {
 	BufferTag	oldTag;
 	uint32		oldHash;		/* hash value for oldTag */
@@ -2184,7 +2189,7 @@ InvalidateBuffer(BufferDesc *buf)
 	uint32		buf_state;
 
 	/* Save the original buffer tag before dropping the spinlock */
-	oldTag = buf->tag;
+	oldTag = *tag;
 
 	buf_state = pg_atomic_read_u32(&buf->state);
 	Assert(buf_state & BM_LOCKED);
@@ -2210,7 +2215,7 @@ retry:
 	buf_state = LockBufHdr(buf);
 
 	/* If it's changed while we were waiting for lock, do nothing */
-	if (!BufferTagsEqual(&buf->tag, &oldTag))
+	if (!BufferTagsEqual(tag, &oldTag))
 	{
 		UnlockBufHdr(buf, buf_state);
 		LWLockRelease(oldPartitionLock);
@@ -2243,7 +2248,7 @@ retry:
 	 * linear scans of the buffer array don't think the buffer is valid.
 	 */
 	oldFlags = buf_state & BUF_FLAG_MASK;
-	ClearBufferTag(&buf->tag);
+	ClearBufferTag(tag);
 	buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
 	UnlockBufHdr(buf, buf_state);
 
@@ -2274,7 +2279,7 @@ retry:
  * pinned by this backend and marked as invalid, false otherwise.
  */
 static bool
-InvalidateVictimBuffer(BufferDesc *buf_hdr)
+InvalidateVictimBuffer(BufferDesc *buf_hdr, BufferTag *buf_tag)
 {
 	uint32		buf_state;
 	uint32		hash;
@@ -2284,7 +2289,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	Assert(GetPrivateRefCount(BufferDescriptorGetBuffer(buf_hdr)) == 1);
 
 	/* have buffer pinned, so it's safe to read tag without lock */
-	tag = buf_hdr->tag;
+	tag = *buf_tag;
 
 	hash = BufTableHashCode(&tag);
 	partition_lock = BufMappingPartitionLock(hash);
@@ -2300,7 +2305,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	 */
 	Assert(buf_state & BM_TAG_VALID);
 	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
-	Assert(BufferTagsEqual(&buf_hdr->tag, &tag));
+	Assert(BufferTagsEqual(buf_tag, &tag));
 
 	/*
 	 * If somebody else pinned the buffer since, or even worse, dirtied it,
@@ -2323,7 +2328,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	 * cheaper pre-check for several linear scans of shared buffers use the
 	 * tag (see e.g. FlushDatabaseBuffers()).
 	 */
-	ClearBufferTag(&buf_hdr->tag);
+	ClearBufferTag(buf_tag);
 	buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
 	UnlockBufHdr(buf_hdr, buf_state);
 
@@ -2345,6 +2350,7 @@ static Buffer
 GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context)
 {
 	BufferDesc *buf_hdr;
+	BufferTag  *buf_tag;
 	Buffer		buf;
 	uint32		buf_state;
 	bool		from_ring;
@@ -2365,6 +2371,7 @@ again:
 	 */
 	buf_hdr = StrategyGetBuffer(strategy, &buf_state, &from_ring);
 	buf = BufferDescriptorGetBuffer(buf_hdr);
+	buf_tag = GetBufferTag(buf - 1);
 
 	Assert(BUF_STATE_GET_REFCOUNT(buf_state) == 0);
 
@@ -2441,11 +2448,11 @@ again:
 		}
 
 		/* OK, do the I/O */
-		FlushBuffer(buf_hdr, NULL, IOOBJECT_RELATION, io_context);
+		FlushBuffer(buf_hdr, buf_tag, NULL, IOOBJECT_RELATION, io_context);
 		LWLockRelease(content_lock);
 
 		ScheduleBufferTagForWriteback(&BackendWritebackContext, io_context,
-									  &buf_hdr->tag);
+									  buf_tag);
 	}
 
 
@@ -2476,7 +2483,8 @@ again:
 	 * can fail because another backend could have pinned or dirtied the
 	 * buffer.
 	 */
-	if ((buf_state & BM_TAG_VALID) && !InvalidateVictimBuffer(buf_hdr))
+	if ((buf_state & BM_TAG_VALID) && !InvalidateVictimBuffer(buf_hdr,
+															  buf_tag))
 	{
 		UnpinBuffer(buf_hdr);
 		goto again;
@@ -2714,6 +2722,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 	{
 		Buffer		victim_buf = buffers[i];
 		BufferDesc *victim_buf_hdr = GetBufferDescriptor(victim_buf - 1);
+		BufferTag  *victim_buf_tag = GetBufferTag(victim_buf - 1);
 		BufferTag	tag;
 		uint32		hash;
 		LWLock	   *partition_lock;
@@ -2748,6 +2757,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 		if (existing_id >= 0)
 		{
 			BufferDesc *existing_hdr = GetBufferDescriptor(existing_id);
+			BufferTag  *existing_tag = GetBufferTag(existing_id);
 			Block		buf_block;
 			bool		valid;
 
@@ -2772,7 +2782,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			if (valid && !PageIsNew((Page) buf_block))
 				ereport(ERROR,
 						(errmsg("unexpected data beyond EOF in block %u of relation \"%s\"",
-								existing_hdr->tag.blockNum,
+								existing_tag->blockNum,
 								relpath(bmr.smgr->smgr_rlocator, fork).str),
 						 errhint("This has been seen to occur with buggy kernels; consider updating your system.")));
 
@@ -2804,7 +2814,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			Assert(!(buf_state & (BM_VALID | BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED)));
 			Assert(BUF_STATE_GET_REFCOUNT(buf_state) == 1);
 
-			victim_buf_hdr->tag = tag;
+			*victim_buf_tag = tag;
 
 			buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
 			if (bmr.relpersistence == RELPERSISTENCE_PERMANENT || fork == INIT_FORKNUM)
@@ -3012,6 +3022,7 @@ ReleaseAndReadBuffer(Buffer buffer,
 {
 	ForkNumber	forkNum = MAIN_FORKNUM;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 
 	if (BufferIsValid(buffer))
 	{
@@ -3019,19 +3030,21 @@ ReleaseAndReadBuffer(Buffer buffer,
 		if (BufferIsLocal(buffer))
 		{
 			bufHdr = GetLocalBufferDescriptor(-buffer - 1);
-			if (bufHdr->tag.blockNum == blockNum &&
-				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum)
+			bufTag = GetLocalBufferTag(-buffer - 1);
+			if (bufTag->blockNum == blockNum &&
+				BufTagMatchesRelFileLocator(bufTag, &relation->rd_locator) &&
+				BufTagGetForkNum(bufTag) == forkNum)
 				return buffer;
 			UnpinLocalBuffer(buffer);
 		}
 		else
 		{
 			bufHdr = GetBufferDescriptor(buffer - 1);
+			bufTag = GetBufferTag(buffer - 1);
 			/* we have pin, so it's ok to examine tag without spinlock */
-			if (bufHdr->tag.blockNum == blockNum &&
-				BufTagMatchesRelFileLocator(&bufHdr->tag, &relation->rd_locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum)
+			if (bufTag->blockNum == blockNum &&
+				BufTagMatchesRelFileLocator(bufTag, &relation->rd_locator) &&
+				BufTagGetForkNum(bufTag) == forkNum)
 				return buffer;
 			UnpinBuffer(bufHdr);
 		}
@@ -3385,6 +3398,7 @@ BufferSync(int flags)
 	for (buf_id = 0; buf_id < NBuffers; buf_id++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
+		BufferTag  *bufTag = GetBufferTag(buf_id);
 
 		/*
 		 * Header spinlock is enough to examine BM_DIRTY, see comment in
@@ -3400,10 +3414,10 @@ BufferSync(int flags)
 
 			item = &CkptBufferIds[num_to_scan++];
 			item->buf_id = buf_id;
-			item->tsId = bufHdr->tag.spcOid;
-			item->relNumber = BufTagGetRelNumber(&bufHdr->tag);
-			item->forkNum = BufTagGetForkNum(&bufHdr->tag);
-			item->blockNum = bufHdr->tag.blockNum;
+			item->tsId = bufTag->spcOid;
+			item->relNumber = BufTagGetRelNumber(bufTag);
+			item->forkNum = BufTagGetForkNum(bufTag);
+			item->blockNum = bufTag->blockNum;
 		}
 
 		UnlockBufHdr(bufHdr, buf_state);
@@ -3918,6 +3932,7 @@ static int
 SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 {
 	BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
+	BufferTag  *bufTag = GetBufferTag(buf_id);
 	int			result = 0;
 	uint32		buf_state;
 	BufferTag	tag;
@@ -3963,11 +3978,11 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	PinBuffer_Locked(bufHdr);
 	LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
 
-	FlushBuffer(bufHdr, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+	FlushBuffer(bufHdr, bufTag, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
 
 	LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 
-	tag = bufHdr->tag;
+	tag = *bufTag;
 
 	UnpinBuffer(bufHdr);
 
@@ -4167,33 +4182,37 @@ char *
 DebugPrintBufferRefcount(Buffer buffer)
 {
 	BufferDesc *buf;
+	BufferTag  *tag;
 	int32		loccount;
 	char	   *result;
 	ProcNumber	backend;
 	uint32		buf_state;
+	RelPathStr path;
 
 	Assert(BufferIsValid(buffer));
 	if (BufferIsLocal(buffer))
 	{
 		buf = GetLocalBufferDescriptor(-buffer - 1);
+		tag = GetLocalBufferTag(-buffer - 1);
 		loccount = LocalRefCount[-buffer - 1];
 		backend = MyProcNumber;
 	}
 	else
 	{
 		buf = GetBufferDescriptor(buffer - 1);
+		tag = GetBufferTag(buffer - 1);
 		loccount = GetPrivateRefCount(buffer);
 		backend = INVALID_PROC_NUMBER;
 	}
 
 	/* theoretically we should lock the bufhdr here */
+	path = relpathbackend(BufTagGetRelFileLocator(tag), backend,
+						  BufTagGetForkNum(tag));
 	buf_state = pg_atomic_read_u32(&buf->state);
 
 	result = psprintf("[%03d] (rel=%s, blockNum=%u, flags=0x%x, refcount=%u %d)",
-					  buffer,
-					  relpathbackend(BufTagGetRelFileLocator(&buf->tag), backend,
-									 BufTagGetForkNum(&buf->tag)).str,
-					  buf->tag.blockNum, buf_state & BUF_FLAG_MASK,
+					  buffer, path.str,
+					  tag->blockNum, buf_state & BUF_FLAG_MASK,
 					  BUF_STATE_GET_REFCOUNT(buf_state), loccount);
 	return result;
 }
@@ -4223,17 +4242,17 @@ CheckPointBuffers(int flags)
 BlockNumber
 BufferGetBlockNumber(Buffer buffer)
 {
-	BufferDesc *bufHdr;
+	BufferTag *bufTag;
 
 	Assert(BufferIsPinned(buffer));
 
 	if (BufferIsLocal(buffer))
-		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+		bufTag = GetLocalBufferTag(-buffer - 1);
 	else
-		bufHdr = GetBufferDescriptor(buffer - 1);
+		bufTag = GetBufferTag(buffer - 1);
 
 	/* pinned, so OK to read tag without spinlock */
-	return bufHdr->tag.blockNum;
+	return bufTag->blockNum;
 }
 
 /*
@@ -4245,20 +4264,20 @@ void
 BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
 			 BlockNumber *blknum)
 {
-	BufferDesc *bufHdr;
+	BufferTag *bufTag;
 
 	/* Do the same checks as BufferGetBlockNumber. */
 	Assert(BufferIsPinned(buffer));
 
 	if (BufferIsLocal(buffer))
-		bufHdr = GetLocalBufferDescriptor(-buffer - 1);
+		bufTag = GetLocalBufferTag(-buffer - 1);
 	else
-		bufHdr = GetBufferDescriptor(buffer - 1);
+		bufTag = GetBufferTag(buffer - 1);
 
 	/* pinned, so OK to read tag without spinlock */
-	*rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
-	*forknum = BufTagGetForkNum(&bufHdr->tag);
-	*blknum = bufHdr->tag.blockNum;
+	*rlocator = BufTagGetRelFileLocator(bufTag);
+	*forknum = BufTagGetForkNum(bufTag);
+	*blknum = bufTag->blockNum;
 }
 
 /*
@@ -4281,8 +4300,8 @@ BufferGetTag(Buffer buffer, RelFileLocator *rlocator, ForkNumber *forknum,
  * as the second parameter.  If not, pass NULL.
  */
 static void
-FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
-			IOContext io_context)
+FlushBuffer(BufferDesc *buf, BufferTag *tag, SMgrRelation reln,
+			IOObject io_object, IOContext io_context)
 {
 	XLogRecPtr	recptr;
 	ErrorContextCallback errcallback;
@@ -4301,16 +4320,16 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = shared_buffer_write_error_callback;
-	errcallback.arg = buf;
+	errcallback.arg = tag;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER);
+		reln = smgropen(BufTagGetRelFileLocator(tag), INVALID_PROC_NUMBER);
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
-										buf->tag.blockNum,
+	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(tag),
+										tag->blockNum,
 										reln->smgr_rlocator.locator.spcOid,
 										reln->smgr_rlocator.locator.dbOid,
 										reln->smgr_rlocator.locator.relNumber);
@@ -4360,7 +4379,7 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * buffer, other processes might be updating hint bits in it, so we must
 	 * copy the page to private storage if we do checksumming.
 	 */
-	bufToWrite = PageSetChecksumCopy((Page) bufBlock, buf->tag.blockNum);
+	bufToWrite = PageSetChecksumCopy((Page) bufBlock, tag->blockNum);
 
 	io_start = pgstat_prepare_io_time(track_io_timing);
 
@@ -4368,8 +4387,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 * bufToWrite is either the shared buffer or a copy, as appropriate.
 	 */
 	smgrwrite(reln,
-			  BufTagGetForkNum(&buf->tag),
-			  buf->tag.blockNum,
+			  BufTagGetForkNum(tag),
+			  tag->blockNum,
 			  bufToWrite,
 			  false);
 
@@ -4402,8 +4421,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 	 */
 	TerminateBufferIO(buf, true, 0, true, false);
 
-	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(BufTagGetForkNum(&buf->tag),
-									   buf->tag.blockNum,
+	TRACE_POSTGRESQL_BUFFER_FLUSH_DONE(BufTagGetForkNum(tag),
+									   tag->blockNum,
 									   reln->smgr_rlocator.locator.spcOid,
 									   reln->smgr_rlocator.locator.dbOid,
 									   reln->smgr_rlocator.locator.relNumber);
@@ -4606,6 +4625,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	for (i = 0; i < NBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		BufferTag  *bufTag = GetBufferTag(i);
 		uint32		buf_state;
 
 		/*
@@ -4624,18 +4644,18 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		 * We could check forkNum and blockNum as well as the rlocator, but
 		 * the incremental win from doing so seems small.
 		 */
-		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator))
+		if (!BufTagMatchesRelFileLocator(bufTag, &rlocator.locator))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
 
 		for (j = 0; j < nforks; j++)
 		{
-			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator.locator) &&
-				BufTagGetForkNum(&bufHdr->tag) == forkNum[j] &&
-				bufHdr->tag.blockNum >= firstDelBlock[j])
+			if (BufTagMatchesRelFileLocator(bufTag, &rlocator.locator) &&
+				BufTagGetForkNum(bufTag) == forkNum[j] &&
+				bufTag->blockNum >= firstDelBlock[j])
 			{
-				InvalidateBuffer(bufHdr);	/* releases spinlock */
+				InvalidateBuffer(bufHdr, bufTag);	/* releases spinlock */
 				break;
 			}
 		}
@@ -4769,6 +4789,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	{
 		RelFileLocator *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		BufferTag  *bufTag = GetBufferTag(i);
 		uint32		buf_state;
 
 		/*
@@ -4782,7 +4803,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			for (j = 0; j < n; j++)
 			{
-				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &locators[j]))
+				if (BufTagMatchesRelFileLocator(bufTag, &locators[j]))
 				{
 					rlocator = &locators[j];
 					break;
@@ -4793,7 +4814,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		{
 			RelFileLocator locator;
 
-			locator = BufTagGetRelFileLocator(&bufHdr->tag);
+			locator = BufTagGetRelFileLocator(bufTag);
 			rlocator = bsearch(&locator,
 							   locators, n, sizeof(RelFileLocator),
 							   rlocator_comparator);
@@ -4804,8 +4825,8 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, rlocator))
-			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		if (BufTagMatchesRelFileLocator(bufTag, rlocator))
+			InvalidateBuffer(bufHdr, bufTag);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
@@ -4833,28 +4854,30 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 	for (curBlock = firstDelBlock; curBlock < nForkBlock; curBlock++)
 	{
 		uint32		bufHash;	/* hash value for tag */
-		BufferTag	bufTag;		/* identity of requested block */
+		BufferTag	tag;		/* identity of requested block */
 		LWLock	   *bufPartitionLock;	/* buffer partition lock for it */
 		int			buf_id;
 		BufferDesc *bufHdr;
+		BufferTag  *bufTag;
 		uint32		buf_state;
 
 		/* create a tag so we can lookup the buffer */
-		InitBufferTag(&bufTag, &rlocator, forkNum, curBlock);
+		InitBufferTag(&tag, &rlocator, forkNum, curBlock);
 
 		/* determine its hash code and partition lock ID */
-		bufHash = BufTableHashCode(&bufTag);
+		bufHash = BufTableHashCode(&tag);
 		bufPartitionLock = BufMappingPartitionLock(bufHash);
 
 		/* Check that it is in the buffer pool. If not, do nothing. */
 		LWLockAcquire(bufPartitionLock, LW_SHARED);
-		buf_id = BufTableLookup(&bufTag, bufHash);
+		buf_id = BufTableLookup(&tag, bufHash);
 		LWLockRelease(bufPartitionLock);
 
 		if (buf_id < 0)
 			continue;
 
 		bufHdr = GetBufferDescriptor(buf_id);
+		bufTag = GetBufferTag(buf_id);
 
 		/*
 		 * We need to lock the buffer header and recheck if the buffer is
@@ -4864,10 +4887,10 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		 */
 		buf_state = LockBufHdr(bufHdr);
 
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
-			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
-			bufHdr->tag.blockNum >= firstDelBlock)
-			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		if (BufTagMatchesRelFileLocator(bufTag, &rlocator) &&
+			BufTagGetForkNum(bufTag) == forkNum &&
+			bufTag->blockNum >= firstDelBlock)
+			InvalidateBuffer(bufHdr, bufTag);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
@@ -4897,18 +4920,19 @@ DropDatabaseBuffers(Oid dbid)
 	for (i = 0; i < NBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		BufferTag  *bufTag = GetBufferTag(i);
 		uint32		buf_state;
 
 		/*
 		 * As in DropRelationBuffers, an unlocked precheck should be safe and
 		 * saves some cycles.
 		 */
-		if (bufHdr->tag.dbOid != dbid)
+		if (bufTag->dbOid != dbid)
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.dbOid == dbid)
-			InvalidateBuffer(bufHdr);	/* releases spinlock */
+		if (bufTag->dbOid == dbid)
+			InvalidateBuffer(bufHdr, bufTag);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
@@ -4937,6 +4961,7 @@ FlushRelationBuffers(Relation rel)
 {
 	int			i;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	SMgrRelation srel = RelationGetSmgr(rel);
 
 	if (RelationUsesLocalBuffers(rel))
@@ -4946,7 +4971,8 @@ FlushRelationBuffers(Relation rel)
 			uint32		buf_state;
 
 			bufHdr = GetLocalBufferDescriptor(i);
-			if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator) &&
+			bufTag = GetLocalBufferTag(i);
+			if (BufTagMatchesRelFileLocator(bufTag, &rel->rd_locator) &&
 				((buf_state = pg_atomic_read_u32(&bufHdr->state)) &
 				 (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 			{
@@ -4954,7 +4980,7 @@ FlushRelationBuffers(Relation rel)
 
 				/* Setup error traceback support for ereport() */
 				errcallback.callback = local_buffer_write_error_callback;
-				errcallback.arg = bufHdr;
+				errcallback.arg = bufTag;
 				errcallback.previous = error_context_stack;
 				error_context_stack = &errcallback;
 
@@ -4986,12 +5012,13 @@ FlushRelationBuffers(Relation rel)
 		uint32		buf_state;
 
 		bufHdr = GetBufferDescriptor(i);
+		bufTag = GetBufferTag(i);
 
 		/*
 		 * As in DropRelationBuffers, an unlocked precheck should be safe and
 		 * saves some cycles.
 		 */
-		if (!BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator))
+		if (!BufTagMatchesRelFileLocator(bufTag, &rel->rd_locator))
 			continue;
 
 		/* Make sure we can handle the pin */
@@ -4999,12 +5026,12 @@ FlushRelationBuffers(Relation rel)
 		ResourceOwnerEnlarge(CurrentResourceOwner);
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rel->rd_locator) &&
+		if (BufTagMatchesRelFileLocator(bufTag, &rel->rd_locator) &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, srel, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+			FlushBuffer(bufHdr, bufTag, srel, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -5057,6 +5084,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	{
 		SMgrSortArray *srelent = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		BufferTag  *bufTag = GetBufferTag(i);
 		uint32		buf_state;
 
 		/*
@@ -5070,7 +5098,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 
 			for (j = 0; j < nrels; j++)
 			{
-				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srels[j].rlocator))
+				if (BufTagMatchesRelFileLocator(bufTag, &srels[j].rlocator))
 				{
 					srelent = &srels[j];
 					break;
@@ -5081,7 +5109,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		{
 			RelFileLocator rlocator;
 
-			rlocator = BufTagGetRelFileLocator(&bufHdr->tag);
+			rlocator = BufTagGetRelFileLocator(bufTag);
 			srelent = bsearch(&rlocator,
 							  srels, nrels, sizeof(SMgrSortArray),
 							  rlocator_comparator);
@@ -5096,12 +5124,13 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		ResourceOwnerEnlarge(CurrentResourceOwner);
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &srelent->rlocator) &&
+		if (BufTagMatchesRelFileLocator(bufTag, &srelent->rlocator) &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, srelent->srel, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+			FlushBuffer(bufHdr, bufTag, srelent->srel, IOOBJECT_RELATION,
+						IOCONTEXT_NORMAL);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -5305,18 +5334,20 @@ FlushDatabaseBuffers(Oid dbid)
 {
 	int			i;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 
 	for (i = 0; i < NBuffers; i++)
 	{
 		uint32		buf_state;
 
 		bufHdr = GetBufferDescriptor(i);
+		bufTag = GetBufferTag(i);
 
 		/*
 		 * As in DropRelationBuffers, an unlocked precheck should be safe and
 		 * saves some cycles.
 		 */
-		if (bufHdr->tag.dbOid != dbid)
+		if (bufTag->dbOid != dbid)
 			continue;
 
 		/* Make sure we can handle the pin */
@@ -5324,12 +5355,12 @@ FlushDatabaseBuffers(Oid dbid)
 		ResourceOwnerEnlarge(CurrentResourceOwner);
 
 		buf_state = LockBufHdr(bufHdr);
-		if (bufHdr->tag.dbOid == dbid &&
+		if (bufTag->dbOid == dbid &&
 			(buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
 		{
 			PinBuffer_Locked(bufHdr);
 			LWLockAcquire(BufferDescriptorGetContentLock(bufHdr), LW_SHARED);
-			FlushBuffer(bufHdr, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+			FlushBuffer(bufHdr,bufTag, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
 			LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
 			UnpinBuffer(bufHdr);
 		}
@@ -5346,6 +5377,7 @@ void
 FlushOneBuffer(Buffer buffer)
 {
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 
 	/* currently not needed, but no fundamental reason not to support */
 	Assert(!BufferIsLocal(buffer));
@@ -5353,10 +5385,11 @@ FlushOneBuffer(Buffer buffer)
 	Assert(BufferIsPinned(buffer));
 
 	bufHdr = GetBufferDescriptor(buffer - 1);
+	bufTag = GetBufferTag(buffer - 1);
 
 	Assert(LWLockHeldByMe(BufferDescriptorGetContentLock(bufHdr)));
 
-	FlushBuffer(bufHdr, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+	FlushBuffer(bufHdr, bufTag, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
 }
 
 /*
@@ -5430,6 +5463,7 @@ void
 MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 {
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	Page		page = BufferGetPage(buffer);
 
 	if (!BufferIsValid(buffer))
@@ -5442,6 +5476,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 	}
 
 	bufHdr = GetBufferDescriptor(buffer - 1);
+	bufTag = GetBufferTag(buffer - 1);
 
 	Assert(GetPrivateRefCount(buffer) > 0);
 	/* here, either share or exclusive lock is OK */
@@ -5487,7 +5522,7 @@ MarkBufferDirtyHint(Buffer buffer, bool buffer_std)
 			 * See src/backend/storage/page/README for longer discussion.
 			 */
 			if (RecoveryInProgress() ||
-				RelFileLocatorSkippingWAL(BufTagGetRelFileLocator(&bufHdr->tag)))
+				RelFileLocatorSkippingWAL(BufTagGetRelFileLocator(bufTag)))
 				return;
 
 			/*
@@ -6154,6 +6189,7 @@ static void
 AbortBufferIO(Buffer buffer)
 {
 	BufferDesc *buf_hdr = GetBufferDescriptor(buffer - 1);
+	BufferTag  *buf_tag = GetBufferTag(buffer - 1);
 	uint32		buf_state;
 
 	buf_state = LockBufHdr(buf_hdr);
@@ -6173,12 +6209,15 @@ AbortBufferIO(Buffer buffer)
 		if (buf_state & BM_IO_ERROR)
 		{
 			/* Buffer is pinned, so we can read tag without spinlock */
+			RelPathStr path;
+
+			path = relpathperm(BufTagGetRelFileLocator(buf_tag),
+							   BufTagGetForkNum(buf_tag));
 			ereport(WARNING,
 					(errcode(ERRCODE_IO_ERROR),
 					 errmsg("could not write block %u of %s",
-							buf_hdr->tag.blockNum,
-							relpathperm(BufTagGetRelFileLocator(&buf_hdr->tag),
-										BufTagGetForkNum(&buf_hdr->tag)).str),
+							buf_tag->blockNum,
+							path.str),
 					 errdetail("Multiple failures --- write error might be permanent.")));
 		}
 	}
@@ -6192,14 +6231,18 @@ AbortBufferIO(Buffer buffer)
 static void
 shared_buffer_write_error_callback(void *arg)
 {
-	BufferDesc *bufHdr = (BufferDesc *) arg;
+	BufferTag *bufTag = (BufferTag *) arg;
 
 	/* Buffer is pinned, so we can read the tag without locking the spinlock */
-	if (bufHdr != NULL)
-		errcontext("writing block %u of relation \"%s\"",
-				   bufHdr->tag.blockNum,
-				   relpathperm(BufTagGetRelFileLocator(&bufHdr->tag),
-							   BufTagGetForkNum(&bufHdr->tag)).str);
+	if (bufTag != NULL)
+	{
+		RelPathStr path = relpathperm(BufTagGetRelFileLocator(bufTag),
+									   BufTagGetForkNum(bufTag));
+
+		errcontext("writing block %u of relation %s",
+				   bufTag->blockNum, path.str);
+		// pfree(path);
+	}
 }
 
 /*
@@ -6208,14 +6251,18 @@ shared_buffer_write_error_callback(void *arg)
 static void
 local_buffer_write_error_callback(void *arg)
 {
-	BufferDesc *bufHdr = (BufferDesc *) arg;
+	BufferTag *bufTag = (BufferTag *) arg;
 
-	if (bufHdr != NULL)
-		errcontext("writing block %u of relation \"%s\"",
-				   bufHdr->tag.blockNum,
-				   relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
-								  MyProcNumber,
-								  BufTagGetForkNum(&bufHdr->tag)).str);
+	if (bufTag != NULL)
+	{
+		RelPathStr path = relpathbackend(BufTagGetRelFileLocator(bufTag),
+										  MyProcNumber,
+										  BufTagGetForkNum(bufTag));
+
+		errcontext("writing block %u of relation %s",
+				   bufTag->blockNum, path.str);
+		// pfree(path);
+	}
 }
 
 /*
@@ -6577,7 +6624,7 @@ ResOwnerPrintBufferPin(Datum res)
  * already acquired.
  */
 static bool
-EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed)
+EvictUnpinnedBufferInternal(BufferDesc *desc, BufferTag *tag, bool *buffer_flushed)
 {
 	uint32		buf_state;
 	bool		result;
@@ -6606,13 +6653,13 @@ EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed)
 	if (buf_state & BM_DIRTY)
 	{
 		LWLockAcquire(BufferDescriptorGetContentLock(desc), LW_SHARED);
-		FlushBuffer(desc, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+		FlushBuffer(desc, tag, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
 		*buffer_flushed = true;
 		LWLockRelease(BufferDescriptorGetContentLock(desc));
 	}
 
 	/* This will return false if it becomes dirty or someone else pins it. */
-	result = InvalidateVictimBuffer(desc);
+	result = InvalidateVictimBuffer(desc, tag);
 
 	UnpinBuffer(desc);
 
@@ -6644,6 +6691,7 @@ bool
 EvictUnpinnedBuffer(Buffer buf, bool *buffer_flushed)
 {
 	BufferDesc *desc;
+	BufferTag  *tag;
 
 	Assert(BufferIsValid(buf) && !BufferIsLocal(buf));
 
@@ -6654,7 +6702,7 @@ EvictUnpinnedBuffer(Buffer buf, bool *buffer_flushed)
 	desc = GetBufferDescriptor(buf - 1);
 	LockBufHdr(desc);
 
-	return EvictUnpinnedBufferInternal(desc, buffer_flushed);
+	return EvictUnpinnedBufferInternal(desc, tag, buffer_flushed);
 }
 
 /*
@@ -6680,6 +6728,7 @@ EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 	for (int buf = 1; buf <= NBuffers; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
+		BufferTag *tag = GetBufferTag(buf - 1);
 		uint32		buf_state;
 		bool		buffer_flushed;
 
@@ -6692,7 +6741,7 @@ EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 
 		LockBufHdr(desc);
 
-		if (EvictUnpinnedBufferInternal(desc, &buffer_flushed))
+		if (EvictUnpinnedBufferInternal(desc, tag, &buffer_flushed))
 			(*buffers_evicted)++;
 		else
 			(*buffers_skipped)++;
@@ -6730,12 +6779,13 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 	for (int buf = 1; buf <= NBuffers; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
+		BufferTag *tag = GetBufferTag(buf - 1);
 		uint32		buf_state = pg_atomic_read_u32(&(desc->state));
 		bool		buffer_flushed;
 
 		/* An unlocked precheck should be safe and saves some cycles. */
 		if ((buf_state & BM_VALID) == 0 ||
-			!BufTagMatchesRelFileLocator(&desc->tag, &rel->rd_locator))
+			!BufTagMatchesRelFileLocator(tag, &rel->rd_locator))
 			continue;
 
 		/* Make sure we can pin the buffer. */
@@ -6746,13 +6796,13 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 
 		/* recheck, could have changed without the lock */
 		if ((buf_state & BM_VALID) == 0 ||
-			!BufTagMatchesRelFileLocator(&desc->tag, &rel->rd_locator))
+			!BufTagMatchesRelFileLocator(tag, &rel->rd_locator))
 		{
 			UnlockBufHdr(desc, buf_state);
 			continue;
 		}
 
-		if (EvictUnpinnedBufferInternal(desc, &buffer_flushed))
+		if (EvictUnpinnedBufferInternal(desc, tag, &buffer_flushed))
 			(*buffers_evicted)++;
 		else
 			(*buffers_skipped)++;

@@ -336,10 +336,22 @@ GetBufferDescriptor(uint32 id)
 	return &(BufferDescriptors[id]).bufferdesc;
 }
 
+static inline BufferTag *
+GetBufferTag(uint32 id)
+{
+	return &(BufferDescriptors[id]).bufferdesc.tag;
+}
+
 static inline BufferDesc *
 GetLocalBufferDescriptor(uint32 id)
 {
 	return &LocalBufferDescriptors[id];
+}
+
+static inline BufferTag *
+GetLocalBufferTag(uint32 id)
+{
+	return &LocalBufferDescriptors[id].tag;
 }
 
 static inline Buffer

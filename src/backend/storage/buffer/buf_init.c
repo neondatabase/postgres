@@ -118,8 +118,9 @@ BufferManagerShmemInit(void)
 		for (i = 0; i < NBuffers; i++)
 		{
 			BufferDesc *buf = GetBufferDescriptor(i);
+			BufferTag  *tag = GetBufferTag(i);
 
-			ClearBufferTag(&buf->tag);
+			ClearBufferTag(tag);
 
 			pg_atomic_init_u32(&buf->state, 0);
 			buf->wait_backend_pgprocno = INVALID_PROC_NUMBER;

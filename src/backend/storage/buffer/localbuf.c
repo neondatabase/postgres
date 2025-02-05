@@ -121,6 +121,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	Buffer		victim_buffer;
 	int			bufid;
 	bool		found;
@@ -141,7 +142,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	{
 		bufid = hresult->id;
 		bufHdr = GetLocalBufferDescriptor(bufid);
-		Assert(BufferTagsEqual(&bufHdr->tag, &newTag));
+		bufTag = GetLocalBufferTag(bufid);
+		Assert(BufferTagsEqual(bufTag, &newTag));
 
 		*foundPtr = PinLocalBuffer(bufHdr, true);
 	}
@@ -152,6 +154,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		victim_buffer = GetLocalVictimBuffer();
 		bufid = -victim_buffer - 1;
 		bufHdr = GetLocalBufferDescriptor(bufid);
+		bufTag = GetLocalBufferTag(bufid);
 
 		hresult = (LocalBufferLookupEnt *)
 			hash_search(LocalBufHash, &newTag, HASH_ENTER, &found);
@@ -162,7 +165,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		/*
 		 * it's all ours now.
 		 */
-		bufHdr->tag = newTag;
+		*bufTag = newTag;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 		buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
@@ -225,6 +228,7 @@ GetLocalVictimBuffer(void)
 	int			victim_bufid;
 	int			trycounter;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 
 	ResourceOwnerEnlarge(CurrentResourceOwner);
 
@@ -241,6 +245,7 @@ GetLocalVictimBuffer(void)
 			nextFreeLocalBufId = 0;
 
 		bufHdr = GetLocalBufferDescriptor(victim_bufid);
+		bufTag = GetLocalBufferTag(victim_bufid);
 
 		if (LocalRefCount[victim_bufid] == 0)
 		{
@@ -398,12 +403,14 @@ ExtendBufferedRelLocal(BufferManagerRelation bmr,
 	{
 		int			victim_buf_id;
 		BufferDesc *victim_buf_hdr;
+		BufferTag  *victim_buf_tag;
 		BufferTag	tag;
 		LocalBufferLookupEnt *hresult;
 		bool		found;
 
 		victim_buf_id = -buffers[i] - 1;
 		victim_buf_hdr = GetLocalBufferDescriptor(victim_buf_id);
+		victim_buf_tag = GetLocalBufferTag(victim_buf_id);
 
 		/* in case we need to pin an existing buffer below */
 		ResourceOwnerEnlarge(CurrentResourceOwner);
@@ -441,7 +448,7 @@ ExtendBufferedRelLocal(BufferManagerRelation bmr,
 
 			Assert(!(buf_state & (BM_VALID | BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED)));
 
-			victim_buf_hdr->tag = tag;
+			*victim_buf_tag = tag;
 
 			buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
 
@@ -668,14 +675,15 @@ DropRelationLocalBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
+		BufferTag  *bufTag = GetLocalBufferTag(i);
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
-			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
-			bufHdr->tag.blockNum >= firstDelBlock)
+			BufTagMatchesRelFileLocator(bufTag, &rlocator) &&
+			BufTagGetForkNum(bufTag) == forkNum &&
+			bufTag->blockNum >= firstDelBlock)
 		{
 			InvalidateLocalBuffer(bufHdr, true);
 		}
@@ -697,12 +705,13 @@ DropRelationAllLocalBuffers(RelFileLocator rlocator)
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
+		BufferTag  *bufTag = GetLocalBufferTag(i);
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator))
+			BufTagMatchesRelFileLocator(bufTag, &rlocator))
 		{
 			InvalidateLocalBuffer(bufHdr, true);
 		}
