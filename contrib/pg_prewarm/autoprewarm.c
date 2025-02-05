@@ -670,6 +670,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 	int			ret;
 	BlockInfoRecord *block_info_array;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	FILE	   *file;
 	char		transient_dump_file_path[MAXPGPATH];
 	pid_t		pid;
@@ -710,6 +711,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 		CHECK_FOR_INTERRUPTS();
 
 		bufHdr = GetBufferDescriptor(i);
+		bufTag = GetBufferTag(i);
 
 		/* Lock each buffer header before inspecting. */
 		buf_state = LockBufHdr(bufHdr);
@@ -722,13 +724,13 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 		if (buf_state & BM_TAG_VALID &&
 			((buf_state & BM_PERMANENT) || dump_unlogged))
 		{
-			block_info_array[num_blocks].database = bufHdr->tag.dbOid;
-			block_info_array[num_blocks].tablespace = bufHdr->tag.spcOid;
+			block_info_array[num_blocks].database = bufTag->dbOid;
+			block_info_array[num_blocks].tablespace = bufTag->spcOid;
 			block_info_array[num_blocks].filenumber =
-				BufTagGetRelNumber(&bufHdr->tag);
+				BufTagGetRelNumber(bufTag);
 			block_info_array[num_blocks].forknum =
-				BufTagGetForkNum(&bufHdr->tag);
-			block_info_array[num_blocks].blocknum = bufHdr->tag.blockNum;
+				BufTagGetForkNum(bufTag);
+			block_info_array[num_blocks].blocknum = bufTag->blockNum;
 			++num_blocks;
 		}
 
