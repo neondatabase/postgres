@@ -44,6 +44,7 @@ typedef struct
 int			NLocBuffer = 0;		/* until buffers are initialized */
 
 BufferDesc *LocalBufferDescriptors = NULL;
+BufferTag  *LocalBufferTags = NULL;
 Block	   *LocalBufferBlockPointers = NULL;
 int32	   *LocalRefCount = NULL;
 
@@ -746,6 +747,7 @@ InitLocalBuffers(void)
 
 	/* Allocate and zero buffer headers and auxiliary arrays */
 	LocalBufferDescriptors = (BufferDesc *) calloc(nbufs, sizeof(BufferDesc));
+	LocalBufferTags = (BufferTag *) calloc(nbufs, sizeof(BufferTag));
 	LocalBufferBlockPointers = (Block *) calloc(nbufs, sizeof(Block));
 	LocalRefCount = (int32 *) calloc(nbufs, sizeof(int32));
 	if (!LocalBufferDescriptors || !LocalBufferBlockPointers || !LocalRefCount)
