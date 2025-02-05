@@ -1425,6 +1425,14 @@ main(int argc, char **argv)
 
 	if (save_records_file)
 	{
+		/*
+		 * NEON: We dump records in the format recognized by walredo process.
+		 * It is libpq compatible format: one character tag + 4 bytes length.
+		 * If relation and block number was specified, then BeginRedoForBlock ('B') record is first
+		 * written, containing relation info and block number. If fork is not specified, then main fork is assumed.
+		 * Then it is followed by ApplyRecord ('A') records which specify record LSN and assembled WAL record raw data.
+		 * Finally GetPage ('G') is written to make walredo to return image of the reconstructed page.
+		 */
 		if (config.filter_by_relation_enabled && config.filter_by_relation_block_enabled)
 		{
 			write_pq_message(save_records_file, 'B', 17);
