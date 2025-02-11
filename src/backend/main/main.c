@@ -131,6 +131,7 @@ main(int argc, char *argv[])
 	 * localization of messages may not work right away, and messages won't go
 	 * anywhere but stderr until GUC settings get loaded.
 	 */
+	MyProcPid = getpid();
 	MemoryContextInit();
 
 	/*

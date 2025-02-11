@@ -121,7 +121,7 @@ typedef struct f_smgr
 								   BlockNumber blocknum, BlockNumber nblocks);
 	BlockNumber (*smgr_nblocks) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_truncate) (SMgrRelation reln, ForkNumber forknum,
-								  BlockNumber nblocks);
+								  BlockNumber old_blocks, BlockNumber nblocks);
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 
 	void		(*smgr_reset_prefetch) (SMgrRelation reln);
@@ -172,8 +172,11 @@ extern void smgrwriteback(SMgrRelation reln, ForkNumber forknum,
 						  BlockNumber blocknum, BlockNumber nblocks);
 extern BlockNumber smgrnblocks(SMgrRelation reln, ForkNumber forknum);
 extern BlockNumber smgrnblocks_cached(SMgrRelation reln, ForkNumber forknum);
-extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum,
-						 int nforks, BlockNumber *nblocks);
+extern void smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
+						 BlockNumber *nblocks);
+extern void smgrtruncate2(SMgrRelation reln, ForkNumber *forknum, int nforks,
+						  BlockNumber *old_nblocks,
+						  BlockNumber *nblocks);
 extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 
