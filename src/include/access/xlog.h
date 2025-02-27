@@ -267,24 +267,23 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 
 /* neon specifics */
 
-extern XLogRecPtr SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
-extern XLogRecPtr SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
-											 ForkNumber forknum, BlockNumber blockno,
-											 int nblocks);
-extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
-extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
-extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
-extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
-extern void GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
-							   BlockNumber blkno, int nblocks, XLogRecPtr *lsns);
-
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
+
 
 extern void SetWalWriterSleeping(bool sleeping);
 
 extern Size WALReadFromBuffers(char *dstbuf, XLogRecPtr startptr, Size count,
 							   TimeLineID tli);
+
+/* Hooks for LwLSN */
+typedef XLogRecPtr (*get_lwlsn_hook_type)(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef void (*get_lwlsn_v_hook_type)(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno, int nblocks, XLogRecPtr *lsns);
+typedef XLogRecPtr (*set_lwlsn_block_range_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+typedef XLogRecPtr (*set_lwlsn_block_v_hook_type)(const XLogRecPtr *lsns, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blockno, int nblocks);
+typedef XLogRecPtr (*set_lwlsn_block_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef XLogRecPtr (*set_lwlsn_relation_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
+typedef XLogRecPtr (*set_lwlsn_db_hook_type)(XLogRecPtr lsn);
 
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
