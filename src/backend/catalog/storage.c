@@ -197,7 +197,7 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 	XLogBeginInsert();
 	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
 	lsn = XLogInsert(RM_SMGR_ID, XLOG_SMGR_CREATE | XLR_SPECIAL_REL_UPDATE);
-	set_lwlsn_relation_hook(lsn, *rlocator, forkNum);
+	SetLastWrittenLSNForRelation(lsn, *rlocator, forkNum);
 }
 
 /*

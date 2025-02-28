@@ -6631,6 +6631,124 @@ GetInsertRecPtr(void)
 	return recptr;
 }
 
+get_lwlsn_hook_type get_lwlsn_hook = NULL;
+get_lwlsn_v_hook_type get_lwlsn_v_hook = NULL;
+set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
+set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
+set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
+get_lwlsn_cache_size_type get_lwlsn_cache_size = NULL;
+
+/*
+ * GetLastWrittenLSN -- Returns maximal LSN of written page.
+ * It returns an upper bound for the last written LSN of a given page,
+ * either from a cached last written LSN or a global maximum last written LSN.
+ * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
+ * If cache is large enough, iterating through all hash items may be rather expensive.
+ * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
+ */
+XLogRecPtr
+GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno) 
+{
+	if (get_lwlsn_hook) 
+	{
+		get_lwlsn_hook(rlocator, forknum, blkno);
+	}
+}
+
+/*
+ * GetLastWrittenLSN -- Returns maximal LSN of written page.
+ * It returns an upper bound for the last written LSN of a given page,
+ * either from a cached last written LSN or a global maximum last written LSN.
+ * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
+ * If cache is large enough, iterating through all hash items may be rather expensive.
+ * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
+ */
+void
+GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
+				   BlockNumber blkno, int nblocks, XLogRecPtr *lsns) 
+{
+	if (get_lwlsn_v_hook) 
+	{
+		get_lwlsn_v_hook(relfilenode, forknum, blkno, nblocks, lsns);
+	}
+}
+
+/*
+ * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
+ * We maintain cache of last written LSNs with limited size and LRU replacement
+ * policy. Keeping last written LSN for each page allows to use old LSN when
+ * requesting pages of unchanged or appended relations. Also it is critical for
+ * efficient work of prefetch in case massive update operations (like vacuum or remove).
+ *
+ * rlocator.relNumber can be InvalidOid, in this case maxLastWrittenLsn is updated.
+ * SetLastWrittenLsn with dummy rlocator is used by createdb and dbase_redo functions.
+ */
+XLogRecPtr
+SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
+{
+	if (set_lwlsn_block_range_hook) 
+	{
+		set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
+	}
+}
+
+/*
+ * SetLastWrittenLSNForBlockv -- Set maximal LSN of pages to their respective
+ * LSNs.
+ *
+ * We maintain cache of last written LSNs with limited size and LRU replacement
+ * policy. Keeping last written LSN for each page allows to use old LSN when
+ * requesting pages of unchanged or appended relations. Also it is critical for
+ * efficient work of prefetch in case massive update operations (like vacuum or remove).
+ */
+XLogRecPtr
+SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
+						   ForkNumber forknum, BlockNumber blockno,
+						   int nblocks)
+{
+	if (set_lwlsn_block_v_hook)
+	{
+		set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
+	}
+}
+
+/*
+ * SetLastWrittenLSNForBlock -- Set maximal LSN for block
+ */
+XLogRecPtr
+SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno)
+{
+	if (set_lwlsn_block_hook)
+	{
+		set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
+	}
+}
+
+/*
+ * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
+ */
+XLogRecPtr
+SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum)
+{
+	if (set_lwlsn_relation_hook)
+	{
+		set_lwlsn_relation_hook(lsn, rlocator, forknum);
+	}
+}
+
+/*
+ * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
+ */
+XLogRecPtr
+SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
+{
+	if (set_lwlsn_db_hook)
+	{
+		set_lwlsn_db_hook(lsn);
+	}
+}g
 
 void
 SetRedoStartLsn(XLogRecPtr RedoStartLSN)
