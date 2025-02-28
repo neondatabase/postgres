@@ -29,6 +29,7 @@
 #include "access/multixact.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
@@ -1515,7 +1516,7 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 		/*
 		 * Update global last written LSN after wal-logging create database command
 		 */
-		SetLastWrittenLSNForDatabase(XactLastRecEnd);
+		set_lwlsn_db_hook(XactLastRecEnd);
 
 		/*
 		 * Close pg_database, but keep lock till commit.
@@ -2182,7 +2183,7 @@ movedb(const char *dbname, const char *tblspcname)
 			lsn = XLogInsert(RM_DBASE_ID,
 							 XLOG_DBASE_CREATE_FILE_COPY | XLR_SPECIAL_REL_UPDATE);
 			// TODO: Do we really need to set the LSN here?
-			SetLastWrittenLSNForDatabase(lsn);
+			set_lwlsn_db_hook(lsn);
 		}
 
 		/*
@@ -3357,7 +3358,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
-			SetLastWrittenLSNForDatabase(lsn);
+			set_lwlsn_db_hook(lsn);
 		}
 
 		pfree(src_path);
@@ -3387,7 +3388,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
-			SetLastWrittenLSNForDatabase(lsn);
+			set_lwlsn_db_hook(lsn);
 		}
 
 		pfree(dbpath);

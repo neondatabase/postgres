@@ -139,7 +139,6 @@ int			wal_decode_buffer_size = 512 * 1024;
 bool		track_wal_io_timing = false;
 uint64		predefined_sysidentifier;
 
-
 #ifdef WAL_DEBUG
 bool		XLOG_DEBUG = false;
 #endif
@@ -206,8 +205,6 @@ const struct config_enum_entry archive_mode_options[] = {
 	{"0", ARCHIVE_MODE_OFF, true},
 	{NULL, 0, false}
 };
-
-
 
 
 
@@ -4956,8 +4953,6 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
 
-
-
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
@@ -5790,8 +5785,6 @@ StartupXLOG(void)
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
-
-
 
 	/* REDO */
 	if (InRecovery)
