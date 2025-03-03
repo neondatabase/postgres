@@ -273,9 +273,6 @@ extern XLogRecPtr SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLoca
 extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
 extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
 extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
-extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
-extern void GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
-							   BlockNumber blkno, int nblocks, XLogRecPtr *lsns);
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);

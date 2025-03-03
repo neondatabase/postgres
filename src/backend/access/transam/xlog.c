@@ -6641,41 +6641,6 @@ set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 get_lwlsn_cache_size_type get_lwlsn_cache_size = NULL;
 
 /*
- * GetLastWrittenLSN -- Returns maximal LSN of written page.
- * It returns an upper bound for the last written LSN of a given page,
- * either from a cached last written LSN or a global maximum last written LSN.
- * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
- * If cache is large enough, iterating through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
- */
-XLogRecPtr
-GetLastWrittenLSN(RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno) 
-{
-	if (get_lwlsn_hook) 
-	{
-		get_lwlsn_hook(rlocator, forknum, blkno);
-	}
-}
-
-/*
- * GetLastWrittenLSN -- Returns maximal LSN of written page.
- * It returns an upper bound for the last written LSN of a given page,
- * either from a cached last written LSN or a global maximum last written LSN.
- * If rnode is InvalidOid then we calculate maximum among all cached LSN and maxLastWrittenLsn.
- * If cache is large enough, iterating through all hash items may be rather expensive.
- * But GetLastWrittenLSN(InvalidOid) is used only by neon_dbsize which is not performance critical.
- */
-void
-GetLastWrittenLSNv(RelFileLocator relfilenode, ForkNumber forknum,
-				   BlockNumber blkno, int nblocks, XLogRecPtr *lsns) 
-{
-	if (get_lwlsn_v_hook) 
-	{
-		get_lwlsn_v_hook(relfilenode, forknum, blkno, nblocks, lsns);
-	}
-}
-
-/*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
  * policy. Keeping last written LSN for each page allows to use old LSN when
@@ -6692,6 +6657,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumb
 	{
 		set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
 	}
+	return lsn;
 }
 
 /*
@@ -6712,6 +6678,7 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 	{
 		set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
 	}
+	return lsn;
 }
 
 /*
@@ -6724,6 +6691,7 @@ SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber fo
 	{
 		set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
 	}
+	return lsn;
 }
 
 /*
@@ -6736,6 +6704,7 @@ SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber
 	{
 		set_lwlsn_relation_hook(lsn, rlocator, forknum);
 	}
+	return lsn;
 }
 
 /*
@@ -6748,6 +6717,7 @@ SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 	{
 		set_lwlsn_db_hook(lsn);
 	}
+	return lsn;
 }
 
 void
