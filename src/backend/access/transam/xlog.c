@@ -6748,7 +6748,7 @@ SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 	{
 		set_lwlsn_db_hook(lsn);
 	}
-}g
+}
 
 void
 SetRedoStartLsn(XLogRecPtr RedoStartLSN)
