@@ -6678,7 +6678,16 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 	{
 		set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
 	}
-	return lsn;
+	// Behaviour in case the hook is not set. Taken from the implemenatation of SetLastWrittenLSNForBlockv in neon_lwlc.c
+	if (lsns == NULL || nblocks == 0) {
+		return InvalidXLogRecPtr;
+	} else {
+		XLogRecPtr max = InvalidXLogRecPtr;
+		for (int i = 0; i < nblocks; i ++) {
+			max = Max(max, lsns[i]);
+		}
+		return max;
+	}
 }
 
 /*
