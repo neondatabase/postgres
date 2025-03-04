@@ -1728,7 +1728,17 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 				ReplicationSlotNameForTablesync(subid, relid, syncslotname,
 												sizeof(syncslotname));
-				ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
+
+				if (disable_logical_replication_subscribers)
+				{
+					ereport(LOG,
+							(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								errmsg("skip dropping tablesync slot \"%s\" when disable_logical_replication_subscribers=true", syncslotname)));
+				}
+				else
+				{
+					ReplicationSlotDropAtPubNode(wrconn, syncslotname, true);
+				}
 			}
 		}
 
