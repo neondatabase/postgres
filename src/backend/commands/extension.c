@@ -1284,9 +1284,11 @@ identify_update_path(ExtensionControlFile *control,
 {
 	List	   *result;
 	List	   *evi_list;
+	bool		attempted_download = false;
 	ExtensionVersionInfo *evi_start;
 	ExtensionVersionInfo *evi_target;
 
+reidentify:
 	/* Extract the version update graph from the script directory */
 	evi_list = get_ext_ver_list(control);
 
@@ -1296,6 +1298,16 @@ identify_update_path(ExtensionControlFile *control,
 
 	/* Find shortest path */
 	result = find_update_path(evi_list, evi_start, evi_target, false, false);
+
+	/* Before we report an ERROR, try to download a remote extension */
+	if (result == NIL && download_extension_file_hook && !attempted_download)
+	{
+		attempted_download = true;
+		download_extension_file_hook(control->name, false);
+
+		/* Try again to find the shortest path */
+		goto reidentify;
+	}
 
 	if (result == NIL)
 		ereport(ERROR,
