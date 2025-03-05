@@ -6660,6 +6660,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumb
 	if (set_lwlsn_block_range_hook) 
 	{
 		return set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
+		return set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
 	}
 	return lsn;
 }
