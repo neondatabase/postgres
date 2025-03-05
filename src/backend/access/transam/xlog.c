@@ -6659,7 +6659,7 @@ SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumb
 {
 	if (set_lwlsn_block_range_hook) 
 	{
-		set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
+		return set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
 	}
 	return lsn;
 }
@@ -6680,7 +6680,7 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 {
 	if (set_lwlsn_block_v_hook)
 	{
-		set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
+		return set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
 	}
 	// Behaviour in case the hook is not set. Taken from the implemenatation of SetLastWrittenLSNForBlockv in neon_lwlc.c
 	if (lsns == NULL || nblocks == 0) {
@@ -6702,7 +6702,7 @@ SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber fo
 {
 	if (set_lwlsn_block_hook)
 	{
-		set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
+		return set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
 	}
 	return lsn;
 }
@@ -6715,7 +6715,7 @@ SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber
 {
 	if (set_lwlsn_relation_hook)
 	{
-		set_lwlsn_relation_hook(lsn, rlocator, forknum);
+		return set_lwlsn_relation_hook(lsn, rlocator, forknum);
 	}
 	return lsn;
 }
@@ -6728,7 +6728,7 @@ SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 {
 	if (set_lwlsn_db_hook)
 	{
-		set_lwlsn_db_hook(lsn);
+		return set_lwlsn_db_hook(lsn);
 	}
 	return lsn;
 }
