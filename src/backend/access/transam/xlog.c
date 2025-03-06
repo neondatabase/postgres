@@ -4953,10 +4953,6 @@ XLOGShmemInit(void)
 	XLogCtl = (XLogCtlData *)
 		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
 
-	if (shmem_startup_hook) {
-		shmem_startup_hook();
-	}
-
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
 		ShmemInitStruct("Control File", sizeof(ControlFileData), &foundCFile);
