@@ -6296,7 +6296,7 @@ SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber fo
 XLogRecPtr
 SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum)
 {
-	if (set_lwlsn_block_range_hook)
+	if (set_lwlsn_block_hook)
 	{
 		return set_lwlsn_block_hook(lsn, rlocator, forknum, REL_METADATA_PSEUDO_BLOCKNO);
 	}
@@ -6310,7 +6310,7 @@ XLogRecPtr
 SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 {
 	RelFileLocator dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	if (set_lwlsn_block_range_hook)
+	if (set_lwlsn_block_hook)
 	{
 		return set_lwlsn_block_hook(lsn, dummyNode, MAIN_FORKNUM, 0);
 	}
