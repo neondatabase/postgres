@@ -65,7 +65,6 @@ extern PGDLLIMPORT bool track_wal_io_timing;
 extern PGDLLIMPORT int wal_decode_buffer_size;
 
 extern PGDLLIMPORT int CheckPointSegments;
-extern int  lastWrittenLsnCacheSize;
 
 
 /* Archive modes */
@@ -266,7 +265,25 @@ extern XLogRecPtr SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator relfi
 extern XLogRecPtr SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
 extern XLogRecPtr SetLastWrittenLSNForDatabase(XLogRecPtr lsn);
 extern XLogRecPtr SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
-extern XLogRecPtr GetLastWrittenLSN(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+
+/* Hooks for LwLSN */
+typedef XLogRecPtr (*get_lwlsn_hook_type)(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef void (*get_lwlsn_v_hook_type)(RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno, int nblocks, XLogRecPtr *lsns);
+typedef XLogRecPtr (*set_lwlsn_block_range_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
+typedef XLogRecPtr (*set_lwlsn_block_v_hook_type)(const XLogRecPtr *lsns, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blockno, int nblocks);
+typedef XLogRecPtr (*set_lwlsn_block_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum, BlockNumber blkno);
+typedef XLogRecPtr (*set_lwlsn_relation_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
+typedef XLogRecPtr (*set_lwlsn_db_hook_type)(XLogRecPtr lsn);
+typedef int (*get_lwlsn_cache_size_type) (void);
+
+extern get_lwlsn_hook_type get_lwlsn_hook;
+extern get_lwlsn_v_hook_type get_lwlsn_v_hook;
+extern set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook;
+extern set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook;
+extern set_lwlsn_block_hook_type set_lwlsn_block_hook;
+extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
+extern set_lwlsn_db_hook_type set_lwlsn_db_hook;
+extern get_lwlsn_cache_size_type get_lwlsn_cache_size;
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
