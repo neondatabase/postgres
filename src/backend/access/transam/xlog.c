@@ -9058,6 +9058,15 @@ GetInsertRecPtr(void)
 	return recptr;
 }
 
+get_lwlsn_hook_type get_lwlsn_hook = NULL;
+get_lwlsn_v_hook_type get_lwlsn_v_hook = NULL;
+set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
+set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
+set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
+get_lwlsn_cache_size_type get_lwlsn_cache_size = NULL;
+
 /*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
