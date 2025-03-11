@@ -29,7 +29,6 @@
 #include "access/multixact.h"
 #include "access/tableam.h"
 #include "access/xact.h"
-#include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
@@ -3388,7 +3387,7 @@ dbase_redo(XLogReaderState *record)
 		 */
 		{
 			XLogRecPtr	lsn = record->EndRecPtr;
-			set_lwlsn_db_hook(lsn);
+			SetLastWrittenLSNForDatabase(lsn);
 		}
 
 		pfree(dbpath);
