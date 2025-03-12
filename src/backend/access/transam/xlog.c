@@ -5143,6 +5143,8 @@ readZenithSignalFile(void)
 	}
 }
 
+update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
+
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -5410,6 +5412,10 @@ StartupXLOG(void)
 
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
+
+	if (update_max_lwlsn_hook) {
+		update_max_lwlsn_hook(RedoRecPtr);
+	}
 
 	/* REDO */
 	if (InRecovery)

@@ -275,6 +275,7 @@ typedef XLogRecPtr (*set_lwlsn_block_hook_type)(XLogRecPtr lsn, RelFileLocator r
 typedef XLogRecPtr (*set_lwlsn_relation_hook_type)(XLogRecPtr lsn, RelFileLocator relfilenode, ForkNumber forknum);
 typedef XLogRecPtr (*set_lwlsn_db_hook_type)(XLogRecPtr lsn);
 typedef int (*get_lwlsn_cache_size_type) (void);
+typedef void (*update_max_lwlsn_hook_type) (XLogRecPtr lsn);
 
 extern get_lwlsn_hook_type get_lwlsn_hook;
 extern get_lwlsn_v_hook_type get_lwlsn_v_hook;
@@ -284,6 +285,7 @@ extern set_lwlsn_block_hook_type set_lwlsn_block_hook;
 extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
 extern set_lwlsn_db_hook_type set_lwlsn_db_hook;
 extern get_lwlsn_cache_size_type get_lwlsn_cache_size;
+extern update_max_lwlsn_hook_type update_max_lwlsn_hook;
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
