@@ -6254,14 +6254,9 @@ GetInsertRecPtr(void)
 	return recptr;
 }
 
-get_lwlsn_hook_type get_lwlsn_hook = NULL;
-get_lwlsn_v_hook_type get_lwlsn_v_hook = NULL;
 set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
 set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
 set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
-set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
-set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
-get_lwlsn_cache_size_type get_lwlsn_cache_size = NULL;
 
 /*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
@@ -6302,11 +6297,7 @@ SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber fo
 XLogRecPtr
 SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum)
 {
-	if (set_lwlsn_block_hook)
-	{
-		return set_lwlsn_block_hook(lsn, rlocator, forknum, REL_METADATA_PSEUDO_BLOCKNO);
-	}
-	return lsn;
+	return SetLastWrittenLSNForBlock(lsn, rlocator, forknum, REL_METADATA_PSEUDO_BLOCKNO);
 }
 
 /*
@@ -6316,11 +6307,7 @@ XLogRecPtr
 SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
 {
 	RelFileLocator dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	if (set_lwlsn_block_hook)
-	{
-		return set_lwlsn_block_hook(lsn, dummyNode, MAIN_FORKNUM, 0);
-	}
-	return lsn;
+	return SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
 void
