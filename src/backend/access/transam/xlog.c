@@ -148,7 +148,7 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 /* NEON: Hook to allow the neon extension to restore running-xacts from CLOG at replica startup */
 restore_running_xacts_callback_t restore_running_xacts_callback;
 
-/* NEON: Hook Definitions that enabled the moving of LastWrittenLSN Cache to the neon extension*/
+/* NEON: Hooks to facilitate the last written LSN cache */
 update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
 set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
 set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
@@ -4872,7 +4872,7 @@ GetActiveWalLevelOnStandby(void)
 }
 
 Size
-XLOGCtlShmemSize(void)
+XLOGShmemSize(void)
 {
 	Size		size;
 
@@ -4948,7 +4948,7 @@ XLOGShmemInit(void)
 
 
 	XLogCtl = (XLogCtlData *)
-		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
+		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
@@ -6667,13 +6667,19 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 	if (set_lwlsn_block_v_hook)
 		return set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
 
-	// Behaviour in case the hook is not set
+	// Behavior in case the hook is not set
 	if (lsns == NULL || nblocks == 0) 
 	{
+		// If no valid LSNs were provided, fallback to the InvalidXLogRecPtr
 		return InvalidXLogRecPtr;
 	} 
 	else 
 	{
+		// In the case when the hook is present, we would return the 
+		// maximal LSN of all the given LSNs, taking care to update the
+		// given LSN when it's value is lesser than the one found in the
+		// corresponding entry. As the hook is not present, we just return
+		// the maximal lsn without performing a search in the hash table
 		XLogRecPtr max = InvalidXLogRecPtr;
 		for (int i = 0; i < nblocks; i ++) 
 			max = Max(max, lsns[i]);
