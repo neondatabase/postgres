@@ -122,7 +122,7 @@ CalculateShmemSize(int *num_semaphores)
 	size = add_size(size, ProcGlobalShmemSize());
 	size = add_size(size, XLogPrefetchShmemSize());
 	size = add_size(size, VarsupShmemSize());
-	size = add_size(size, XLOGShmemSize());
+	size = add_size(size, XLOGCtlShmemSize());
 	size = add_size(size, XLogRecoveryShmemSize());
 	size = add_size(size, CLOGShmemSize());
 	size = add_size(size, CommitTsShmemSize());

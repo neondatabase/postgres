@@ -147,6 +147,13 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 
 /* NEON: Hook to allow the neon extension to restore running-xacts from CLOG at replica startup */
 restore_running_xacts_callback_t restore_running_xacts_callback;
+
+/* NEON: Hook Definitions that enabled the moving of LastWrittenLSN Cache to the neon extension*/
+update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
+set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
+set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
+set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -4864,7 +4871,7 @@ GetActiveWalLevelOnStandby(void)
 	return ControlFile->wal_level;
 }
 
-static Size
+Size
 XLOGCtlShmemSize(void)
 {
 	Size		size;
@@ -4912,16 +4919,6 @@ XLOGCtlShmemSize(void)
 	 */
 
 	return size;
-}
-
-/*
- * Initialization of shared memory for XLOG
- */
-Size
-XLOGShmemSize(void)
-{
-	// Removed LwLSN Size as it is no longer in XLog
-	return XLOGCtlShmemSize();
 }
 
 void
@@ -5514,8 +5511,6 @@ readZenithSignalFile(void)
 	}
 }
 
-update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
-
 /*
  * This must be called ONCE during postmaster or standalone-backend startup
  */
@@ -5788,9 +5783,8 @@ StartupXLOG(void)
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
-	if (update_max_lwlsn_hook) {
+	if (update_max_lwlsn_hook)
 		update_max_lwlsn_hook(RedoRecPtr);
-	}
 
 	/* REDO */
 	if (InRecovery)
@@ -6637,10 +6631,6 @@ GetInsertRecPtr(void)
 	return recptr;
 }
 
-set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
-set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
-set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
-
 /*
  * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
  * We maintain cache of last written LSNs with limited size and LRU replacement
@@ -6655,9 +6645,8 @@ XLogRecPtr
 SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
 {
 	if (set_lwlsn_block_range_hook) 
-	{
 		return set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
-	}
+
 	return lsn;
 }
 
@@ -6676,17 +6665,17 @@ SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
 						   int nblocks)
 {
 	if (set_lwlsn_block_v_hook)
-	{
 		return set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
-	}
+
 	// Behaviour in case the hook is not set. Taken from the implemenatation of SetLastWrittenLSNForBlockv in neon_lwlc.c
-	if (lsns == NULL || nblocks == 0) {
+	if (lsns == NULL || nblocks == 0) 
+	{
 		return InvalidXLogRecPtr;
 	} else {
 		XLogRecPtr max = InvalidXLogRecPtr;
-		for (int i = 0; i < nblocks; i ++) {
+		for (int i = 0; i < nblocks; i ++) 
 			max = Max(max, lsns[i]);
-		}
+		
 		return max;
 	}
 }
@@ -6698,9 +6687,8 @@ XLogRecPtr
 SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno)
 {
 	if (set_lwlsn_block_hook)
-	{
 		return set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
-	}
+
 	return lsn;
 }
 
