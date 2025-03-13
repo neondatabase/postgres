@@ -1260,6 +1260,8 @@ CreateLockFile(const char *filename, bool amPostmaster,
 	 */
 	for (ntries = 0;; ntries++)
 	{
+		int			original_errno;
+
 		/*
 		 * Try to create the lock file --- O_EXCL makes this atomic.
 		 *
@@ -1269,6 +1271,18 @@ CreateLockFile(const char *filename, bool amPostmaster,
 		fd = open(filename, O_RDWR | O_CREAT | O_EXCL, pg_file_create_mode);
 		if (fd >= 0)
 			break;				/* Success; exit the retry loop */
+
+		/*
+		 * NEON: If the file previously existed, we know that it was created by
+		 * compute_ctl to aid in file watching. The file is empty, so we can
+		 * skip trying and failing to verify contents.
+		 */
+		if (errno == EEXIST)
+		{
+			fd = open(filename, O_RDWR | O_EXCL, pg_file_create_mode);
+			if (fd >= 0)
+				break;				/* Success; exit the retry loop */
+		}
 
 		/*
 		 * Couldn't create the pid file. Probably it already exists.
@@ -1293,6 +1307,7 @@ CreateLockFile(const char *filename, bool amPostmaster,
 					 errmsg("could not open lock file \"%s\": %m",
 							filename)));
 		}
+
 		pgstat_report_wait_start(WAIT_EVENT_LOCK_FILE_CREATE_READ);
 		if ((len = read(fd, buffer, sizeof(buffer) - 1)) < 0)
 			ereport(FATAL,
