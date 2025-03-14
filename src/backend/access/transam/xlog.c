@@ -130,6 +130,8 @@ update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
 set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
 set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
 set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -9057,56 +9059,6 @@ GetInsertRecPtr(void)
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return recptr;
-}
-
-/*
- * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. Keeping last written LSN for each page allows to use old LSN when
- * requesting pages of unchanged or appended relations. Also it is critical for
- * efficient work of prefetch in case massive update operations (like vacuum or remove).
- *
- * rnode.relNode can be InvalidOid, in this case maxLastWrittenLsn is updated.
- * SetLastWrittenLsn with dummy rnode is used by createdb and dbase_redo functions.
- */
-XLogRecPtr
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
-{
-	if (set_lwlsn_block_range_hook)
-		return set_lwlsn_block_range_hook(lsn, rnode, forknum, from, n_blocks);
-
-	return lsn;
-}
-
-/*
- * SetLastWrittenLSNForBlock -- Set maximal LSN for block
- */
-XLogRecPtr
-SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber blkno)
-{
-	if (set_lwlsn_block_range_hook)
-		return set_lwlsn_block_range_hook(lsn, rnode, forknum, blkno, 1);
-
-	return lsn;
-}
-
-/*
- * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
- */
-XLogRecPtr
-SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum)
-{
-	return SetLastWrittenLSNForBlock(lsn, rnode, forknum, REL_METADATA_PSEUDO_BLOCKNO);
-}
-
-/*
- * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
- */
-XLogRecPtr
-SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
-{
-	RelFileNode dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	return SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
 /*
