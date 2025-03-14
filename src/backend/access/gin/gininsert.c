@@ -421,8 +421,10 @@ ginbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		log_newpage_range(index, MAIN_FORKNUM,
 						  0, RelationGetNumberOfBlocks(index),
 						  true);
-		SetLastWrittenLSNForBlockRange(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM, 0, RelationGetNumberOfBlocks(index));
-		SetLastWrittenLSNForRelation(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
+		if (set_lwlsn_block_range_hook)
+			set_lwlsn_block_range_hook(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM, 0, RelationGetNumberOfBlocks(index));
+		if (set_lwlsn_relation_hook)
+			set_lwlsn_relation_hook(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
 	}
 
 	smgr_end_unlogged_build(index->rd_smgr);
