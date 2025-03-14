@@ -153,6 +153,8 @@ update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
 set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
 set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
 set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -6629,94 +6631,6 @@ GetInsertRecPtr(void)
 	SpinLockRelease(&XLogCtl->info_lck);
 
 	return recptr;
-}
-
-/*
- * SetLastWrittenLSNForBlockRange -- Set maximal LSN of written page range.
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. Keeping last written LSN for each page allows to use old LSN when
- * requesting pages of unchanged or appended relations. Also it is critical for
- * efficient work of prefetch in case massive update operations (like vacuum or remove).
- *
- * rlocator.relNumber can be InvalidOid, in this case maxLastWrittenLsn is updated.
- * SetLastWrittenLsn with dummy rlocator is used by createdb and dbase_redo functions.
- */
-XLogRecPtr
-SetLastWrittenLSNForBlockRange(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks)
-{
-	if (set_lwlsn_block_range_hook) 
-		return set_lwlsn_block_range_hook(lsn, rlocator, forknum, from, n_blocks);
-
-	return lsn;
-}
-
-/*
- * SetLastWrittenLSNForBlockv -- Set maximal LSN of pages to their respective
- * LSNs.
- *
- * We maintain cache of last written LSNs with limited size and LRU replacement
- * policy. Keeping last written LSN for each page allows to use old LSN when
- * requesting pages of unchanged or appended relations. Also it is critical for
- * efficient work of prefetch in case massive update operations (like vacuum or remove).
- */
-XLogRecPtr
-SetLastWrittenLSNForBlockv(const XLogRecPtr *lsns, RelFileLocator relfilenode,
-						   ForkNumber forknum, BlockNumber blockno,
-						   int nblocks)
-{
-	if (set_lwlsn_block_v_hook)
-		return set_lwlsn_block_v_hook(lsns, relfilenode, forknum, blockno, nblocks);
-
-	// Behavior in case the hook is not set
-	if (lsns == NULL || nblocks == 0) 
-	{
-		// If no valid LSNs were provided, fallback to the InvalidXLogRecPtr
-		return InvalidXLogRecPtr;
-	} 
-	else 
-	{
-		// In the case when the hook is present, we would return the 
-		// maximal LSN of all the given LSNs, taking care to update the
-		// given LSN when it's value is lesser than the one found in the
-		// corresponding entry. As the hook is not present, we just return
-		// the maximal lsn without performing a search in the hash table
-		XLogRecPtr max = InvalidXLogRecPtr;
-		for (int i = 0; i < nblocks; i ++) 
-			max = Max(max, lsns[i]);
-		
-		return max;
-	}
-}
-
-/*
- * SetLastWrittenLSNForBlock -- Set maximal LSN for block
- */
-XLogRecPtr
-SetLastWrittenLSNForBlock(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum, BlockNumber blkno)
-{
-	if (set_lwlsn_block_hook)
-		return set_lwlsn_block_hook(lsn, rlocator, forknum, blkno);
-
-	return lsn;
-}
-
-/*
- * SetLastWrittenLSNForRelation -- Set maximal LSN for relation metadata
- */
-XLogRecPtr
-SetLastWrittenLSNForRelation(XLogRecPtr lsn, RelFileLocator rlocator, ForkNumber forknum)
-{
-	return SetLastWrittenLSNForBlock(lsn, rlocator, forknum, REL_METADATA_PSEUDO_BLOCKNO);
-}
-
-/*
- * SetLastWrittenLSNForDatabase -- Set maximal LSN for the whole database
- */
-XLogRecPtr
-SetLastWrittenLSNForDatabase(XLogRecPtr lsn)
-{
-	RelFileLocator dummyNode = {InvalidOid, InvalidOid, InvalidOid};
-	return SetLastWrittenLSNForBlock(lsn, dummyNode, MAIN_FORKNUM, 0);
 }
 
 void
