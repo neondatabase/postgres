@@ -5152,7 +5152,7 @@ LocalProcessControlFile(bool reset)
 }
 
 Size
-XLOGCtlShmemSize(void)
+XLOGShmemSize(void)
 {
 	Size		size;
 
@@ -5219,7 +5219,7 @@ XLOGShmemInit(void)
 
 
 	XLogCtl = (XLogCtlData *)
-		ShmemInitStruct("XLOG Ctl", XLOGCtlShmemSize(), &foundXLog);
+		ShmemInitStruct("XLOG Ctl", XLOGShmemSize(), &foundXLog);
 
 	localControlFile = ControlFile;
 	ControlFile = (ControlFileData *)
