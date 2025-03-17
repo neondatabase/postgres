@@ -257,19 +257,19 @@ extern XLogRecPtr GetLastImportantRecPtr(void);
 /* neon specifics */
 
 /* Hooks for LwLSN */
+typedef XLogRecPtr (*set_lwlsn_block_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
 typedef XLogRecPtr (*set_lwlsn_block_range_hook_type)(XLogRecPtr lsn, RelFileNode rnode, ForkNumber forknum, BlockNumber from, BlockNumber n_blocks);
 typedef XLogRecPtr (*set_lwlsn_block_v_hook_type)(const XLogRecPtr *lsns, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blockno, int nblocks);
-typedef XLogRecPtr (*set_lwlsn_block_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum, BlockNumber blkno);
-typedef XLogRecPtr (*set_lwlsn_relation_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
 typedef XLogRecPtr (*set_lwlsn_db_hook_type)(XLogRecPtr lsn);
-typedef void (*update_max_lwlsn_hook_type) (XLogRecPtr lsn);
+typedef XLogRecPtr (*set_lwlsn_relation_hook_type)(XLogRecPtr lsn, RelFileNode relfilenode, ForkNumber forknum);
+typedef void (*set_max_lwlsn_hook_type) (XLogRecPtr lsn);
 
+extern set_lwlsn_block_hook_type set_lwlsn_block_hook;
 extern set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook;
 extern set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook;
-extern set_lwlsn_block_hook_type set_lwlsn_block_hook;
-extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
 extern set_lwlsn_db_hook_type set_lwlsn_db_hook;
-extern update_max_lwlsn_hook_type update_max_lwlsn_hook;
+extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
+extern set_max_lwlsn_hook_type set_max_lwlsn_hook;
 
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);

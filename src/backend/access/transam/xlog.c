@@ -150,12 +150,12 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 restore_running_xacts_callback_t restore_running_xacts_callback;
 
 /* NEON: Hook Definitions that enabled the moving of LastWrittenLSN Cache to the neon extension*/
-update_max_lwlsn_hook_type update_max_lwlsn_hook = NULL;
+set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
 set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
 set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
-set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
-set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
 set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
+set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
+set_max_lwlsn_hook_type set_max_lwlsn_hook = NULL;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -5258,8 +5258,8 @@ StartupXLOG(void)
 	RedoRecPtr = XLogCtl->RedoRecPtr = XLogCtl->Insert.RedoRecPtr = checkPoint.redo;
 	doPageWrites = lastFullPageWrites;
 
-	if (update_max_lwlsn_hook)
-		update_max_lwlsn_hook(RedoRecPtr);
+	if (set_max_lwlsn_hook)
+		set_max_lwlsn_hook(RedoRecPtr);
 
 	/* REDO */
 	if (InRecovery)
