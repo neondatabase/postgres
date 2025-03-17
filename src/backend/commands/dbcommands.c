@@ -3287,11 +3287,8 @@ dbase_redo(XLogReaderState *record)
 		 * Make sure any future requests to the page server see the new
 		 * database.
 		 */
-		{
-			XLogRecPtr	lsn = record->EndRecPtr;
-			if (set_lwlsn_db_hook)
-				set_lwlsn_db_hook(lsn);
-		}
+		if (set_lwlsn_db_hook)
+			set_lwlsn_db_hook(record->EndRecPtr);
 
 		pfree(src_path);
 		pfree(dst_path);
@@ -3318,11 +3315,8 @@ dbase_redo(XLogReaderState *record)
 		 * Make sure any future requests to the page server see the new
 		 * database.
 		 */
-		{
-			XLogRecPtr	lsn = record->EndRecPtr;
-			if (set_lwlsn_db_hook)
-				set_lwlsn_db_hook(lsn);
-		}
+		if (set_lwlsn_db_hook)
+			set_lwlsn_db_hook(record->EndRecPtr);
 
 		pfree(dbpath);
 	}
