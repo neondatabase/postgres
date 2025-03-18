@@ -340,10 +340,12 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			log_newpage_range(index, MAIN_FORKNUM,
 							  0, RelationGetNumberOfBlocks(index),
 							  true);
-			SetLastWrittenLSNForBlockRange(XactLastRecEnd,
+			if (set_lwlsn_block_range_hook)
+				set_lwlsn_block_range_hook(XactLastRecEnd,
 							  index->rd_smgr->smgr_rlocator.locator,
 							  MAIN_FORKNUM, 0, RelationGetNumberOfBlocks(index));
-			SetLastWrittenLSNForRelation(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
+			if (set_lwlsn_relation_hook)
+				set_lwlsn_relation_hook(XactLastRecEnd, index->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
 		}
 
 		smgr_end_unlogged_build(index->rd_smgr);
@@ -464,9 +466,11 @@ gist_indexsortbuild(GISTBuildState *state)
 	{
 		XLogRecPtr lsn = GetRedoRecPtr();
 
-		SetLastWrittenLSNForBlock(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator,
-								  MAIN_FORKNUM, GIST_ROOT_BLKNO);
-		SetLastWrittenLSNForRelation(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
+		if (set_lwlsn_block_hook)
+			set_lwlsn_block_hook(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator,
+									MAIN_FORKNUM, GIST_ROOT_BLKNO);
+		if (set_lwlsn_relation_hook)
+			set_lwlsn_relation_hook(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
 	}
 
 	pfree(levelstate);
