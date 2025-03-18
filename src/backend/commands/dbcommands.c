@@ -685,7 +685,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 
 				lsn = XLogInsert(RM_DBASE_ID,
 								 XLOG_DBASE_CREATE | XLR_SPECIAL_REL_UPDATE);
-				SetLastWrittenLSNForDatabase(lsn);
+				if (set_lwlsn_db_hook)
+					set_lwlsn_db_hook(lsn);
 			}
 		}
 		table_endscan(scan);
@@ -2378,10 +2379,9 @@ dbase_redo(XLogReaderState *record)
 		 * Make sure any future requests to the page server see the new
 		 * database.
 		 */
-		{
-			XLogRecPtr	lsn = record->EndRecPtr;
-			SetLastWrittenLSNForDatabase(lsn);
-		}
+		if (set_lwlsn_db_hook)
+			set_lwlsn_db_hook(record->EndRecPtr);
+
 	}
 	else if (info == XLOG_DBASE_DROP)
 	{
