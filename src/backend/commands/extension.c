@@ -1532,12 +1532,6 @@ CreateExtensionInternal(char *extensionName,
 	 */
 	filename = get_extension_script_filename(pcontrol, NULL, versionName);
 
-	// request download of extension files from compute_ctl
-	if (download_extension_file_hook != NULL)
-	{
-		download_extension_file_hook(extensionName, false);
-	}
-
 	if (stat(filename, &fst) == 0)
 	{
 		/* Easy, no extra scripts */
@@ -1549,7 +1543,9 @@ CreateExtensionInternal(char *extensionName,
 		List	   *evi_list;
 		ExtensionVersionInfo *evi_start;
 		ExtensionVersionInfo *evi_target;
+		bool		attempted_download = false;
 
+	reidentify:
 		/* Extract the version update graph from the script directory */
 		evi_list = get_ext_ver_list(pcontrol);
 
@@ -1559,6 +1555,16 @@ CreateExtensionInternal(char *extensionName,
 		/* Identify best path to reach target */
 		evi_start = find_install_path(evi_list, evi_target,
 									  &updateVersions);
+
+		/* Before we report an ERROR, try to download a remote extension */
+		if (evi_start == NULL && download_extension_file_hook && !attempted_download)
+		{
+			attempted_download = true;
+			download_extension_file_hook(extensionName, false);
+
+			/* Try again to find the install path */
+			goto reidentify;
+		}
 
 		/* Fail if no path ... */
 		if (evi_start == NULL)
