@@ -782,32 +782,58 @@ CheckPasswordAuth(Port *port, const char **logdetail)
 	int			result;
 	char	   *shadow_pass;
 
+	/* BEGIN HADRON */
+
+	/*
+	 * this flag is passed to databricks auth hook and is updated by the hook
+	 * to false if we should continue with password auth. This is by default
+	 * true so that we don't accidentally do password auth if there is some
+	 * bug in the hook. It's better to rely on the hook to set it explicitly
+	 * false to continue with password auth.
+	 */
+	bool		skip_password_auth = true;
+
+	/* END HADRON */
+
 	sendAuthRequest(port, AUTH_REQ_PASSWORD, NULL, 0);
 
 	passwd = recv_password_packet(port);
 	if (passwd == NULL)
 		return STATUS_EOF;		/* client wouldn't send password */
 
-	shadow_pass = get_role_password(port->user_name, logdetail);
-	if (shadow_pass)
+	/* BEGIN HADRON */
+	elog(DEBUG1, "Databricks: before authentication hook");
+
+	if (DatabricksAuthentication_hook)
 	{
-		result = plain_crypt_verify(port->user_name, shadow_pass, passwd,
-									logdetail);
+		result = (*DatabricksAuthentication_hook) (port, passwd, &skip_password_auth, logdetail);
 	}
 	else
-		result = STATUS_ERROR;
-
-	if (result != STATUS_OK && DatabricksAuthentication_hook)
 	{
-		elog(LOG, "Calling DatabricksAuthentication_hook");
-
-		result = (*DatabricksAuthentication_hook)(port, passwd);
-
-		elog(LOG, "DatabricksAuthentication_hook returned: %d", result);
+		/* If hook is not set, do the password auth by default */
+		skip_password_auth = false;
+		result = STATUS_ERROR;
 	}
 
-	if (shadow_pass)
-		pfree(shadow_pass);
+	elog(DEBUG1, "Databricks: after authentication hook");
+
+	/* only try PG password auth if the hook didn't return STATUS_OK and */
+	/* the hook set the skip_password_auth flag to false */
+	if (result != STATUS_OK && !skip_password_auth)
+	{
+		shadow_pass = get_role_password(port->user_name, logdetail);
+		if (shadow_pass)
+		{
+			result = plain_crypt_verify(port->user_name, shadow_pass, passwd,
+										logdetail);
+		}
+		else
+			result = STATUS_ERROR;
+
+		if (shadow_pass)
+			pfree(shadow_pass);
+	}
+	/* END HADRON */
 	pfree(passwd);
 
 	if (result == STATUS_OK)
