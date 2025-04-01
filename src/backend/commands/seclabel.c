@@ -125,6 +125,7 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 	 */
 	if (stmt->provider == NULL)
 	{
+		elog(LOG, "No label provider for the security statement. Length of security label providers: %d", list_length(label_provider_list));
 		if (label_provider_list == NIL)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -569,6 +570,7 @@ DeleteSecurityLabel(const ObjectAddress *object)
 void
 register_label_provider(const char *provider_name, check_object_relabel_type hook)
 {
+	elog(LOG, "Registering label provider %s", provider);
 	LabelProvider *provider;
 	MemoryContext oldcxt;
 
