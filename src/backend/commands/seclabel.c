@@ -570,7 +570,7 @@ DeleteSecurityLabel(const ObjectAddress *object)
 void
 register_label_provider(const char *provider_name, check_object_relabel_type hook)
 {
-	elog(LOG, "Registering label provider %s", provider);
+	elog(LOG, "Registering label provider %s", provider_name);
 	LabelProvider *provider;
 	MemoryContext oldcxt;
 
