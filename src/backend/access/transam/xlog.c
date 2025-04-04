@@ -7671,7 +7671,8 @@ CheckPointReplicationState(int flags)
 /*
  * NEON:  we use logical records to persist information of about slots, origins, relation map...
  * If it is done inside shutdown checkpoint, then Postgres panics: "concurrent write-ahead log activity while database system is shutting down"
- * So it before checkpoint REDO position is determined.
+ * So do it before checkpoint REDO position is determined.
+ * The same is true for CheckPointBuffers which wallog dirty FSM/VM pages.
  */
 static void
 PreCheckPointGuts(int flags)
@@ -7680,10 +7681,11 @@ PreCheckPointGuts(int flags)
 	{
 		CheckPointReplicationState(flags);
 		CheckPointBuffers(flags);
+
 		/*
 		 * pgstat_write_statsfile will be called later by before_shmem_exit() hook, but by then it's too late
 		 * to write WAL records. In Neon, pgstat_write_statsfile() writes the pgstats file to the WAL, so we have
-		 * to call it earlier. (The call that happens later is useless, but it doesn't do any harm either)  
+		 * to call it earlier. (The call that happens later is useless, but it doesn't do any harm either)
 		 */
 		pgstat_write_statsfile();
 	}
@@ -7709,6 +7711,12 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
+	/*
+	 * NEON: Checkpoint buffer will write dirty pages to the disk and Neon SMGR
+	 * wallog FSM/VM pages to persist them at page server.
+	 * Writing to the WAL during shutdown checkpoint cause Postgres panic.
+	 * So do it before in PreCheckPointGuts.
+	 */
 	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
 		CheckPointBuffers(flags);
 
