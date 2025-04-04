@@ -7679,6 +7679,7 @@ PreCheckPointGuts(int flags)
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
 	{
 		CheckPointReplicationState(flags);
+		CheckPointBuffers(flags);
 		/*
 		 * pgstat_write_statsfile will be called later by before_shmem_exit() hook, but by then it's too late
 		 * to write WAL records. In Neon, pgstat_write_statsfile() writes the pgstats file to the WAL, so we have
@@ -7708,7 +7709,8 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
-	CheckPointBuffers(flags);
+	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
+		CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();
