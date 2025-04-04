@@ -9961,7 +9961,10 @@ static void
 PreCheckPointGuts(int flags)
 {
 	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	{
 		CheckPointReplicationState();
+		CheckPointBuffers(flags);
+	}
 }
 
 /*
@@ -9984,7 +9987,8 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointSUBTRANS();
 	CheckPointMultiXact();
 	CheckPointPredicate();
-	CheckPointBuffers(flags);
+	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
+		CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();
