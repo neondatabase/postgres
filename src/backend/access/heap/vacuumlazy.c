@@ -1246,7 +1246,7 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 				prefetch_budget = blkno + vacrel->io_concurrency - next_prefetch_block;
 
 			/* Do not perform prefetch if we are skipping current range */
-			if (skipping_current_range)
+			if (skipping_blocks)
 				prefetch_budget = 0;
 
 			for (; prefetch_budget-- > 0; next_prefetch_block++)
