@@ -1245,9 +1245,9 @@ lazy_scan_heap(LVRelState *vacrel, VacuumParams *params, bool aggressive)
 			if (next_prefetch_block + prefetch_budget > blkno + vacrel->io_concurrency)
 				prefetch_budget = blkno + vacrel->io_concurrency - next_prefetch_block;
 
-			/* And only up to the next unskippable block */
-			if (next_prefetch_block + prefetch_budget > next_unskippable_block)
-				prefetch_budget = next_unskippable_block - next_prefetch_block;
+			/* If next SKIP_PAGES_THRESHOLD are skippable then do not perform prefetch because vacuum will skip this blocks */
+			if (next_prefetch_block + SKIP_PAGES_THRESHOLD <= next_unskippable_block)
+				prefetch_budget = 0;
 
 			for (; prefetch_budget-- > 0; next_prefetch_block++)
 				PrefetchBuffer(vacrel->rel, MAIN_FORKNUM, next_prefetch_block);
