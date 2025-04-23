@@ -429,6 +429,11 @@ extern PGDLLIMPORT ErrorContextCallback *error_context_stack;
 
 extern PGDLLIMPORT sigjmp_buf *PG_exception_stack;
 
+/* BEGIN_HADRON */
+typedef void (*SqlErrorCode_hook_type) (int sqlerrcode);
+extern PGDLLIMPORT SqlErrorCode_hook_type SqlErrorCode_hook;
+/* END_HADRON */
+
 
 /* Stuff that error handlers might want to use */
 
