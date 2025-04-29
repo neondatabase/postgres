@@ -73,6 +73,7 @@ main(int argc, char **argv)
 	static int	no_publications = 0;
 	static int	no_security_labels = 0;
 	static int	no_subscriptions = 0;
+	static int	no_event_triggers = 0;
 	static int	strict_names = 0;
 
 	struct option cmdopts[] = {
@@ -123,6 +124,7 @@ main(int argc, char **argv)
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
+		{"no-event-triggers", no_argument, &no_event_triggers, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -351,6 +353,7 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->no_event_triggers = no_event_triggers;
 
 	if (if_exists && !opts->dropSchema)
 		pg_fatal("option --if-exists requires option -c/--clean");
@@ -472,6 +475,7 @@ usage(const char *progname)
 	printf(_("  --no-subscriptions           do not restore subscriptions\n"));
 	printf(_("  --no-table-access-method     do not restore table access methods\n"));
 	printf(_("  --no-tablespaces             do not restore tablespace assignments\n"));
+	printf(_("  --no-event-triggers          do not restore event triggers\n"));
 	printf(_("  --section=SECTION            restore named section (pre-data, data, or post-data)\n"));
 	printf(_("  --strict-names               require table and/or schema include patterns to\n"
 			 "                               match at least one entity each\n"));
