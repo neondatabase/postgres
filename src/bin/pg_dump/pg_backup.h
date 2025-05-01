@@ -77,6 +77,7 @@ typedef struct _restoreOptions
 	int			createDB;		/* Issue commands to create the database */
 	int			noOwner;		/* Don't try to match original object owner */
 	int			noTablespace;	/* Don't issue tablespace-related commands */
+	int			no_event_triggers; /* Don't dump event triggers */
 	int			disable_triggers;	/* disable triggers during data-only
 									 * restore */
 	int			use_setsessauth;	/* Use SET SESSION AUTHORIZATION commands
@@ -164,6 +165,7 @@ typedef struct _dumpOptions
 	int			serializable_deferrable;
 	int			disable_triggers;
 	int			outputNoTablespaces;
+	int			no_event_triggers;
 	int			use_setsessauth;
 	int			enable_row_security;
 	int			load_via_partition_root;
