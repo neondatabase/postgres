@@ -95,6 +95,7 @@ typedef struct _restoreOptions
 	int			noOwner;		/* Don't try to match original object owner */
 	int			noTableAm;		/* Don't issue table-AM-related commands */
 	int			noTablespace;	/* Don't issue tablespace-related commands */
+	int			no_event_triggers; /* Don't dump event triggers */
 	int			disable_triggers;	/* disable triggers during data-only
 									 * restore */
 	int			use_setsessauth;	/* Use SET SESSION AUTHORIZATION commands
@@ -182,6 +183,7 @@ typedef struct _dumpOptions
 	int			disable_triggers;
 	int			outputNoTableAm;
 	int			outputNoTablespaces;
+	int			no_event_triggers;
 	int			use_setsessauth;
 	int			enable_row_security;
 	int			load_via_partition_root;

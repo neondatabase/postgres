@@ -205,6 +205,7 @@ dumpOptionsFromRestoreOptions(RestoreOptions *ropt)
 	dopt->no_publications = ropt->no_publications;
 	dopt->no_security_labels = ropt->no_security_labels;
 	dopt->no_subscriptions = ropt->no_subscriptions;
+	dopt->no_event_triggers = ropt->no_event_triggers;
 	dopt->lockWaitTimeout = ropt->lockWaitTimeout;
 	dopt->include_everything = ropt->include_everything;
 	dopt->enable_row_security = ropt->enable_row_security;
@@ -2872,6 +2873,10 @@ _tocEntryRequired(TocEntry *te, teSection curSection, ArchiveHandle *AH)
 
 	/* If it's a subscription, maybe ignore it */
 	if (ropt->no_subscriptions && strcmp(te->desc, "SUBSCRIPTION") == 0)
+		return 0;
+
+	/* If it's an event trigger, maybe ignore it */
+	if (ropt->no_event_triggers && strcmp(te->desc, "EVENT TRIGGER") == 0)
 		return 0;
 
 	/* Ignore it if section is not to be dumped/restored */
