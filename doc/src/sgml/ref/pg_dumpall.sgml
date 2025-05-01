@@ -466,6 +466,15 @@ exclude database <replaceable class="parameter">PATTERN</replaceable>
      </varlistentry>
 
      <varlistentry>
+      <term><option>--no-event-triggers</option></term>
+      <listitem>
+       <para>
+        Do not dump event triggers.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-sync</option></term>
       <listitem>
        <para>
