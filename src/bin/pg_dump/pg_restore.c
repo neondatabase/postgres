@@ -81,6 +81,7 @@ main(int argc, char **argv)
 	static int	no_security_labels = 0;
 	static int	no_statistics = 0;
 	static int	no_subscriptions = 0;
+	static int	no_event_triggers = 0;
 	static int	strict_names = 0;
 	static int	statistics_only = 0;
 	static int	with_statistics = 0;
@@ -132,6 +133,7 @@ main(int argc, char **argv)
 		{"use-set-session-authorization", no_argument, &use_setsessauth, 1},
 		{"no-comments", no_argument, &no_comments, 1},
 		{"no-data", no_argument, &no_data, 1},
+		{"no-event-triggers", no_argument, &no_event_triggers, 1},
 		{"no-policies", no_argument, &no_policies, 1},
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-schema", no_argument, &no_schema, 1},
@@ -443,6 +445,7 @@ main(int argc, char **argv)
 	opts->no_publications = no_publications;
 	opts->no_security_labels = no_security_labels;
 	opts->no_subscriptions = no_subscriptions;
+	opts->no_event_triggers = no_event_triggers;
 
 	if (if_exists && !opts->dropSchema)
 		pg_fatal("option --if-exists requires option -c/--clean");
@@ -566,6 +569,7 @@ usage(const char *progname)
 	printf(_("  --no-security-labels         do not restore security labels\n"));
 	printf(_("  --no-statistics              do not restore statistics\n"));
 	printf(_("  --no-subscriptions           do not restore subscriptions\n"));
+	printf(_("  --no-event-triggers          do not restore event triggers\n"));
 	printf(_("  --no-table-access-method     do not restore table access methods\n"));
 	printf(_("  --no-tablespaces             do not restore tablespace assignments\n"));
 	printf(_("  --restrict-key=RESTRICT_KEY  use provided string as psql \\restrict key\n"));

@@ -103,6 +103,7 @@ static int	no_schema = 0;
 static int	no_statistics = 0;
 static int	no_subscriptions = 0;
 static int	no_toast_compression = 0;
+static int	no_event_triggers = 0;
 static int	no_unlogged_table_data = 0;
 static int	no_role_passwords = 0;
 static int	with_statistics = 0;
@@ -170,6 +171,7 @@ main(int argc, char *argv[])
 		{"use-set-session-authorization", no_argument, &use_setsessauth, 1},
 		{"no-comments", no_argument, &no_comments, 1},
 		{"no-data", no_argument, &no_data, 1},
+		{"no-event-triggers", no_argument, &no_event_triggers, 1},
 		{"no-policies", no_argument, &no_policies, 1},
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-role-passwords", no_argument, &no_role_passwords, 1},
@@ -476,6 +478,8 @@ main(int argc, char *argv[])
 		appendPQExpBufferStr(pgdumpopts, " --no-statistics");
 	if (no_subscriptions)
 		appendPQExpBufferStr(pgdumpopts, " --no-subscriptions");
+	if (no_event_triggers)
+		appendPQExpBufferStr(pgdumpopts, " --no-event-triggers");
 	if (no_toast_compression)
 		appendPQExpBufferStr(pgdumpopts, " --no-toast-compression");
 	if (no_unlogged_table_data)
@@ -730,6 +734,7 @@ help(void)
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-statistics              do not dump statistics\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
+	printf(_("  --no-event-triggers          do not dump event triggers\n"));
 	printf(_("  --no-sync                    do not wait for changes to be written safely to disk\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
