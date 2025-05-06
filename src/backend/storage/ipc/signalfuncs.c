@@ -16,6 +16,7 @@
 
 #include <signal.h>
 
+#include "access/xlog.h"
 #include "catalog/pg_authid.h"
 #include "miscadmin.h"
 #include "pgstat.h"
@@ -49,6 +50,15 @@ static int
 pg_signal_backend(int pid, int sig)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
+/* BEGIN_HADRON */
+	if (!superuser() && RecoveryInProgress()) {
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied to cancel query"),
+				 errdetail("Only roles with the %s attribute may cancel queries on replica.",
+						   "SUPERUSER")));
+	}
+/* END_HADRON */
 
 	/*
 	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
