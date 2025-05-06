@@ -121,6 +121,7 @@ main(int argc, char **argv)
 		{"no-publications", no_argument, &no_publications, 1},
 		{"no-security-labels", no_argument, &no_security_labels, 1},
 		{"no-subscriptions", no_argument, &no_subscriptions, 1},
+		{"no-event-triggers", no_argument, &no_event_triggers, 1},
 
 		{NULL, 0, NULL, 0}
 	};
