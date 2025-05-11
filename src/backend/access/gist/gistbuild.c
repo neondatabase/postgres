@@ -455,22 +455,18 @@ gist_indexsortbuild(GISTBuildState *state)
 	gist_indexsortbuild_flush_ready_pages(state);
 
 	/* Write out the root */
+	smgr_start_unlogged_build(state->indexrel->rd_smgr);
 	PageSetLSN(pagestate->page, GistBuildLSN);
 	PageSetChecksumInplace(pagestate->page, GIST_ROOT_BLKNO);
 	smgrwrite(RelationGetSmgr(state->indexrel), MAIN_FORKNUM, GIST_ROOT_BLKNO,
 			  pagestate->page, true);
+	smgr_finish_unlogged_build_phase_1(state->indexrel->rd_smgr);
 	if (RelationNeedsWAL(state->indexrel))
 	{
-		XLogRecPtr lsn;
-
-		lsn = log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
+		log_newpage(&state->indexrel->rd_node, MAIN_FORKNUM, GIST_ROOT_BLKNO,
 					pagestate->page, true);
-		if (set_lwlsn_block_hook)
-			set_lwlsn_block_hook(lsn, state->indexrel->rd_smgr->smgr_rnode.node,
-									MAIN_FORKNUM, GIST_ROOT_BLKNO);
-		if (set_lwlsn_relation_hook)
-			set_lwlsn_relation_hook(lsn, state->indexrel->rd_smgr->smgr_rnode.node, MAIN_FORKNUM);
 	}
+	smgr_end_unlogged_build(state->indexrel->rd_smgr);
 
 	pfree(pagestate->page);
 	pfree(pagestate);
