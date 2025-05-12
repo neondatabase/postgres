@@ -128,8 +128,11 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 {
 	WalReceiverConn *conn;
 	PostgresPollingStatusType status;
-	const char *keys[6];
-	const char *vals[6];
+/* BEGIN_NEON */
+	const char *keys[7];
+	const char *vals[7];
+	char * neon_auth_token = NULL;
+/* END_NEON */
 	int			i = 0;
 
 	/*
@@ -138,6 +141,24 @@ libpqrcv_connect(const char *conninfo, bool logical, const char *appname,
 	 */
 	keys[i] = "dbname";
 	vals[i] = conninfo;
+
+/* BEGIN_NEON */
+	if (pg_strcasecmp(appname, "walreceiver") == 0)
+	{
+		neon_auth_token = getenv("NEON_AUTH_TOKEN");
+		if (neon_auth_token != NULL)
+		{
+			elog(LOG, "Use NEON_AUTH_TOKEN to connect");
+			keys[++i] = "password";
+			vals[i] = neon_auth_token;
+		}
+		else
+		{
+			elog(LOG, "NEON_AUTH_TOKEN is undefined in the environment");
+		}
+	}
+/* END_NEON */
+
 	keys[++i] = "replication";
 	vals[i] = logical ? "database" : "true";
 	if (!logical)
