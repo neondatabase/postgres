@@ -264,6 +264,25 @@ should_output_to_client(int elevel)
 	return false;
 }
 
+/*
+ * Hadron -- check if the statement may have a password by checking if the
+ * statement contains the word "password" in it.
+ */
+static inline bool
+statement_may_have_password(void) {
+	if (debug_query_string == NULL)
+		return false;
+	for (const char *query_substring = debug_query_string;
+		 *query_substring != '\0';
+		 query_substring++)
+	{
+		// n=8 so that we are doing a substring check
+		if (pg_strncasecmp(query_substring, "password", 8) == 0)
+			return true;
+	}
+	return false;
+}
+
 
 /*
  * message_level_is_interesting --- would ereport/elog do anything?
@@ -2732,6 +2751,10 @@ check_log_of_query(ErrorData *edata)
 
 	/* query string available? */
 	if (debug_query_string == NULL)
+		return false;
+	
+	/* Hadron */
+	if (statement_may_have_password())
 		return false;
 
 	return true;
