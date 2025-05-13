@@ -295,7 +295,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 		Buffer		buffer;
 		Page		page;
 
-		smgr_start_unlogged_build(index->rd_smgr);
+		smgr_start_unlogged_build(RelationGetSmgr(index));
 
 		/* initialize the root page */
 		buffer = gistNewBuffer(index, heap);
@@ -329,7 +329,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 			gistFreeBuildBuffers(buildstate.gfbb);
 		}
 
-		smgr_finish_unlogged_build_phase_1(index->rd_smgr);
+		smgr_finish_unlogged_build_phase_1(RelationGetSmgr(index));
 
 		/*
 		 * We didn't write WAL records as we built the index, so if
@@ -342,7 +342,7 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 							  true);
 		}
 
-		smgr_end_unlogged_build(index->rd_smgr);
+		smgr_end_unlogged_build(RelationGetSmgr(index));
 	}
 
 	/* okay, all heap tuples are indexed */
