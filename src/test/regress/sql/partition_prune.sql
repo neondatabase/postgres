@@ -505,7 +505,7 @@ create table list_part2 partition of list_part for values in (2);
 create table list_part3 partition of list_part for values in (3);
 create table list_part4 partition of list_part for values in (4);
 
-insert into list_part select generate_series(1,4);
+insert into list_part select generate_series(1,400);
 
 begin;
 

@@ -525,7 +525,7 @@ BEGIN;
 CREATE TABLE current_check (currentid int, payload text);
 CREATE TABLE current_check_1 () INHERITS (current_check);
 CREATE TABLE current_check_2 () INHERITS (current_check);
-INSERT INTO current_check_1 SELECT i, 'p' || i FROM generate_series(1,90) i;
+INSERT INTO current_check_1 SELECT i, 'p' || i FROM generate_series(1,9000) i;
 INSERT INTO current_check_2 SELECT i, 'P' || i FROM generate_series(10,19) i;
 
 DECLARE c1 SCROLL CURSOR FOR SELECT * FROM current_check;

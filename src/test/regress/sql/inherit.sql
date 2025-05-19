@@ -100,7 +100,7 @@ INSERT INTO z VALUES (NULL, 'text'); -- should fail
 -- Check inherited UPDATE with first child excluded
 create table some_tab (f1 int, f2 int, f3 int, check (f1 < 10) no inherit);
 create table some_tab_child () inherits(some_tab);
-insert into some_tab_child select i, i+1, 0 from generate_series(1,10000) i;
+insert into some_tab_child select i, i+1, 0 from generate_series(1,100000) i;
 create index on some_tab_child(f1, f2);
 -- while at it, also check that statement-level triggers fire
 create function some_tab_stmt_trig_func() returns trigger as

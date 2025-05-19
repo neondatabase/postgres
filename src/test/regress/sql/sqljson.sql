@@ -248,15 +248,15 @@ DROP VIEW json_array_view;
 -- Test JSON_OBJECTAGG deparsing
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT JSON_OBJECTAGG(i: ('111' || i)::bytea FORMAT JSON WITH UNIQUE RETURNING text) FILTER (WHERE i > 3)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT JSON_OBJECTAGG(i: ('111' || i)::bytea FORMAT JSON WITH UNIQUE RETURNING text) OVER (PARTITION BY i % 2)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 CREATE VIEW json_objectagg_view AS
 SELECT JSON_OBJECTAGG(i: ('111' || i)::bytea FORMAT JSON WITH UNIQUE RETURNING text) FILTER (WHERE i > 3)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 \sv json_objectagg_view
 
@@ -265,15 +265,15 @@ DROP VIEW json_objectagg_view;
 -- Test JSON_ARRAYAGG deparsing
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT JSON_ARRAYAGG(('111' || i)::bytea FORMAT JSON NULL ON NULL RETURNING text) FILTER (WHERE i > 3)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT JSON_ARRAYAGG(('111' || i)::bytea FORMAT JSON NULL ON NULL RETURNING text) OVER (PARTITION BY i % 2)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 CREATE VIEW json_arrayagg_view AS
 SELECT JSON_ARRAYAGG(('111' || i)::bytea FORMAT JSON NULL ON NULL RETURNING text) FILTER (WHERE i > 3)
-FROM generate_series(1,50) i;
+FROM generate_series(1,5000) i;
 
 \sv json_arrayagg_view
 

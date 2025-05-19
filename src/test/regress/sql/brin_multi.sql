@@ -377,7 +377,7 @@ SELECT brin_desummarize_range('brinidx_multi', 100000000);
 
 -- test building an index with many values, to force compaction of the buffer
 CREATE TABLE brin_large_range (a int4);
-INSERT INTO brin_large_range SELECT i FROM generate_series(1,10000) s(i);
+INSERT INTO brin_large_range SELECT i FROM generate_series(1,1000000) s(i);
 CREATE INDEX brin_large_range_idx ON brin_large_range USING brin (a int4_minmax_multi_ops);
 DROP TABLE brin_large_range;
 

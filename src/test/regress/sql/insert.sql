@@ -335,7 +335,7 @@ create table hpart1 partition of hash_parted for values with (modulus 4, remaind
 create table hpart2 partition of hash_parted for values with (modulus 4, remainder 2);
 create table hpart3 partition of hash_parted for values with (modulus 4, remainder 3);
 
-insert into hash_parted values(generate_series(1,100));
+insert into hash_parted values(generate_series(1,100000));
 
 -- direct insert of values divisible by 4 - ok;
 insert into hpart0 values(12),(16);
