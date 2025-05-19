@@ -303,11 +303,11 @@ set enable_hashagg = true;
 set enable_sort = false;
 
 explain (costs off)
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,50) union select from generate_series(1,30);
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
 
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,50) union select from generate_series(1,30);
 select from generate_series(1,5) union all select from generate_series(1,3);
 select from generate_series(1,5) intersect select from generate_series(1,3);
 select from generate_series(1,5) intersect all select from generate_series(1,3);
@@ -319,11 +319,11 @@ set enable_hashagg = false;
 set enable_sort = true;
 
 explain (costs off)
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,50) union select from generate_series(1,30);
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
 
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,50) union select from generate_series(1,30);
 select from generate_series(1,5) union all select from generate_series(1,3);
 select from generate_series(1,5) intersect select from generate_series(1,3);
 select from generate_series(1,5) intersect all select from generate_series(1,3);

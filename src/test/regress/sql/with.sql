@@ -1257,7 +1257,7 @@ DROP RULE y_rule ON y;
 
 -- check merging of outer CTE with CTE in a rule action
 CREATE TEMP TABLE bug6051 AS
-  select i from generate_series(1,3) as t(i);
+  select i from generate_series(1,30) as t(i);
 
 SELECT * FROM bug6051;
 

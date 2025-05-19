@@ -377,7 +377,7 @@ SELECT brin_desummarize_range('brinidx_multi', 100000000);
 
 -- test building an index with many values, to force compaction of the buffer
 CREATE TABLE brin_large_range (a int4);
-INSERT INTO brin_large_range SELECT i FROM generate_series(1,10000) s(i);
+INSERT INTO brin_large_range SELECT i FROM generate_series(1,100000) s(i);
 CREATE INDEX brin_large_range_idx ON brin_large_range USING brin (a int4_minmax_multi_ops);
 DROP TABLE brin_large_range;
 
@@ -412,7 +412,7 @@ SELECT brin_summarize_range('brin_summarize_multi_idx', 4294967296);
 
 -- test brin cost estimates behave sanely based on correlation of values
 CREATE TABLE brin_test_multi (a INT, b INT);
-INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,10000) x(x);
+INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,100000) x(x);
 CREATE INDEX brin_test_multi_a_idx ON brin_test_multi USING brin (a) WITH (pages_per_range = 2);
 CREATE INDEX brin_test_multi_b_idx ON brin_test_multi USING brin (b) WITH (pages_per_range = 2);
 VACUUM ANALYZE brin_test_multi;
@@ -430,12 +430,12 @@ SET datestyle TO iso;
 -- values close to timetamp minimum
 INSERT INTO brin_timestamp_test
 SELECT '4713-01-01 00:00:01 BC'::timestamptz + (i || ' seconds')::interval
-  FROM generate_series(1,30) s(i);
+  FROM generate_series(1,300) s(i);
 
 -- values close to timetamp maximum
 INSERT INTO brin_timestamp_test
 SELECT '294276-12-01 00:00:01'::timestamptz + (i || ' seconds')::interval
-  FROM generate_series(1,30) s(i);
+  FROM generate_series(1,300) s(i);
 
 CREATE INDEX ON brin_timestamp_test USING brin (a timestamptz_minmax_multi_ops) WITH (pages_per_range=1);
 DROP TABLE brin_timestamp_test;

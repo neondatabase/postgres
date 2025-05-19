@@ -235,7 +235,7 @@ WITH (autovacuum_enabled = off);
 -- over-estimates when using only per-column statistics
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT i/100, i/100, i/100, cash_words((i/100)::money)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,10000) s(i);
 
 ANALYZE ndistinct;
 
@@ -300,7 +300,7 @@ TRUNCATE TABLE ndistinct;
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT mod(i,13), mod(i,17), mod(i,19),
             cash_words(mod(i,23)::int::money)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,10000) s(i);
 
 ANALYZE ndistinct;
 
@@ -408,7 +408,7 @@ TRUNCATE ndistinct;
 -- two mostly independent groups of columns
 INSERT INTO ndistinct (a, b, c, d)
      SELECT mod(i,3), mod(i,9), mod(i,5), mod(i,20)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,10000) s(i);
 
 ANALYZE ndistinct;
 
@@ -563,7 +563,7 @@ CREATE INDEX fdeps_abc_idx ON functional_dependencies (a, b, c);
 
 -- random data (no functional dependencies)
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT mod(i, 5), mod(i, 7), mod(i, 11), i FROM generate_series(1,1000) s(i);
+     SELECT mod(i, 5), mod(i, 7), mod(i, 11), i FROM generate_series(1,10000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -586,7 +586,7 @@ DROP STATISTICS func_deps_stat;
 
 -- now do the same thing, but with expressions
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,50000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -608,7 +608,7 @@ TRUNCATE functional_dependencies;
 DROP STATISTICS func_deps_stat;
 
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT mod(i,100), mod(i,50), mod(i,25), i FROM generate_series(1,5000) s(i);
+     SELECT mod(i,100), mod(i,50), mod(i,25), i FROM generate_series(1,50000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -884,7 +884,7 @@ INSERT INTO functional_dependencies_multi (a, b, c, d)
          mod(i,7),
          mod(i,11),
          mod(i,11)
-    FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 ANALYZE functional_dependencies_multi;
 
@@ -924,7 +924,7 @@ WITH (autovacuum_enabled = off);
 
 -- random data (no MCV list)
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT mod(i,37), mod(i,41), mod(i,43), mod(i,47) FROM generate_series(1,5000) s(i);
+     SELECT mod(i,37), mod(i,41), mod(i,43), mod(i,47) FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -946,7 +946,7 @@ DROP STATISTICS mcv_lists_stats;
 
 -- random data (no MCV list), but with expression
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,1000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,10000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -969,7 +969,7 @@ DROP STATISTICS mcv_lists_stats;
 
 INSERT INTO mcv_lists (a, b, c, ia, filler1)
      SELECT mod(i,100), mod(i,50), mod(i,25), array[mod(i,25)], i
-       FROM generate_series(1,5000) s(i);
+       FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1099,7 +1099,7 @@ TRUNCATE mcv_lists;
 DROP STATISTICS mcv_lists_stats;
 
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,1000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,10000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1195,7 +1195,7 @@ INSERT INTO mcv_lists (a, b, c, filler1)
          (CASE WHEN mod(i,50) = 1  THEN NULL ELSE mod(i,50) END),
          (CASE WHEN mod(i,25) = 1  THEN NULL ELSE mod(i,25) END),
          i
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1226,7 +1226,7 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (0, 1) AN
 
 -- test pg_mcv_list_items with a very simple (single item) MCV list
 TRUNCATE mcv_lists;
-INSERT INTO mcv_lists (a, b, c) SELECT 1, 2, 3 FROM generate_series(1,1000) s(i);
+INSERT INTO mcv_lists (a, b, c) SELECT 1, 2, 3 FROM generate_series(1,10000) s(i);
 ANALYZE mcv_lists;
 
 SELECT m.*
@@ -1245,7 +1245,7 @@ INSERT INTO mcv_lists (a, b, c, d)
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END),
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 0 END),
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END)
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1286,7 +1286,7 @@ INSERT INTO mcv_lists_uuid (a, b, c)
          md5(mod(i,100)::text)::uuid,
          md5(mod(i,50)::text)::uuid,
          md5(mod(i,25)::text)::uuid
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists_uuid;
 
@@ -1318,7 +1318,7 @@ INSERT INTO mcv_lists_arrays (a, b, c)
          ARRAY[md5((i/100)::text), md5((i/100-1)::text), md5((i/100+1)::text)],
          ARRAY[(i/100-1)::numeric/1000, (i/100)::numeric/1000, (i/100+1)::numeric/1000],
          ARRAY[(i/100-1), i/100, (i/100+1)]
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 CREATE STATISTICS mcv_lists_arrays_stats (mcv) ON a, b, c
   FROM mcv_lists_arrays;
@@ -1448,7 +1448,7 @@ INSERT INTO mcv_lists_multi (a, b, c, d)
          mod(i,5),
          mod(i,7),
          mod(i,7)
-    FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,50000) s(i);
 
 ANALYZE mcv_lists_multi;
 

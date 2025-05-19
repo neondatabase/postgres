@@ -7,7 +7,7 @@
 
 -- Regular index with included columns
 CREATE TABLE tbl_include_reg (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_reg SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_reg SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 CREATE INDEX tbl_include_reg_idx ON tbl_include_reg (c1, c2) INCLUDE (c3, c4);
 -- duplicate column is pretty pointless, but we allow it anyway
 CREATE INDEX ON tbl_include_reg (c1, c2) INCLUDE (c1, c3);
@@ -18,7 +18,7 @@ WHERE i.indrelid = 'tbl_include_reg'::regclass ORDER BY c.relname;
 
 -- Unique index and unique constraint
 CREATE TABLE tbl_include_unique1 (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_unique1 SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_unique1 SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 CREATE UNIQUE INDEX tbl_include_unique1_idx_unique ON tbl_include_unique1 using btree (c1, c2) INCLUDE (c3, c4);
 ALTER TABLE tbl_include_unique1 add UNIQUE USING INDEX tbl_include_unique1_idx_unique;
 ALTER TABLE tbl_include_unique1 add UNIQUE (c1, c2) INCLUDE (c3, c4);
@@ -28,20 +28,20 @@ WHERE i.indrelid = 'tbl_include_unique1'::regclass ORDER BY c.relname;
 
 -- Unique index and unique constraint. Both must fail.
 CREATE TABLE tbl_include_unique2 (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_unique2 SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_unique2 SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 CREATE UNIQUE INDEX tbl_include_unique2_idx_unique ON tbl_include_unique2 using btree (c1, c2) INCLUDE (c3, c4);
 ALTER TABLE tbl_include_unique2 add UNIQUE (c1, c2) INCLUDE (c3, c4);
 
 -- PK constraint
 CREATE TABLE tbl_include_pk (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_pk SELECT 1, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_pk SELECT 1, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 ALTER TABLE tbl_include_pk add PRIMARY KEY (c1, c2) INCLUDE (c3, c4);
 SELECT pg_get_indexdef(i.indexrelid)
 FROM pg_index i JOIN pg_class c ON i.indexrelid = c.oid
 WHERE i.indrelid = 'tbl_include_pk'::regclass ORDER BY c.relname;
 
 CREATE TABLE tbl_include_box (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_box SELECT 1, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_box SELECT 1, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 CREATE UNIQUE INDEX tbl_include_box_idx_unique ON tbl_include_box using btree (c1, c2) INCLUDE (c3, c4);
 ALTER TABLE tbl_include_box add PRIMARY KEY USING INDEX tbl_include_box_idx_unique;
 SELECT pg_get_indexdef(i.indexrelid)
@@ -50,7 +50,7 @@ WHERE i.indrelid = 'tbl_include_box'::regclass ORDER BY c.relname;
 
 -- PK constraint. Must fail.
 CREATE TABLE tbl_include_box_pk (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_include_box_pk SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl_include_box_pk SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 ALTER TABLE tbl_include_box_pk add PRIMARY KEY (c1, c2) INCLUDE (c3, c4);
 
 
@@ -62,7 +62,7 @@ CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
 SELECT indexrelid::regclass, indnatts, indnkeyatts, indisunique, indisprimary, indkey, indclass FROM pg_index WHERE indrelid = 'tbl'::regclass::oid;
 SELECT pg_get_constraintdef(oid), conname, conkey FROM pg_constraint WHERE conrelid = 'tbl'::regclass::oid;
 -- ensure that constraint works
-INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 DROP TABLE tbl;
 
 CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
@@ -70,8 +70,8 @@ CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
 SELECT indexrelid::regclass, indnatts, indnkeyatts, indisunique, indisprimary, indkey, indclass FROM pg_index WHERE indrelid = 'tbl'::regclass::oid;
 SELECT pg_get_constraintdef(oid), conname, conkey FROM pg_constraint WHERE conrelid = 'tbl'::regclass::oid;
 -- ensure that constraint works
-INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
-INSERT INTO tbl SELECT 1, NULL, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
+INSERT INTO tbl SELECT 1, NULL, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 INSERT INTO tbl SELECT x, 2*x, NULL, NULL FROM generate_series(1,300) AS x;
 explain (costs off)
 select * from tbl where (c1,c2,c3) < (2,5,1);
@@ -89,7 +89,7 @@ CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
 SELECT indexrelid::regclass, indnatts, indnkeyatts, indisunique, indisprimary, indkey, indclass FROM pg_index WHERE indrelid = 'tbl'::regclass::oid;
 SELECT pg_get_constraintdef(oid), conname, conkey FROM pg_constraint WHERE conrelid = 'tbl'::regclass::oid;
 -- ensure that constraint works
-INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
+INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
 DROP TABLE tbl;
 
 CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
@@ -97,9 +97,9 @@ CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
 SELECT indexrelid::regclass, indnatts, indnkeyatts, indisunique, indisprimary, indkey, indclass FROM pg_index WHERE indrelid = 'tbl'::regclass::oid;
 SELECT pg_get_constraintdef(oid), conname, conkey FROM pg_constraint WHERE conrelid = 'tbl'::regclass::oid;
 -- ensure that constraint works
-INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
-INSERT INTO tbl SELECT 1, NULL, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
-INSERT INTO tbl SELECT x, 2*x, NULL, NULL FROM generate_series(1,10) AS x;
+INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
+INSERT INTO tbl SELECT 1, NULL, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
+INSERT INTO tbl SELECT x, 2*x, NULL, NULL FROM generate_series(1,100) AS x;
 DROP TABLE tbl;
 
 CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
@@ -107,8 +107,8 @@ CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box,
 SELECT indexrelid::regclass, indnatts, indnkeyatts, indisunique, indisprimary, indkey, indclass FROM pg_index WHERE indrelid = 'tbl'::regclass::oid;
 SELECT pg_get_constraintdef(oid), conname, conkey FROM pg_constraint WHERE conrelid = 'tbl'::regclass::oid;
 -- ensure that constraint works
-INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,10) AS x;
-INSERT INTO tbl SELECT x, 2*x, NULL, NULL FROM generate_series(1,10) AS x;
+INSERT INTO tbl SELECT 1, 2, 3*x, box('4,4,4,4') FROM generate_series(1,100) AS x;
+INSERT INTO tbl SELECT x, 2*x, NULL, NULL FROM generate_series(1,100) AS x;
 DROP TABLE tbl;
 
 /*
@@ -162,7 +162,7 @@ DROP TABLE tbl;
  * 4. CREATE INDEX CONCURRENTLY
  */
 CREATE TABLE tbl (c1 int,c2 int, c3 int, c4 box, UNIQUE(c1, c2) INCLUDE(c3,c4));
-INSERT INTO tbl SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,1000) AS x;
+INSERT INTO tbl SELECT x, 2*x, 3*x, box('4,4,4,4') FROM generate_series(1,10000) AS x;
 CREATE UNIQUE INDEX CONCURRENTLY on tbl (c1, c2) INCLUDE (c3, c4);
 SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl' ORDER BY indexname;
 DROP TABLE tbl;
