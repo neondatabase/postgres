@@ -130,7 +130,7 @@ COPY x from stdin WHERE a = max(x.b);
 
 COPY x from stdin WHERE a IN (SELECT 1 FROM x);
 
-COPY x from stdin WHERE a IN (generate_series(1,50000));
+COPY x from stdin WHERE a IN (generate_series(1,500000));
 
 COPY x from stdin WHERE a = row_number() over(b);
 

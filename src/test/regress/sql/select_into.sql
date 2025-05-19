@@ -28,7 +28,7 @@ GRANT ALL ON SCHEMA selinto_schema TO public;
 SET SESSION AUTHORIZATION regress_selinto_user;
 -- WITH DATA, passes.
 CREATE TABLE selinto_schema.tbl_withdata1 (a)
-  AS SELECT generate_series(1,30000) WITH DATA;
+  AS SELECT generate_series(1,3000000) WITH DATA;
 INSERT INTO selinto_schema.tbl_withdata1 VALUES (4);
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE TABLE selinto_schema.tbl_withdata2 (a) AS

@@ -93,7 +93,7 @@ SELECT array_to_json(ARRAY [jsonb '{"a":1}', jsonb '{"b":[2,3]}']);
 
 CREATE TEMP TABLE rows AS
 SELECT x, 'txt' || x as y
-FROM generate_series(1,30000) AS x;
+FROM generate_series(1,300000) AS x;
 
 analyze rows;
 

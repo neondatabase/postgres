@@ -104,7 +104,7 @@ SELECT v,h,i,c FROM ctv_data
  \crosstabview 2 h 4
 
 -- error: too many columns
-SELECT a,a,1 FROM generate_series(1,3000000) AS a
+SELECT a,a,1 FROM generate_series(1,300000) AS a
  \crosstabview
 
 -- error: only one column

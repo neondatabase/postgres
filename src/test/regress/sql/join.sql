@@ -589,7 +589,7 @@ reset enable_memoize;
 --
 
 create temp table tt3(f1 int, f2 text);
-insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,100000000) x;
+insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,10000000000) x;
 create index tt3i on tt3(f1);
 analyze tt3;
 

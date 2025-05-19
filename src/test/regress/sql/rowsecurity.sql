@@ -1791,7 +1791,7 @@ ALTER TABLE t ENABLE ROW LEVEL SECURITY;
 
 SAVEPOINT q;
 CREATE RULE "_RETURN" AS ON SELECT TO t DO INSTEAD
-  SELECT * FROM generate_series(1,500) t0(c); -- fails due to row-level security enabled
+  SELECT * FROM generate_series(1,50000) t0(c); -- fails due to row-level security enabled
 ROLLBACK TO q;
 
 ALTER TABLE t DISABLE ROW LEVEL SECURITY;

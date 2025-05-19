@@ -835,7 +835,7 @@ DROP TABLE base_tbl CASCADE;
 -- views with updatable and non-updatable columns
 
 CREATE TABLE base_tbl(a float);
-INSERT INTO base_tbl SELECT i/10.0 FROM generate_series(1,1000) g(i);
+INSERT INTO base_tbl SELECT i/10.0 FROM generate_series(1,100000) g(i);
 
 CREATE VIEW rw_view1 AS
   SELECT ctid, sin(a) s, a, cos(a) c

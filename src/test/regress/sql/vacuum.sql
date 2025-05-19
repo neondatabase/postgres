@@ -106,7 +106,7 @@ VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
 -- PARALLEL option
 CREATE TABLE pvactst (i INT, a INT[], p POINT) with (autovacuum_enabled = off);
-INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,1000000) i;
+INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,100000000) i;
 CREATE INDEX btree_pvactst ON pvactst USING btree (i);
 CREATE INDEX hash_pvactst ON pvactst USING hash (i);
 CREATE INDEX brin_pvactst ON pvactst USING brin (i);

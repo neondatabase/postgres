@@ -74,7 +74,7 @@ SELECT var_pop('nan'::numeric), var_samp('nan'::numeric);
 SELECT stddev_pop('nan'::numeric), stddev_samp('nan'::numeric);
 
 -- verify correct results for null and NaN inputs
-select sum(null::int4) from generate_series(1,3000);
+select sum(null::int4) from generate_series(1,300000);
 select sum(null::int8) from generate_series(1,30);
 select sum(null::numeric) from generate_series(1,30);
 select sum(null::float8) from generate_series(1,30);

@@ -39,7 +39,7 @@ insert into spgist_box_tbl(b)
 select box(point(i,j),point(i+s,j+s))
   from generate_series(1,100,5) i,
        generate_series(1,100,5) j,
-       generate_series(1,100000) s;
+       generate_series(1,1000000) s;
 create index spgist_box_idx on spgist_box_tbl using spgist (b);
 
 select count(*)

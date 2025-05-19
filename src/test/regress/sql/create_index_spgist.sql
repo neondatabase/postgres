@@ -6,7 +6,7 @@ CREATE TABLE quad_point_tbl AS
     SELECT point(unique1,unique2) AS p FROM tenk1;
 
 INSERT INTO quad_point_tbl
-    SELECT '(333.0,400.0)'::point FROM generate_series(1,1000000);
+    SELECT '(333.0,400.0)'::point FROM generate_series(1,10000000);
 
 INSERT INTO quad_point_tbl VALUES (NULL), (NULL), (NULL);
 

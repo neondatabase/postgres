@@ -133,9 +133,9 @@ select unique1, unique2, generate_series(1,1000000)
 
 -- use of random() is to keep planner from folding the expressions together
 explain (verbose, costs off)
-select generate_series(0,2) as s1, generate_series((random()*.1)::int,2) as s2;
+select generate_series(0,200) as s1, generate_series((random()*.1)::int,200) as s2;
 
-select generate_series(0,2) as s1, generate_series((random()*.1)::int,2) as s2;
+select generate_series(0,200) as s1, generate_series((random()*.1)::int,200) as s2;
 
 explain (verbose, costs off)
 select generate_series(0,2) as s1, generate_series((random()*.1)::int,2) as s2

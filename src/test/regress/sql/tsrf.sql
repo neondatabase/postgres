@@ -9,7 +9,7 @@ SELECT generate_series(1, 3);
 SELECT generate_series(1, 3), generate_series(3,5);
 
 -- parallel iteration, different number of rows
-SELECT generate_series(1, 20000), generate_series(1,40000);
+SELECT generate_series(1, 200000), generate_series(1,400000);
 
 -- srf, with SRF argument
 SELECT generate_series(1, generate_series(1, 3));

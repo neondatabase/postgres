@@ -13,7 +13,7 @@ SELECT ctid FROM tidrangescan WHERE ctid > '(9, 0)';
 SELECT ctid FROM tidrangescan WHERE ctid > '(9, 0)';
 
 -- insert enough tuples to fill at least two pages
-INSERT INTO tidrangescan SELECT i,repeat('x', 100) FROM generate_series(1,2000000) AS s(i);
+INSERT INTO tidrangescan SELECT i,repeat('x', 100) FROM generate_series(1,20000000) AS s(i);
 
 -- remove all tuples after the 10th tuple on each page.  Trying to ensure
 -- we get the same layout with all CPU architectures and smaller than standard
