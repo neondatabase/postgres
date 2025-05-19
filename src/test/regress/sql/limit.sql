@@ -118,30 +118,30 @@ select unique1, unique2, nextval('testseq')
 select currval('testseq');
 
 explain (verbose, costs off)
-select unique1, unique2, generate_series(1,100)
+select unique1, unique2, generate_series(1,10000)
   from tenk1 order by unique2 limit 7;
 
-select unique1, unique2, generate_series(1,100)
+select unique1, unique2, generate_series(1,10000)
   from tenk1 order by unique2 limit 7;
 
 explain (verbose, costs off)
-select unique1, unique2, generate_series(1,100)
+select unique1, unique2, generate_series(1,10000)
   from tenk1 order by tenthous limit 7;
 
-select unique1, unique2, generate_series(1,100)
+select unique1, unique2, generate_series(1,10000)
   from tenk1 order by tenthous limit 7;
 
 -- use of random() is to keep planner from folding the expressions together
 explain (verbose, costs off)
-select generate_series(0,20) as s1, generate_series((random()*.1)::int,20) as s2;
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2;
 
-select generate_series(0,20) as s1, generate_series((random()*.1)::int,20) as s2;
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2;
 
 explain (verbose, costs off)
-select generate_series(0,20) as s1, generate_series((random()*.1)::int,20) as s2
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2
 order by s2 desc;
 
-select generate_series(0,20) as s1, generate_series((random()*.1)::int,20) as s2
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2
 order by s2 desc;
 
 -- test for failure to set all aggregates' aggtranstype

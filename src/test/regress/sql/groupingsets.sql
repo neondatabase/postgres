@@ -145,11 +145,11 @@ select a, d, grouping(a,b,c)
 -- even if they are equal()
 explain (costs off)
 select g as alias1, g as alias2
-  from generate_series(1,300) g
+  from generate_series(1,30000) g
  group by alias1, rollup(alias2);
 
 select g as alias1, g as alias2
-  from generate_series(1,300) g
+  from generate_series(1,30000) g
  group by alias1, rollup(alias2);
 
 -- check that pulled-up subquery outputs still go to null when appropriate
