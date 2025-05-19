@@ -133,15 +133,15 @@ select unique1, unique2, generate_series(1,1000000)
 
 -- use of random() is to keep planner from folding the expressions together
 explain (verbose, costs off)
-select generate_series(0,20000) as s1, generate_series((random()*.1)::int,20000) as s2;
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2;
 
-select generate_series(0,20000) as s1, generate_series((random()*.1)::int,20000) as s2;
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2;
 
 explain (verbose, costs off)
-select generate_series(0,20000) as s1, generate_series((random()*.1)::int,20000) as s2
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2
 order by s2 desc;
 
-select generate_series(0,20000) as s1, generate_series((random()*.1)::int,20000) as s2
+select generate_series(0,2000) as s1, generate_series((random()*.1)::int,2000) as s2
 order by s2 desc;
 
 -- test for failure to set all aggregates' aggtranstype

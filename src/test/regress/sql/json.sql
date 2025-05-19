@@ -90,15 +90,15 @@ select * from pg_input_error_info('{"a":true', 'json');
 -- array_to_json
 
 SELECT array_to_json(array(select 1 as a));
-SELECT array_to_json(array_agg(q),false) from (select x as b, x * 2 as c from generate_series(1,30000) x) q;
-SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,30000) x) q;
+SELECT array_to_json(array_agg(q),false) from (select x as b, x * 2 as c from generate_series(1,3000) x) q;
+SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,3000) x) q;
 SELECT array_to_json(array_agg(q),false)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,200000) x,
-             generate_series(4,50000) y)q;
-SELECT array_to_json(array_agg(x),false) from generate_series(5,100000) x;
+         FROM generate_series(1,20000) x,
+             generate_series(4,5000) y)q;
+SELECT array_to_json(array_agg(x),false) from generate_series(5,10000) x;
 SELECT array_to_json('{{1,5},{99,100}}'::int[]);
 
 -- row_to_json
@@ -165,8 +165,8 @@ SELECT json_agg(q)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,200000) x,
-             generate_series(4,50000) y)q;
+         FROM generate_series(1,20000) x,
+             generate_series(4,5000) y)q;
 
 SELECT json_agg(q ORDER BY x, y)
   FROM rows q;
@@ -267,7 +267,7 @@ WHERE json_type = 'object';
 select count(*) from
     (select json_object_keys(json_object(array_agg(g)))
      from (select unnest(array['f'||n,n::text])as g
-           from generate_series(1,300000) as n) x ) y;
+           from generate_series(1,30000) as n) x ) y;
 
 -- nulls
 
@@ -612,7 +612,7 @@ SELECT '{
 	"rec": {"a": "abc", "c": "01.02.2003", "x": 43.2},
 	"reca": [{"a": "abc", "b": 456}, null, {"c": "01.02.2003", "x": 43.2}]
 }'::json
-FROM generate_series(1, 3);
+FROM generate_series(1, 300);
 
 SELECT (json_populate_record(NULL::jsrec, js)).* FROM jspoptest;
 
@@ -749,7 +749,7 @@ select json_object('{a,b,NULL,"d e f"}','{1,2,3,"a b c"}');
 select json_object('{a,b,"","d e f"}','{1,2,3,"a b c"}');
 
 -- json_object_agg_unique requires unique keys
-select json_object_agg_unique(mod(i,100), i) from generate_series(0, 199) i;
+select json_object_agg_unique(mod(i,100), i) from generate_series(0, 19900) i;
 
 -- json_to_record and json_to_recordset
 

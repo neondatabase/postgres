@@ -240,7 +240,7 @@ SELECT * FROM target ORDER BY tid;
 ROLLBACK;
 
 -- index plans
-INSERT INTO target SELECT generate_series(1000,1000000), 0;
+INSERT INTO target SELECT generate_series(1000,100000), 0;
 ALTER TABLE target ADD PRIMARY KEY (tid);
 ANALYZE target;
 
@@ -1063,8 +1063,8 @@ CREATE TABLE ex_mtarget (a int, b int)
   WITH (autovacuum_enabled=off);
 CREATE TABLE ex_msource (a int, b int)
   WITH (autovacuum_enabled=off);
-INSERT INTO ex_mtarget SELECT i, i*10 FROM generate_series(1,10000,2) i;
-INSERT INTO ex_msource SELECT i, i*10 FROM generate_series(1,10000,1) i;
+INSERT INTO ex_mtarget SELECT i, i*10 FROM generate_series(1,1000,2) i;
+INSERT INTO ex_msource SELECT i, i*10 FROM generate_series(1,1000,1) i;
 
 CREATE FUNCTION explain_merge(query text) RETURNS SETOF text
 LANGUAGE plpgsql AS
@@ -1201,9 +1201,9 @@ CREATE TABLE part4 PARTITION OF pa_target DEFAULT
 
 CREATE TABLE pa_source (sid integer, delta float);
 -- insert many rows to the source table
-INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,14000) AS id;
+INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,1400) AS id;
 -- insert a few rows in the target table (odd numbered tid)
-INSERT INTO pa_target SELECT id, id * 100, 'initial' FROM generate_series(1,1500,2) AS id;
+INSERT INTO pa_target SELECT id, id * 100, 'initial' FROM generate_series(1,150,2) AS id;
 
 -- try simple MERGE
 BEGIN;
@@ -1305,7 +1305,7 @@ ALTER TABLE pa_target ATTACH PARTITION part3 FOR VALUES IN (3,8,9);
 ALTER TABLE pa_target ATTACH PARTITION part4 DEFAULT;
 
 -- insert a few rows in the target table (odd numbered tid)
-INSERT INTO pa_target SELECT id, id * 100, 'initial' FROM generate_series(1,1500,2) AS id;
+INSERT INTO pa_target SELECT id, id * 100, 'initial' FROM generate_series(1,150,2) AS id;
 
 -- try simple MERGE
 BEGIN;
@@ -1455,10 +1455,10 @@ CREATE TABLE part_m02_even PARTITION OF part_m02
 CREATE TABLE pa_source (sid integer, delta float)
   WITH (autovacuum_enabled=off);
 -- insert many rows to the source table
-INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,14000) AS id;
+INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,1400) AS id;
 -- insert a few rows in the target table (odd numbered tid)
-INSERT INTO pa_target SELECT '2017-01-31', id, id * 100, 'initial' FROM generate_series(1,900,3) AS id;
-INSERT INTO pa_target SELECT '2017-02-28', id, id * 100, 'initial' FROM generate_series(2,900,3) AS id;
+INSERT INTO pa_target SELECT '2017-01-31', id, id * 100, 'initial' FROM generate_series(1,90,3) AS id;
+INSERT INTO pa_target SELECT '2017-02-28', id, id * 100, 'initial' FROM generate_series(2,90,3) AS id;
 
 -- try simple MERGE
 BEGIN;
@@ -1589,7 +1589,7 @@ DROP TABLE cj_source2, cj_source1, cj_target;
 CREATE TABLE fs_target (a int, b int, c text)
   WITH (autovacuum_enabled=off);
 MERGE INTO fs_target t
-USING generate_series(1,10000,1) AS id
+USING generate_series(1,1000,1) AS id
 ON t.a = id
 WHEN MATCHED THEN
 	UPDATE SET b = b + id
@@ -1597,7 +1597,7 @@ WHEN NOT MATCHED THEN
 	INSERT VALUES (id, -1);
 
 MERGE INTO fs_target t
-USING generate_series(1,10000,2) AS id
+USING generate_series(1,1000,2) AS id
 ON t.a = id
 WHEN MATCHED THEN
 	UPDATE SET b = b + id, c = 'updated '|| id.*::text

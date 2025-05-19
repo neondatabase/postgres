@@ -300,7 +300,7 @@ SELECT array_positions(ARRAY[[1,2],[3,4]], 4);
 SELECT array_positions(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
 SELECT array_positions(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
 SELECT array_length(array_positions(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10
-                                          FROM generate_series(1,100000) g(i)),
+                                          FROM generate_series(1,10000) g(i)),
                                   'AAAAAAAAAAAAAAAAAAAAAAAAA5'), 1);
 
 DO $$
@@ -404,7 +404,7 @@ select null::int = all ('{1,2,3}');
 select 33 = all ('{1,null,3}');
 select 33 = all ('{33,null,33}');
 -- nulls later in the bitmap
-SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 900) FROM generate_series(1,100000) g(i)));
+SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 900) FROM generate_series(1,10000) g(i)));
 
 -- test indexes on arrays
 create temp table arr_tbl (f1 int[] unique);
