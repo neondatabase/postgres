@@ -273,7 +273,7 @@ FROM tenk1 WHERE unique1 < 10;
 
 CREATE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following) as sum_rows
-	FROM generate_series(1, 10) i;
+	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 
@@ -281,7 +281,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude current row) as sum_rows FROM generate_series(1, 10) i;
+	exclude current row) as sum_rows	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 
@@ -289,7 +289,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude group) as sum_rows FROM generate_series(1, 10) i;
+	exclude group) as sum_rows	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 
@@ -297,7 +297,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude ties) as sum_rows FROM generate_series(1, 10) i;
+	exclude ties) as sum_rows	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 
@@ -305,14 +305,14 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude no others) as sum_rows FROM generate_series(1, 10) i;
+	exclude no others) as sum_rows	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 
 SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
-	SELECT i, sum(i) over (order by i groups between 1 preceding and 1 following) as sum_rows FROM generate_series(1, 10) i;
+	SELECT i, sum(i) over (order by i groups between 1 preceding and 1 following) as sum_rows	FROM generate_series(1, 100) i;
 
 SELECT * FROM v_window;
 

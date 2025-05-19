@@ -30,7 +30,7 @@ BEGIN
             IF EXISTS(SELECT * FROM clean_aborted_self WHERE key > 0 AND key < 100) THEN
 	        RAISE data_corrupted USING MESSAGE = 'these rows should not exist';
             END IF;
-            INSERT INTO clean_aborted_self SELECT g.i, 'rolling back in a sec' FROM generate_series(1, 100) g(i);
+            INSERT INTO clean_aborted_self SELECT g.i, 'rolling back in a sec' FROM generate_series(1, 1000) g(i);
 	    -- just some error that's not normally thrown
 	    RAISE reading_sql_data_not_permitted USING MESSAGE = 'round and round again';
 	EXCEPTION WHEN reading_sql_data_not_permitted THEN END;

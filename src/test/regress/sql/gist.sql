@@ -20,7 +20,7 @@ create index gist_pointidx5 on gist_point_tbl using gist(p) with (fillfactor=101
 
 -- Insert enough data to create a tree that's a couple of levels deep.
 insert into gist_point_tbl (id, p)
-select g,        point(g*10, g*10) from generate_series(1, 10000) g;
+select g,        point(g*10, g*10) from generate_series(1, 100000) g;
 
 insert into gist_point_tbl (id, p)
 select g+100000, point(g*10+1, g*10+1) from generate_series(1, 10000) g;

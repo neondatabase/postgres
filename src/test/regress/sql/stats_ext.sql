@@ -83,7 +83,7 @@ SELECT stxname FROM pg_statistic_ext WHERE stxname LIKE 'ab1%';
 -- Ensure things work sanely with SET STATISTICS 0
 CREATE TABLE ab1 (a INTEGER, b INTEGER);
 ALTER TABLE ab1 ALTER a SET STATISTICS 0;
-INSERT INTO ab1 SELECT a, a%23 FROM generate_series(1, 1000) a;
+INSERT INTO ab1 SELECT a, a%23 FROM generate_series(1, 10000) a;
 CREATE STATISTICS ab1_a_b_stats ON a, b FROM ab1;
 ANALYZE ab1;
 ALTER TABLE ab1 ALTER a SET STATISTICS -1;

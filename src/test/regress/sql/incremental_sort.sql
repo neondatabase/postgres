@@ -119,7 +119,7 @@ end;
 $$;
 
 -- A single large group tested around each mode transition point.
-insert into t(a, b) select i/100 + 1, i + 1 from generate_series(0, 999) n(i);
+insert into t(a, b) select i/100 + 1, i + 1 from generate_series(0, 9999) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 31;
 select * from (select * from t order by a) s order by a, b limit 31;

@@ -9,7 +9,7 @@ SELECT num_nonnulls(NULL::text, NULL::int);
 SELECT num_nonnulls(1, 2, NULL::text, NULL::point, '', int8 '9', 1.0 / NULL);
 SELECT num_nonnulls(VARIADIC '{1,2,NULL,3}'::int[]);
 SELECT num_nonnulls(VARIADIC '{"1","2","3","4"}'::text[]);
-SELECT num_nonnulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM generate_series(1, 100) i));
+SELECT num_nonnulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM generate_series(1, 1000) i));
 
 SELECT num_nulls(NULL);
 SELECT num_nulls('1');

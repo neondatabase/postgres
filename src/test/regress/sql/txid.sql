@@ -31,12 +31,12 @@ select  txid_snapshot_xmin(snap),
 from snapshot_test order by nr;
 
 select id, txid_visible_in_snapshot(id, snap)
-from snapshot_test, generate_series(11, 21) id
+from snapshot_test, generate_series(11, 210) id
 where nr = 2;
 
 -- test bsearch
 select id, txid_visible_in_snapshot(id, snap)
-from snapshot_test, generate_series(90, 160) id
+from snapshot_test, generate_series(90, 1600) id
 where nr = 4;
 
 -- test current values also

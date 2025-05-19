@@ -534,7 +534,7 @@ SELECT * FROM rec1;    -- fail, mutual recursion via s.b. views
 --
 SET SESSION AUTHORIZATION regress_rls_alice;
 CREATE TABLE s1 (a int, b text);
-INSERT INTO s1 (SELECT x, md5(x::text) FROM generate_series(-10,10) x);
+INSERT INTO s1 (SELECT x, md5(x::text) FROM generate_series(-10,100) x);
 
 CREATE TABLE s2 (x int, y text);
 INSERT INTO s2 (SELECT x, md5(x::text) FROM generate_series(-6,6) x);

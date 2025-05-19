@@ -14,7 +14,7 @@ select a,ord from unnest(array['a','b']) with ordinality as z(a,ord);
 select * from unnest(array['a','b']) with ordinality as z(a,ord);
 select a,ord from unnest(array[1.0::float8]) with ordinality as z(a,ord);
 select * from unnest(array[1.0::float8]) with ordinality as z(a,ord);
-select row_to_json(s.*) from generate_series(11,14) with ordinality s;
+select row_to_json(s.*) from generate_series(11,140) with ordinality s;
 -- ordinality vs. views
 create temporary view vw_ord as select * from (values (1)) v(n) join rngfunct(1) with ordinality as z(a,b,ord) on (n=ord);
 select * from vw_ord;
@@ -32,7 +32,7 @@ drop view vw_ord;
 select * from unnest(array[10,20],array['foo','bar'],array[1.0]);
 select * from unnest(array[10,20],array['foo','bar'],array[1.0]) with ordinality as z(a,b,c,ord);
 select * from rows from(unnest(array[10,20],array['foo','bar'],array[1.0])) with ordinality as z(a,b,c,ord);
-select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(101,102)) with ordinality as z(a,b,c,ord);
+select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(101,1020)) with ordinality as z(a,b,c,ord);
 create temporary view vw_ord as select * from unnest(array[10,20],array['foo','bar'],array[1.0]) as z(a,b,c);
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
@@ -41,14 +41,14 @@ create temporary view vw_ord as select * from rows from(unnest(array[10,20],arra
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;
-create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,2)) as z(a,b,c);
+create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,20)) as z(a,b,c);
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;
 
 -- ordinality and multiple functions vs. rewind and reverse scan
 begin;
-declare rf_cur scroll cursor for select * from rows from(generate_series(1,5),generate_series(1,2)) with ordinality as g(i,j,o);
+declare rf_cur scroll cursor for select * from rows from(generate_series(1,50),generate_series(1,20)) with ordinality as g(i,j,o);
 fetch all from rf_cur;
 fetch backward all from rf_cur;
 fetch all from rf_cur;
@@ -252,8 +252,8 @@ SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN rngfunc_mat(11,13) WITH ORDINA
 SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false);
 SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN ROWS FROM( rngfunc_sql(11,13), rngfunc_mat(11,13) ) WITH ORDINALITY AS f(i1,s1,i2,s2,o) ON (r+i1+i2)<100;
 
-SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN generate_series(11,13) f(i) ON (r+i)<100;
-SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN generate_series(11,13) WITH ORDINALITY AS f(i,o) ON (r+i)<100;
+SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN generate_series(11,130) f(i) ON (r+i)<100;
+SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN generate_series(11,130) WITH ORDINALITY AS f(i,o) ON (r+i)<100;
 
 SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN unnest(array[10,20,30]) f(i) ON (r+i)<100;
 SELECT * FROM (VALUES (1),(2),(3)) v(r) LEFT JOIN unnest(array[10,20,30]) WITH ORDINALITY AS f(i,o) ON (r+i)<100;
@@ -296,7 +296,7 @@ SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,fals
 SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(10+r,13), rngfunc_mat(10+r,13) );
 
 SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false);
-SELECT * FROM generate_series(1,2) r1, generate_series(r1,3) r2, ROWS FROM( rngfunc_sql(10+r1,13), rngfunc_mat(10+r2,13) );
+SELECT * FROM generate_series(1,20) r1, generate_series(r1,30) r2, ROWS FROM( rngfunc_sql(10+r1,13), rngfunc_mat(10+r2,13) );
 
 SELECT * FROM (VALUES (1),(2),(3)) v(r), generate_series(10+r,20-r) f(i);
 SELECT * FROM (VALUES (1),(2),(3)) v(r), generate_series(10+r,20-r) WITH ORDINALITY AS f(i,o);

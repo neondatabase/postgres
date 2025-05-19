@@ -360,7 +360,7 @@ create event trigger no_rewrite_allowed on table_rewrite
 
 create table rewriteme (id serial primary key, foo float, bar timestamptz);
 insert into rewriteme
-     select x * 1.001 from generate_series(1, 500) as t(x);
+     select x * 1.001 from generate_series(1, 5000) as t(x);
 alter table rewriteme alter column foo type numeric;
 alter table rewriteme add column baz int default 0;
 
