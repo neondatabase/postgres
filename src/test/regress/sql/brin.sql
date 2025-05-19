@@ -461,7 +461,7 @@ DROP TABLE brintest_2;
 
 -- test brin cost estimates behave sanely based on correlation of values
 CREATE TABLE brin_test (a INT, b INT);
-INSERT INTO brin_test SELECT x/100,x%100 FROM generate_series(1,10000) x(x);
+INSERT INTO brin_test SELECT x/100,x%100 FROM generate_series(1,100000) x(x);
 CREATE INDEX brin_test_a_idx ON brin_test USING brin (a) WITH (pages_per_range = 2);
 CREATE INDEX brin_test_b_idx ON brin_test USING brin (b) WITH (pages_per_range = 2);
 VACUUM ANALYZE brin_test;
@@ -476,7 +476,7 @@ CREATE TABLE brintest_3 (a text, b text, c text, d text);
 
 -- long random strings (~2000 chars each, so ~6kB for min/max on two
 -- columns) to trigger toasting
-WITH rand_value AS (SELECT string_agg(fipshash(i::text),'') AS val FROM generate_series(1,60) s(i))
+WITH rand_value AS (SELECT string_agg(fipshash(i::text),'') AS val FROM generate_series(1,600) s(i))
 INSERT INTO brintest_3
 SELECT val, val, val, val FROM rand_value;
 
@@ -495,7 +495,7 @@ VACUUM brintest_3;
 -- retry insert with a different random-looking (but deterministic) value
 -- the value is different, and so should replace either min or max in the
 -- brin summary
-WITH rand_value AS (SELECT string_agg(fipshash((-i)::text),'') AS val FROM generate_series(1,60) s(i))
+WITH rand_value AS (SELECT string_agg(fipshash((-i)::text),'') AS val FROM generate_series(1,600) s(i))
 INSERT INTO brintest_3
 SELECT val, val, val, val FROM rand_value;
 

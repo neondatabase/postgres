@@ -74,7 +74,7 @@ CREATE TABLE default_expr_agg (a int DEFAULT (avg(1)));
 -- invalid use of subquery
 CREATE TABLE default_expr_agg (a int DEFAULT (select 1));
 -- invalid use of set-returning function
-CREATE TABLE default_expr_agg (a int DEFAULT (generate_series(1,3)));
+CREATE TABLE default_expr_agg (a int DEFAULT (generate_series(1,30)));
 
 -- Verify that subtransaction rollback restores rd_createSubid.
 BEGIN;

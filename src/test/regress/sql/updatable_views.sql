@@ -203,17 +203,17 @@ MERGE INTO rw_view1 t USING (VALUES (5, 'X')) AS v(a,b) ON t.a = v.a
 
 EXPLAIN (costs off)
 MERGE INTO rw_view1 t
-  USING (SELECT * FROM generate_series(1,5)) AS s(a) ON t.a = s.a
+  USING (SELECT * FROM generate_series(1,50)) AS s(a) ON t.a = s.a
   WHEN MATCHED THEN UPDATE SET b = 'Updated';
 
 EXPLAIN (costs off)
 MERGE INTO rw_view1 t
-  USING (SELECT * FROM generate_series(1,5)) AS s(a) ON t.a = s.a
+  USING (SELECT * FROM generate_series(1,50)) AS s(a) ON t.a = s.a
   WHEN NOT MATCHED BY SOURCE THEN DELETE;
 
 EXPLAIN (costs off)
 MERGE INTO rw_view1 t
-  USING (SELECT * FROM generate_series(1,5)) AS s(a) ON t.a = s.a
+  USING (SELECT * FROM generate_series(1,50)) AS s(a) ON t.a = s.a
   WHEN NOT MATCHED THEN INSERT (a) VALUES (s.a);
 
 -- it's still updatable if we add a DO ALSO rule

@@ -216,7 +216,7 @@ explain (costs off)
 select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
 
 create table bmscantest (a int, t text);
-insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,100000) r;
+insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,1000000) r;
 create index i_bmtest ON bmscantest(a);
 select count(*) from bmscantest where a>1;
 

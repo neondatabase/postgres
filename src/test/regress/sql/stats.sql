@@ -547,7 +547,7 @@ SELECT pg_stat_have_stats('database', :dboid, 1);
 SELECT pg_stat_have_stats('database', :dboid, 0);
 
 -- pg_stat_have_stats returns true for committed index creation
-CREATE table stats_test_tab1 as select generate_series(1,10) a;
+CREATE table stats_test_tab1 as select generate_series(1,100) a;
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 SET enable_seqscan TO off;
@@ -613,7 +613,7 @@ SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_io
   WHERE object = 'relation' \gset io_sum_shared_before_
 CREATE TABLE test_io_shared(a int);
-INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
+INSERT INTO test_io_shared SELECT i FROM generate_series(1,1000)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_shared_after_extends
   FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
@@ -752,7 +752,7 @@ RESET wal_skip_threshold;
 -- BufferAccessStrategy, are tracked in pg_stat_io.
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_before
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
-CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,100)i;
+CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,1000)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_after
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
@@ -859,7 +859,7 @@ CREATE TABLE table_fillfactor (
 ) with (fillfactor=10, autovacuum_enabled=off);
 
 INSERT INTO table_fillfactor
-SELECT 'x' FROM generate_series(1,1000);
+SELECT 'x' FROM generate_series(1,10000);
 
 SELECT * FROM check_estimated_rows('SELECT * FROM table_fillfactor');
 

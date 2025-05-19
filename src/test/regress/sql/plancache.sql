@@ -147,7 +147,7 @@ create function cachebug() returns void as $$
 declare r int;
 begin
   drop table if exists temptable cascade;
-  create temp table temptable as select * from generate_series(1,3) as f1;
+  create temp table temptable as select * from generate_series(1,30) as f1;
   create temp view vv as select * from temptable;
   for r in select * from vv loop
     raise notice '%', r;
@@ -181,7 +181,7 @@ deallocate pstmt_def_insert;
 -- Test plan_cache_mode
 
 create table test_mode (a int);
-insert into test_mode select 1 from generate_series(1,1000) union all select 2;
+insert into test_mode select 1 from generate_series(1,10000) union all select 2;
 create index on test_mode (a);
 analyze test_mode;
 

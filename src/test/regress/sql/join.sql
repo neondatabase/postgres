@@ -698,7 +698,7 @@ reset enable_nestloop;
 --
 
 create temp table tbl_ra(a int unique, b int);
-insert into tbl_ra select i, i%100 from generate_series(1,1000)i;
+insert into tbl_ra select i, i%100 from generate_series(1,10000)i;
 create index on tbl_ra (b);
 analyze tbl_ra;
 
