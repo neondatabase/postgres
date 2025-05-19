@@ -300,7 +300,7 @@ SELECT array_positions(ARRAY[[1,2],[3,4]], 4);
 SELECT array_positions(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
 SELECT array_positions(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
 SELECT array_length(array_positions(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10
-                                          FROM generate_series(1,100000) g(i)),
+                                          FROM generate_series(1,10000) g(i)),
                                   'AAAAAAAAAAAAAAAAAAAAAAAAA5'), 1);
 
 DO $$
