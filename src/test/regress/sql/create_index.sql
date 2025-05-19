@@ -240,8 +240,8 @@ SELECT circle_center(f1), round(radius(f1)) as radius FROM gcircle_tbl ORDER BY 
 SELECT circle_center(f1), round(radius(f1)) as radius FROM gcircle_tbl ORDER BY f1 <-> '(200,300)'::point LIMIT 10;
 
 EXPLAIN (COSTS OFF)
-SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT 1) as c FROM generate_series(0,10,1) x;
-SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT 1) as c FROM generate_series(0,10,1) x;
+SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT 1) as c FROM generate_series(0,1000,1) x;
+SELECT point(x,x), (SELECT f1 FROM gpolygon_tbl ORDER BY f1 <-> point(x,x) LIMIT 1) as c FROM generate_series(0,1000,1) x;
 
 -- Now check the results from bitmap indexscan
 SET enable_seqscan = OFF;
@@ -341,7 +341,7 @@ RESET enable_bitmapscan;
 --
 CREATE TABLE array_gin_test (a int[]);
 
-INSERT INTO array_gin_test SELECT ARRAY[1, g%5, g] FROM generate_series(1, 10000) g;
+INSERT INTO array_gin_test SELECT ARRAY[1, g%5, g] FROM generate_series(1, 100000) g;
 
 CREATE INDEX array_gin_test_idx ON array_gin_test USING gin (a);
 
@@ -1259,9 +1259,9 @@ REINDEX SCHEMA schema_to_reindex; -- failure, schema does not exist
 CREATE SCHEMA schema_to_reindex;
 SET search_path = 'schema_to_reindex';
 CREATE TABLE table1(col1 SERIAL PRIMARY KEY);
-INSERT INTO table1 SELECT generate_series(1,40000);
+INSERT INTO table1 SELECT generate_series(1,100000);
 CREATE TABLE table2(col1 SERIAL PRIMARY KEY, col2 TEXT NOT NULL);
-INSERT INTO table2 SELECT generate_series(1,4000), 'abc';
+INSERT INTO table2 SELECT generate_series(1,100000), 'abc';
 CREATE INDEX ON table2(col2);
 CREATE MATERIALIZED VIEW matview AS SELECT col1 FROM table2;
 CREATE INDEX ON matview(col1);
