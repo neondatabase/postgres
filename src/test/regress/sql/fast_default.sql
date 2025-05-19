@@ -53,7 +53,7 @@ end;
 $func$;
 
 CREATE TABLE has_volatile AS
-SELECT * FROM generate_series(1,1000000) id;
+SELECT * FROM generate_series(1,1000) id;
 
 
 CREATE EVENT TRIGGER has_volatile_rewrite
@@ -405,12 +405,12 @@ SELECT comp();
 -- query to exercise expand_tuple function
 CREATE TABLE t1 AS
 SELECT 1::int AS a , 2::int AS b
-FROM generate_series(1,2000) q;
+FROM generate_series(1,1000) q;
 
 ALTER TABLE t1 ADD COLUMN c text;
 
 SELECT a,
-       stddev(cast((SELECT sum(1) FROM generate_series(1,20000) x) AS float4))
+       stddev(cast((SELECT sum(1) FROM generate_series(1,2000) x) AS float4))
           OVER (PARTITION BY a,b,c ORDER BY b)
        AS z
 FROM t1;

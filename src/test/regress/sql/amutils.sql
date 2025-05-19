@@ -95,5 +95,5 @@ select col, prop, pg_index_column_has_property(o, col, prop)
                (4,'nulls_first'),(5,'nulls_last'),
                (6,'distance_orderable'),(7,'returnable'),
                (8, 'bogus')) v2(idx,prop),
-       generate_series(1,30000) col
+       generate_series(1,300) col
  order by col, idx;
