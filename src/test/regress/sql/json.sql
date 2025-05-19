@@ -80,15 +80,15 @@ SELECT '{
 -- array_to_json
 
 SELECT array_to_json(array(select 1 as a));
-SELECT array_to_json(array_agg(q),false) from (select x as b, x * 2 as c from generate_series(1,300) x) q;
-SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,30) x) q;
+SELECT array_to_json(array_agg(q),false) from (select x as b, x * 2 as c from generate_series(1,3000) x) q;
+SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,300) x) q;
 SELECT array_to_json(array_agg(q),false)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,20) x,
+         FROM generate_series(1,200) x,
               generate_series(4,5) y) q;
-SELECT array_to_json(array_agg(x),false) from generate_series(5,10) x;
+SELECT array_to_json(array_agg(x),false) from generate_series(5,100) x;
 SELECT array_to_json('{{1,5},{99,100}}'::int[]);
 
 -- row_to_json
@@ -99,7 +99,7 @@ FROM (SELECT $$a$$ || x AS b,
          y AS c,
          ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-      FROM generate_series(1,2) x,
+      FROM generate_series(1,20) x,
            generate_series(4,5) y) q;
 
 SELECT row_to_json(q,true)
@@ -107,17 +107,17 @@ FROM (SELECT $$a$$ || x AS b,
          y AS c,
          ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-      FROM generate_series(1,2) x,
+      FROM generate_series(1,20) x,
            generate_series(4,5) y) q;
 
 CREATE TEMP TABLE rows AS
 SELECT x, 'txt' || x as y
-FROM generate_series(1,30) AS x;
+FROM generate_series(1,300) AS x;
 
 SELECT row_to_json(q,true)
 FROM rows q;
 
-SELECT row_to_json(row((select array_agg(x) as d from generate_series(5,10) x)),false);
+SELECT row_to_json(row((select array_agg(x) as d from generate_series(5,100) x)),false);
 
 -- anyarray column
 
@@ -155,7 +155,7 @@ SELECT json_agg(q)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,20) x,
+         FROM generate_series(1,200) x,
               generate_series(4,5) y) q;
 
 SELECT json_agg(q ORDER BY x, y)
@@ -257,7 +257,7 @@ WHERE json_type = 'object';
 select count(*) from
     (select json_object_keys(json_object(array_agg(g)))
      from (select unnest(array['f'||n,n::text])as g
-           from generate_series(1,3000) as n) x ) y;
+           from generate_series(1,30000) as n) x ) y;
 
 -- nulls
 

@@ -445,7 +445,7 @@ SELECT pg_stat_have_stats('database', :dboid, 1);
 SELECT pg_stat_have_stats('database', :dboid, 0);
 
 -- pg_stat_have_stats returns true for committed index creation
-CREATE table stats_test_tab1 as select generate_series(1,10000) a;
+CREATE table stats_test_tab1 as select generate_series(1,100000) a;
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 SET enable_seqscan TO off;

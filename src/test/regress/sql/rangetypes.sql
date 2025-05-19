@@ -206,13 +206,13 @@ select daterange('2000-01-01'::date, 'infinity'::date, '[]');
 create table test_range_gist(ir int4range);
 create index test_range_gist_idx on test_range_gist using gist (ir);
 
-insert into test_range_gist select int4range(g, g+10) from generate_series(1,200000) g;
-insert into test_range_gist select 'empty'::int4range from generate_series(1,50000) g;
-insert into test_range_gist select int4range(g, g+10000) from generate_series(1,100000) g;
-insert into test_range_gist select 'empty'::int4range from generate_series(1,50000) g;
-insert into test_range_gist select int4range(NULL,g*10,'(]') from generate_series(1,10000) g;
-insert into test_range_gist select int4range(g*10,NULL,'(]') from generate_series(1,10000) g;
-insert into test_range_gist select int4range(g, g+10) from generate_series(1,200000) g;
+insert into test_range_gist select int4range(g, g+10) from generate_series(1,2000000) g;
+insert into test_range_gist select 'empty'::int4range from generate_series(1,500000) g;
+insert into test_range_gist select int4range(g, g+10000) from generate_series(1,1000000) g;
+insert into test_range_gist select 'empty'::int4range from generate_series(1,500000) g;
+insert into test_range_gist select int4range(NULL,g*10,'(]') from generate_series(1,100000) g;
+insert into test_range_gist select int4range(g*10,NULL,'(]') from generate_series(1,100000) g;
+insert into test_range_gist select int4range(g, g+10) from generate_series(1,2000000) g;
 
 -- test statistics and selectivity estimation as well
 --
@@ -301,13 +301,13 @@ select count(*) from test_range_gist where ir -|- int4multirange(int4range(100,2
 create table test_range_spgist(ir int4range);
 create index test_range_spgist_idx on test_range_spgist using spgist (ir);
 
-insert into test_range_spgist select int4range(g, g+10) from generate_series(1,2000) g;
-insert into test_range_spgist select 'empty'::int4range from generate_series(1,500) g;
-insert into test_range_spgist select int4range(g, g+10000) from generate_series(1,1000) g;
-insert into test_range_spgist select 'empty'::int4range from generate_series(1,500) g;
-insert into test_range_spgist select int4range(NULL,g*10,'(]') from generate_series(1,100) g;
-insert into test_range_spgist select int4range(g*10,NULL,'(]') from generate_series(1,100) g;
-insert into test_range_spgist select int4range(g, g+10) from generate_series(1,2000) g;
+insert into test_range_spgist select int4range(g, g+10) from generate_series(1,20000) g;
+insert into test_range_spgist select 'empty'::int4range from generate_series(1,5000) g;
+insert into test_range_spgist select int4range(g, g+10000) from generate_series(1,10000) g;
+insert into test_range_spgist select 'empty'::int4range from generate_series(1,5000) g;
+insert into test_range_spgist select int4range(NULL,g*10,'(]') from generate_series(1,1000) g;
+insert into test_range_spgist select int4range(g*10,NULL,'(]') from generate_series(1,1000) g;
+insert into test_range_spgist select int4range(g, g+10) from generate_series(1,20000) g;
 
 -- first, verify non-indexed results
 SET enable_seqscan    = t;
@@ -371,7 +371,7 @@ RESET enable_bitmapscan;
 -- test elem <@ range operator
 create table test_range_elem(i int4);
 create index test_range_elem_idx on test_range_elem (i);
-insert into test_range_elem select i from generate_series(1,100) i;
+insert into test_range_elem select i from generate_series(1,1000) i;
 
 SET enable_seqscan    = f;
 

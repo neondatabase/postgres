@@ -106,7 +106,7 @@ VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
 -- PARALLEL option
 CREATE TABLE pvactst (i INT, a INT[], p POINT) with (autovacuum_enabled = off);
-INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,100000) i;
+INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,1000000) i;
 CREATE INDEX btree_pvactst ON pvactst USING btree (i);
 CREATE INDEX hash_pvactst ON pvactst USING hash (i);
 CREATE INDEX brin_pvactst ON pvactst USING brin (i);
@@ -143,7 +143,7 @@ CREATE TABLE no_index_cleanup (i INT PRIMARY KEY, t TEXT);
 -- Use uncompressed data stored in toast.
 CREATE INDEX no_index_cleanup_idx ON no_index_cleanup(t);
 ALTER TABLE no_index_cleanup ALTER COLUMN t SET STORAGE EXTERNAL;
-INSERT INTO no_index_cleanup(i, t) VALUES (generate_series(1,30),
+INSERT INTO no_index_cleanup(i, t) VALUES (generate_series(1,300),
     repeat('1234567890',269));
 -- index cleanup option is ignored if VACUUM FULL
 VACUUM (INDEX_CLEANUP TRUE, FULL TRUE) no_index_cleanup;
@@ -206,7 +206,7 @@ CREATE TABLE vacparted_i1 PARTITION OF vacparted_i
   FOR VALUES WITH (MODULUS 2, REMAINDER 0);
 CREATE TABLE vacparted_i2 PARTITION OF vacparted_i
   FOR VALUES WITH (MODULUS 2, REMAINDER 1);
-INSERT INTO vacparted_i SELECT i, 'test_'|| i from generate_series(1,10) i;
+INSERT INTO vacparted_i SELECT i, 'test_'|| i from generate_series(1,100) i;
 VACUUM (ANALYZE) vacparted_i;
 VACUUM (FULL) vacparted_i;
 VACUUM (FREEZE) vacparted_i;

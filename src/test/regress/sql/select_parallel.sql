@@ -208,7 +208,7 @@ explain (costs off)
 select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
 
 create table bmscantest (a int, t text);
-insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,10000000) r;
+insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,100000000) r;
 create index i_bmtest ON bmscantest(a);
 select count(*) from bmscantest where a>1;
 
@@ -282,9 +282,9 @@ drop function sp_simple_func(integer);
 -- test handling of SRFs in targetlist (bug in 10.0)
 
 explain (costs off)
-   select count(*), generate_series(1,2) from tenk1 group by twenty;
+   select count(*), generate_series(1,20) from tenk1 group by twenty;
 
-select count(*), generate_series(1,2) from tenk1 group by twenty;
+select count(*), generate_series(1,20) from tenk1 group by twenty;
 
 -- test gather merge with parallel leader participation disabled
 set parallel_leader_participation = off;

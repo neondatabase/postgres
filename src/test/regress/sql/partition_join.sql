@@ -526,9 +526,9 @@ create temp table prtx2_1 partition of prtx2 for values from (1) to (11);
 create temp table prtx2_2 partition of prtx2 for values from (11) to (21);
 create temp table prtx2_3 partition of prtx2 for values from (21) to (31);
 insert into prtx1 select 1 + i%30, i, i
- from generate_series(1,100000) i;
+ from generate_series(1,1000000) i;
 insert into prtx2 select 1 + i%30, i, i
- from generate_series(1,5000) i, generate_series(1,100) j;
+ from generate_series(1,50000) i, generate_series(1,1000) j;
 create index on prtx2 (b);
 create index on prtx2 (c);
 analyze prtx1;

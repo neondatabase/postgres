@@ -41,14 +41,14 @@ create temporary view vw_ord as select * from rows from(unnest(array[10,20],arra
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;
-create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,200)) as z(a,b,c);
+create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,2000)) as z(a,b,c);
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;
 
 -- ordinality and multiple functions vs. rewind and reverse scan
 begin;
-declare rf_cur scroll cursor for select * from rows from(generate_series(1,5),generate_series(1,2)) with ordinality as g(i,j,o);
+declare rf_cur scroll cursor for select * from rows from(generate_series(1,50),generate_series(1,20)) with ordinality as g(i,j,o);
 fetch all from rf_cur;
 fetch backward all from rf_cur;
 fetch all from rf_cur;
@@ -296,7 +296,7 @@ SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,fals
 SELECT * FROM (VALUES (1),(2),(3)) v(r), ROWS FROM( rngfunc_sql(10+r,13), rngfunc_mat(10+r,13) );
 
 SELECT setval('rngfunc_rescan_seq1',1,false),setval('rngfunc_rescan_seq2',1,false);
-SELECT * FROM generate_series(1,2) r1, generate_series(r1,3) r2, ROWS FROM( rngfunc_sql(10+r1,13), rngfunc_mat(10+r2,13) );
+SELECT * FROM generate_series(1,20) r1, generate_series(r1,30) r2, ROWS FROM( rngfunc_sql(10+r1,13), rngfunc_mat(10+r2,13) );
 
 SELECT * FROM (VALUES (1),(2),(3)) v(r), generate_series(10+r,20-r) f(i);
 SELECT * FROM (VALUES (1),(2),(3)) v(r), generate_series(10+r,20-r) WITH ORDINALITY AS f(i,o);
@@ -434,7 +434,7 @@ AS 'select $1, array[$1,$1]' LANGUAGE sql;
 
 CREATE OR REPLACE FUNCTION rngfunc()
 RETURNS TABLE(a int)
-AS $$ SELECT a FROM generate_series(1,5) a(a) $$ LANGUAGE sql;
+AS $$ SELECT a FROM generate_series(1,50) a(a) $$ LANGUAGE sql;
 SELECT * FROM rngfunc();
 DROP FUNCTION rngfunc();
 

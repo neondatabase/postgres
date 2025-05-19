@@ -589,7 +589,7 @@ reset enable_memoize;
 --
 
 create temp table tt3(f1 int, f2 text);
-insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,10000000) x;
+insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,100000000) x;
 create index tt3i on tt3(f1);
 analyze tt3;
 
@@ -2147,7 +2147,7 @@ drop table join_ut1;
 begin;
 
 create table fkest (x integer, x10 integer, x10b integer, x100 integer);
-insert into fkest select x, x/10, x/10, x/100 from generate_series(1,10000) x;
+insert into fkest select x, x/10, x/10, x/100 from generate_series(1,100000) x;
 create unique index on fkest(x, x10, x100);
 analyze fkest;
 
@@ -2177,8 +2177,8 @@ begin;
 create table fkest (a int, b int, c int unique, primary key(a,b));
 create table fkest1 (a int, b int, primary key(a,b));
 
-insert into fkest select x/10, x%10, x from generate_series(1,10000) x;
-insert into fkest1 select x/10, x%10 from generate_series(1,10000) x;
+insert into fkest select x/10, x%10, x from generate_series(1,100000) x;
+insert into fkest1 select x/10, x%10 from generate_series(1,100000) x;
 
 alter table fkest1
   add constraint fkest1_a_b_fkey foreign key (a,b) references fkest;

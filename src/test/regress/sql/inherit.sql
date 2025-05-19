@@ -100,7 +100,7 @@ INSERT INTO z VALUES (NULL, 'text'); -- should fail
 -- Check inherited UPDATE with first child excluded
 create table some_tab (f1 int, f2 int, f3 int, check (f1 < 10) no inherit);
 create table some_tab_child () inherits(some_tab);
-insert into some_tab_child select i, i+1, 0 from generate_series(1,100000) i;
+insert into some_tab_child select i, i+1, 0 from generate_series(1,1000000) i;
 create index on some_tab_child(f1, f2);
 -- while at it, also check that statement-level triggers fire
 create function some_tab_stmt_trig_func() returns trigger as
@@ -672,7 +672,7 @@ reset enable_bitmapscan;
 create table inhpar(f1 int, f2 name);
 create table inhcld(f2 name, f1 int);
 alter table inhcld inherit inhpar;
-insert into inhpar select x, x::text from generate_series(1,5) x;
+insert into inhpar select x, x::text from generate_series(1,50) x;
 insert into inhcld select x::text, x from generate_series(6,10) x;
 
 explain (verbose, costs off)
@@ -690,7 +690,7 @@ create table inhcld1(f2 name, f1 int primary key);
 create table inhcld2(f1 int primary key, f2 name);
 alter table inhpar attach partition inhcld1 for values from (1) to (5);
 alter table inhpar attach partition inhcld2 for values from (5) to (100);
-insert into inhpar select x, x::text from generate_series(1,10) x;
+insert into inhpar select x, x::text from generate_series(1,100) x;
 
 explain (verbose, costs off)
 update inhpar i set (f1, f2) = (select i.f1, i.f2 || '-' from int4_tbl limit 1);

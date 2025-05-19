@@ -303,11 +303,11 @@ set enable_hashagg = true;
 set enable_sort = false;
 
 explain (costs off)
-select from generate_series(1,5000) union select from generate_series(1,3000);
+select from generate_series(1,50000) union select from generate_series(1,30000);
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
 
-select from generate_series(1,5000) union select from generate_series(1,3000);
+select from generate_series(1,50000) union select from generate_series(1,30000);
 select from generate_series(1,5) union all select from generate_series(1,3);
 select from generate_series(1,5) intersect select from generate_series(1,3);
 select from generate_series(1,5) intersect all select from generate_series(1,3);
@@ -319,11 +319,11 @@ set enable_hashagg = false;
 set enable_sort = true;
 
 explain (costs off)
-select from generate_series(1,5000) union select from generate_series(1,3000);
+select from generate_series(1,50000) union select from generate_series(1,30000);
 explain (costs off)
 select from generate_series(1,5) intersect select from generate_series(1,3);
 
-select from generate_series(1,5000) union select from generate_series(1,3000);
+select from generate_series(1,50000) union select from generate_series(1,30000);
 select from generate_series(1,5) union all select from generate_series(1,3);
 select from generate_series(1,5) intersect select from generate_series(1,3);
 select from generate_series(1,5) intersect all select from generate_series(1,3);
@@ -451,14 +451,14 @@ ORDER BY x;
 
 explain (costs off)
 SELECT * FROM
-  (SELECT 1 AS t, generate_series(1,10) AS x
+  (SELECT 1 AS t, generate_series(1,100) AS x
    UNION
    SELECT 2 AS t, 4 AS x) ss
 WHERE x < 4
 ORDER BY x;
 
 SELECT * FROM
-  (SELECT 1 AS t, generate_series(1,10) AS x
+  (SELECT 1 AS t, generate_series(1,100) AS x
    UNION
    SELECT 2 AS t, 4 AS x) ss
 WHERE x < 4
