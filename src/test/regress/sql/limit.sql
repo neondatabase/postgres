@@ -88,9 +88,9 @@ rollback;
 SELECT
   (SELECT n
      FROM (VALUES (1)) AS x,
-          (SELECT n FROM generate_series(1,10000) AS n
+          (SELECT n FROM generate_series(1,1000000) AS n
              ORDER BY n LIMIT 1 OFFSET s-1) AS y) AS z
-  FROM generate_series(1,10000) AS s;
+  FROM generate_series(1,1000000) AS s;
 
 --
 -- Test behavior of volatile and set-returning functions in conjunction

@@ -412,7 +412,7 @@ SELECT brin_summarize_range('brin_summarize_multi_idx', 4294967296);
 
 -- test brin cost estimates behave sanely based on correlation of values
 CREATE TABLE brin_test_multi (a INT, b INT);
-INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,100000) x(x);
+INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,10000000) x(x);
 CREATE INDEX brin_test_multi_a_idx ON brin_test_multi USING brin (a) WITH (pages_per_range = 2);
 CREATE INDEX brin_test_multi_b_idx ON brin_test_multi USING brin (b) WITH (pages_per_range = 2);
 VACUUM ANALYZE brin_test_multi;
