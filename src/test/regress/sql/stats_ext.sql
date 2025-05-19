@@ -83,7 +83,7 @@ SELECT stxname FROM pg_statistic_ext WHERE stxname LIKE 'ab1%';
 -- Ensure things work sanely with SET STATISTICS 0
 CREATE TABLE ab1 (a INTEGER, b INTEGER);
 ALTER TABLE ab1 ALTER a SET STATISTICS 0;
-INSERT INTO ab1 SELECT a, a%23 FROM generate_series(1, 1000) a;
+INSERT INTO ab1 SELECT a, a%23 FROM generate_series(1, 100000) a;
 CREATE STATISTICS ab1_a_b_stats ON a, b FROM ab1;
 ANALYZE ab1;
 ALTER TABLE ab1 ALTER a SET STATISTICS -1;
@@ -235,7 +235,7 @@ WITH (autovacuum_enabled = off);
 -- over-estimates when using only per-column statistics
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT i/100, i/100, i/100, (i/100) || ' dollars and zero cents'
-       FROM generate_series(1,10000) s(i);
+       FROM generate_series(1,100000) s(i);
 
 ANALYZE ndistinct;
 
@@ -300,7 +300,7 @@ TRUNCATE TABLE ndistinct;
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT mod(i,13), mod(i,17), mod(i,19),
             mod(i,23) || ' dollars and zero cents'
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,100000) s(i);
 
 ANALYZE ndistinct;
 
@@ -408,7 +408,7 @@ TRUNCATE ndistinct;
 -- two mostly independent groups of columns
 INSERT INTO ndistinct (a, b, c, d)
      SELECT mod(i,3), mod(i,9), mod(i,5), mod(i,20)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,10000) s(i);
 
 ANALYZE ndistinct;
 

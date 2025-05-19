@@ -377,7 +377,7 @@ SELECT brin_desummarize_range('brinidx_multi', 100000000);
 
 -- test building an index with many values, to force compaction of the buffer
 CREATE TABLE brin_large_range (a int4);
-INSERT INTO brin_large_range SELECT i FROM generate_series(1,100000) s(i);
+INSERT INTO brin_large_range SELECT i FROM generate_series(1,10000000) s(i);
 CREATE INDEX brin_large_range_idx ON brin_large_range USING brin (a int4_minmax_multi_ops);
 DROP TABLE brin_large_range;
 
@@ -412,7 +412,7 @@ SELECT brin_summarize_range('brin_summarize_multi_idx', 4294967296);
 
 -- test brin cost estimates behave sanely based on correlation of values
 CREATE TABLE brin_test_multi (a INT, b INT);
-INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,100000) x(x);
+INSERT INTO brin_test_multi SELECT x/100,x%100 FROM generate_series(1,10000000) x(x);
 CREATE INDEX brin_test_multi_a_idx ON brin_test_multi USING brin (a) WITH (pages_per_range = 2);
 CREATE INDEX brin_test_multi_b_idx ON brin_test_multi USING brin (b) WITH (pages_per_range = 2);
 VACUUM ANALYZE brin_test_multi;
@@ -428,7 +428,7 @@ CREATE TABLE brin_test_multi_1 (a INT, b BIGINT) WITH (fillfactor=10);
 INSERT INTO brin_test_multi_1
 SELECT i/5 + mod(911 * i + 483, 25),
        i/10 + mod(751 * i + 221, 41)
-  FROM generate_series(1,10000) s(i);
+  FROM generate_series(1,1000000) s(i);
 
 CREATE INDEX brin_test_multi_1_idx_1 ON brin_test_multi_1 USING brin (a int4_minmax_multi_ops) WITH (pages_per_range=5);
 CREATE INDEX brin_test_multi_1_idx_2 ON brin_test_multi_1 USING brin (b int8_minmax_multi_ops) WITH (pages_per_range=5);
@@ -489,7 +489,7 @@ TRUNCATE brin_test_multi_1;
 INSERT INTO brin_test_multi_1
 SELECT i/5 + mod(911 * i + 483, 25),
        i/10 + mod(751 * i + 221, 41)
-  FROM generate_series(1,10000) s(i);
+  FROM generate_series(1,1000000) s(i);
 
 -- int: less than
 SELECT COUNT(*) FROM brin_test_multi_1 WHERE a < 37;
@@ -545,7 +545,7 @@ RESET enable_seqscan;
 -- do some inequality tests for varlena data types
 CREATE TABLE brin_test_multi_2 (a UUID) WITH (fillfactor=10);
 INSERT INTO brin_test_multi_2
-SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,10000) s(i)) foo) bar ORDER BY c + 25 * random();
+SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,1000000) s(i)) foo) bar ORDER BY c + 25 * random();
 
 CREATE INDEX brin_test_multi_2_idx ON brin_test_multi_2 USING brin (a uuid_minmax_multi_ops) WITH (pages_per_range=5);
 
@@ -570,7 +570,7 @@ SELECT COUNT(*) FROM brin_test_multi_2 WHERE a = '86e50149-6586-6131-2a9e-0b3555
 
 TRUNCATE brin_test_multi_2;
 INSERT INTO brin_test_multi_2
-SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,10000) s(i)) foo) bar ORDER BY c + 25 * random();
+SELECT v::uuid FROM (SELECT row_number() OVER (ORDER BY v) c, v FROM (SELECT fipshash((i/13)::text) AS v FROM generate_series(1,1000000) s(i)) foo) bar ORDER BY c + 25 * random();
 
 SELECT COUNT(*) FROM brin_test_multi_2 WHERE a < '3d914f93-48c9-cc0f-f8a7-9716700b9fcd';
 
@@ -595,12 +595,12 @@ SET datestyle TO iso;
 -- values close to timestamp minimum
 INSERT INTO brin_timestamp_test
 SELECT '4713-01-01 00:00:01 BC'::timestamptz + (i || ' seconds')::interval
-  FROM generate_series(1,300) s(i);
+  FROM generate_series(1,30000) s(i);
 
 -- values close to timestamp maximum
 INSERT INTO brin_timestamp_test
 SELECT '294276-12-01 00:00:01'::timestamptz + (i || ' seconds')::interval
-  FROM generate_series(1,300) s(i);
+  FROM generate_series(1,30000) s(i);
 
 CREATE INDEX ON brin_timestamp_test USING brin (a timestamptz_minmax_multi_ops) WITH (pages_per_range=1);
 DROP TABLE brin_timestamp_test;

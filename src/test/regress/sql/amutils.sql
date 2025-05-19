@@ -84,7 +84,7 @@ select col, prop, pg_index_column_has_property(o, col, prop)
        (values (1,'orderable'),(2,'asc'),(3,'desc'),
                (4,'nulls_first'),(5,'nulls_last'),
                (6, 'bogus')) v2(idx,prop),
-       generate_series(1,40) col
+       generate_series(1,4000) col
  order by col, idx;
 
 CREATE INDEX foocover ON foo (f1) INCLUDE (f2,f3);
@@ -95,5 +95,5 @@ select col, prop, pg_index_column_has_property(o, col, prop)
                (4,'nulls_first'),(5,'nulls_last'),
                (6,'distance_orderable'),(7,'returnable'),
                (8, 'bogus')) v2(idx,prop),
-       generate_series(1,30) col
+       generate_series(1,300) col
  order by col, idx;

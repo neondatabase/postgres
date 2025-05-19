@@ -1201,7 +1201,7 @@ CREATE TABLE part4 PARTITION OF pa_target DEFAULT
 
 CREATE TABLE pa_source (sid integer, delta float);
 -- insert many rows to the source table
-INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,14) AS id;
+INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,140) AS id;
 -- insert a few rows in the target table (odd numbered tid)
 INSERT INTO pa_target SELECT id, id * 100, 'initial' FROM generate_series(1,15,2) AS id;
 
@@ -1455,7 +1455,7 @@ CREATE TABLE part_m02_even PARTITION OF part_m02
 CREATE TABLE pa_source (sid integer, delta float)
   WITH (autovacuum_enabled=off);
 -- insert many rows to the source table
-INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,14) AS id;
+INSERT INTO pa_source SELECT id, id * 10  FROM generate_series(1,140) AS id;
 -- insert a few rows in the target table (odd numbered tid)
 INSERT INTO pa_target SELECT '2017-01-31', id, id * 100, 'initial' FROM generate_series(1,9,3) AS id;
 INSERT INTO pa_target SELECT '2017-02-28', id, id * 100, 'initial' FROM generate_series(2,9,3) AS id;

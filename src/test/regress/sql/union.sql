@@ -312,10 +312,10 @@ set enable_sort = false;
 -- fine to make use of Unique, which is cheaper than HashAggregate and we've
 -- no means to disable Unique.
 explain (costs off)
-select from generate_series(1,50) intersect select from generate_series(1,30);
+select from generate_series(1,500) intersect select from generate_series(1,300);
 
 select from generate_series(1,5) union all select from generate_series(1,3);
-select from generate_series(1,50) intersect select from generate_series(1,30);
+select from generate_series(1,500) intersect select from generate_series(1,300);
 select from generate_series(1,5) intersect all select from generate_series(1,3);
 select from generate_series(1,5) except select from generate_series(1,3);
 select from generate_series(1,5) except all select from generate_series(1,3);
@@ -327,11 +327,11 @@ set enable_sort = true;
 explain (costs off)
 select from generate_series(1,5) union select from generate_series(1,3);
 explain (costs off)
-select from generate_series(1,50) intersect select from generate_series(1,30);
+select from generate_series(1,500) intersect select from generate_series(1,300);
 
 select from generate_series(1,5) union select from generate_series(1,3);
 select from generate_series(1,5) union all select from generate_series(1,3);
-select from generate_series(1,50) intersect select from generate_series(1,30);
+select from generate_series(1,500) intersect select from generate_series(1,300);
 select from generate_series(1,5) intersect all select from generate_series(1,3);
 select from generate_series(1,5) except select from generate_series(1,3);
 select from generate_series(1,5) except all select from generate_series(1,3);

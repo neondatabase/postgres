@@ -237,7 +237,7 @@ CREATE PUBLICATION testpub6 FOR TABLE rf_bug WHERE (status = 'open') WITH (publi
 DROP TABLE rf_bug;
 DROP TYPE rf_bug_status;
 -- fail - row filter expression is not simple
-CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl1 WHERE (a IN (SELECT generate_series(1,50)));
+CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl1 WHERE (a IN (SELECT generate_series(1,500)));
 -- fail - system columns are not allowed
 CREATE PUBLICATION testpub6 FOR TABLE testpub_rf_tbl1 WHERE ('(0,1)'::tid = ctid);
 -- ok - conditional expressions are allowed

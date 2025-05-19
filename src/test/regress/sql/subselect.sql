@@ -140,7 +140,7 @@ from int8_tbl group by q1 order by q1;
 -- Unspecified-type literals in output columns should resolve as text
 
 SELECT *, pg_typeof(f1) FROM
-  (SELECT 'foo' AS f1 FROM generate_series(1,30)) ss ORDER BY 1;
+  (SELECT 'foo' AS f1 FROM generate_series(1,300)) ss ORDER BY 1;
 
 -- ... unless there's context to suggest differently
 
@@ -702,7 +702,7 @@ select exists(select * from nocolumns);
 -- Check behavior with a SubPlan in VALUES (bug #14924)
 --
 select val.x
-  from generate_series(1,100) as s(i),
+  from generate_series(1,1000) as s(i),
   lateral (
     values ((select s.i + 1)), (s.i + 101)
   ) as val(x)
@@ -738,9 +738,9 @@ select * from int4_tbl where
 --
 explain (verbose, costs off)
 select * from int4_tbl o where (f1, f1) in
-  (select f1, generate_series(1,500) / 10 g from int4_tbl i group by f1);
+  (select f1, generate_series(1,5000) / 10 g from int4_tbl i group by f1);
 select * from int4_tbl o where (f1, f1) in
-  (select f1, generate_series(1,500) / 10 g from int4_tbl i group by f1);
+  (select f1, generate_series(1,5000) / 10 g from int4_tbl i group by f1);
 
 --
 -- check for over-optimization of whole-row Var referencing an Append plan
@@ -882,7 +882,7 @@ drop table sq_limit;
 begin;
 
 declare c1 scroll cursor for
- select * from generate_series(1,40) i
+ select * from generate_series(1,400) i
   where i <> all (values (2),(3));
 
 move forward all in c1;

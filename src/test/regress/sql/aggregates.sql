@@ -79,16 +79,16 @@ SELECT var_pop('nan'::numeric), var_samp('nan'::numeric);
 SELECT stddev_pop('nan'::numeric), stddev_samp('nan'::numeric);
 
 -- verify correct results for null and NaN inputs
-select sum(null::int4) from generate_series(1,30);
-select sum(null::int8) from generate_series(1,30);
-select sum(null::numeric) from generate_series(1,30);
-select sum(null::float8) from generate_series(1,30);
-select avg(null::int4) from generate_series(1,30);
-select avg(null::int8) from generate_series(1,30);
-select avg(null::numeric) from generate_series(1,30);
-select avg(null::float8) from generate_series(1,30);
-select sum('NaN'::numeric) from generate_series(1,30);
-select avg('NaN'::numeric) from generate_series(1,30);
+select sum(null::int4) from generate_series(1,300);
+select sum(null::int8) from generate_series(1,300);
+select sum(null::numeric) from generate_series(1,300);
+select sum(null::float8) from generate_series(1,300);
+select avg(null::int4) from generate_series(1,300);
+select avg(null::int8) from generate_series(1,300);
+select avg(null::numeric) from generate_series(1,300);
+select avg(null::float8) from generate_series(1,300);
+select sum('NaN'::numeric) from generate_series(1,300);
+select avg('NaN'::numeric) from generate_series(1,300);
 
 -- verify correct results for infinite inputs
 SELECT sum(x::float8), avg(x::float8), var_pop(x::float8)

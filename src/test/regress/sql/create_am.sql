@@ -166,7 +166,7 @@ ORDER BY classid, objid, objsubid;
 
 -- ALTER TABLE SET ACCESS METHOD
 CREATE TABLE heaptable USING heap AS
-  SELECT a, repeat(a::text, 100) FROM generate_series(1,90) AS a;
+  SELECT a, repeat(a::text, 100) FROM generate_series(1,900) AS a;
 SELECT amname FROM pg_class c, pg_am am
   WHERE c.relam = am.oid AND c.oid = 'heaptable'::regclass;
 -- Switching to heap2 adds new dependency entry to the AM.

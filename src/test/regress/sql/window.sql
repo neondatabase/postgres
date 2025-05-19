@@ -155,7 +155,7 @@ select first_value(max(x)) over (), y
 
 -- window functions returning pass-by-ref values from different rows
 select x, lag(x, 1) over (order by x), lead(x, 3) over (order by x)
-from (select x::numeric as x from generate_series(1,100) x);
+from (select x::numeric as x from generate_series(1,1000) x);
 
 -- test non-default frame specifications
 SELECT four, ten,

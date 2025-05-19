@@ -14,7 +14,7 @@ select a,ord from unnest(array['a','b']) with ordinality as z(a,ord);
 select * from unnest(array['a','b']) with ordinality as z(a,ord);
 select a,ord from unnest(array[1.0::float8]) with ordinality as z(a,ord);
 select * from unnest(array[1.0::float8]) with ordinality as z(a,ord);
-select row_to_json(s.*) from generate_series(11,14) with ordinality s;
+select row_to_json(s.*) from generate_series(11,1400) with ordinality s;
 -- ordinality vs. views
 create temporary view vw_ord as select * from (values (1)) v(n) join rngfunct(1) with ordinality as z(a,b,ord) on (n=ord);
 select * from vw_ord;

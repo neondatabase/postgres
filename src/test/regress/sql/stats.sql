@@ -613,7 +613,7 @@ SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_io
   WHERE object = 'relation' \gset io_sum_shared_before_
 CREATE TABLE test_io_shared(a int);
-INSERT INTO test_io_shared SELECT i FROM generate_series(1,1000)i;
+INSERT INTO test_io_shared SELECT i FROM generate_series(1,100000)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_shared_after_extends
   FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
@@ -752,7 +752,7 @@ RESET wal_skip_threshold;
 -- BufferAccessStrategy, are tracked in pg_stat_io.
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_before
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
-CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,1000)i;
+CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,100000)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_after
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
@@ -859,7 +859,7 @@ CREATE TABLE table_fillfactor (
 ) with (fillfactor=10, autovacuum_enabled=off);
 
 INSERT INTO table_fillfactor
-SELECT 'x' FROM generate_series(1,10000);
+SELECT 'x' FROM generate_series(1,1000000);
 
 SELECT * FROM check_estimated_rows('SELECT * FROM table_fillfactor');
 

@@ -53,7 +53,7 @@ end;
 $func$;
 
 CREATE TABLE has_volatile AS
-SELECT * FROM generate_series(1,100) id;
+SELECT * FROM generate_series(1,1000) id;
 
 
 CREATE EVENT TRIGGER has_volatile_rewrite
