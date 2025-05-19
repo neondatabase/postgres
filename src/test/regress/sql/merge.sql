@@ -240,7 +240,7 @@ SELECT * FROM target ORDER BY tid;
 ROLLBACK;
 
 -- index plans
-INSERT INTO target SELECT generate_series(1000,2500), 0;
+INSERT INTO target SELECT generate_series(1000,250000), 0;
 ALTER TABLE target ADD PRIMARY KEY (tid);
 ANALYZE target;
 
