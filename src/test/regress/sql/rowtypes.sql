@@ -165,7 +165,7 @@ order by thousand, hundred;
 -- Test case for bug #14010: indexed row comparisons fail with nulls
 create temp table test_table (a text, b text);
 insert into test_table values ('a', 'b');
-insert into test_table select 'a', null from generate_series(1,1000);
+insert into test_table select 'a', null from generate_series(1,10000);
 insert into test_table values ('b', 'a');
 create index on test_table (a,b);
 set enable_sort = off;

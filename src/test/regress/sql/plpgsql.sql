@@ -2623,7 +2623,7 @@ set plpgsql.extra_warnings to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2) g(v) into x;
+  select v from generate_series(1,20) g(v) into x;
 end;
 $$;
 
@@ -2632,7 +2632,7 @@ set plpgsql.extra_errors to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2) g(v) into x;
+  select v from generate_series(1,20) g(v) into x;
 end;
 $$;
 
@@ -2964,7 +2964,7 @@ select forc01();
 -- try updating the cursor's current row
 
 create temp table forc_test as
-  select n as i, n as j from generate_series(1,10) n;
+  select n as i, n as j from generate_series(1,100) n;
 
 create or replace function forc01() returns void as $$
 declare
@@ -3517,7 +3517,7 @@ drop function pleast(numeric);
 
 create function tftest(int) returns table(a int, b int) as $$
 begin
-  return query select $1, $1+i from generate_series(1,5) g(i);
+  return query select $1, $1+i from generate_series(1,50) g(i);
 end;
 $$ language plpgsql immutable strict;
 
@@ -4561,12 +4561,12 @@ CREATE TRIGGER transition_table_level2_ri_child_upd_trigger
 
 -- create initial test data
 INSERT INTO transition_table_level1 (level1_no)
-  SELECT generate_series(1,200);
+  SELECT generate_series(1,2000);
 ANALYZE transition_table_level1;
 
 INSERT INTO transition_table_level2 (level2_no, parent_no)
   SELECT level2_no, level2_no / 50 + 1 AS parent_no
-    FROM generate_series(1,9999) level2_no;
+    FROM generate_series(1,99990) level2_no;
 ANALYZE transition_table_level2;
 
 INSERT INTO transition_table_status (level, node_no, status)

@@ -1207,7 +1207,7 @@ REINDEX SCHEMA schema_to_reindex; -- failure, schema does not exist
 CREATE SCHEMA schema_to_reindex;
 SET search_path = 'schema_to_reindex';
 CREATE TABLE table1(col1 SERIAL PRIMARY KEY);
-INSERT INTO table1 SELECT generate_series(1,400);
+INSERT INTO table1 SELECT generate_series(1,4000);
 CREATE TABLE table2(col1 SERIAL PRIMARY KEY, col2 TEXT NOT NULL);
 INSERT INTO table2 SELECT generate_series(1,400), 'abc';
 CREATE INDEX ON table2(col2);

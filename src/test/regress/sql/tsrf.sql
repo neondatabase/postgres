@@ -9,7 +9,7 @@ SELECT generate_series(1, 3);
 SELECT generate_series(1, 3), generate_series(3,5);
 
 -- parallel iteration, different number of rows
-SELECT generate_series(1, 2), generate_series(1,4);
+SELECT generate_series(1, 20), generate_series(1,40);
 
 -- srf, with SRF argument
 SELECT generate_series(1, generate_series(1, 3));
@@ -18,7 +18,7 @@ SELECT generate_series(1, generate_series(1, 3));
 SELECT * FROM generate_series(1, generate_series(1, 3));
 
 -- srf, with two SRF arguments
-SELECT generate_series(generate_series(1,3), generate_series(2, 4));
+SELECT generate_series(generate_series(1,30), generate_series(2, 40));
 
 -- check proper nesting of SRFs in different expressions
 explain (verbose, costs off)
@@ -41,14 +41,14 @@ SELECT * FROM few f1,
   (SELECT unnest(ARRAY[1,2]) FROM few f2 WHERE false OFFSET 0) ss;
 
 -- SRF output order of sorting is maintained, if SRF is not referenced
-SELECT few.id, generate_series(1,3) g FROM few ORDER BY id DESC;
+SELECT few.id, generate_series(1,30) g FROM few ORDER BY id DESC;
 
 -- but SRFs can be referenced in sort
-SELECT few.id, generate_series(1,3) g FROM few ORDER BY id, g DESC;
-SELECT few.id, generate_series(1,3) g FROM few ORDER BY id, generate_series(1,3) DESC;
+SELECT few.id, generate_series(1,30) g FROM few ORDER BY id, g DESC;
+SELECT few.id, generate_series(1,30) g FROM few ORDER BY id, generate_series(1,30) DESC;
 
 -- it's weird to have ORDER BYs that increase the number of results
-SELECT few.id FROM few ORDER BY id, generate_series(1,3) DESC;
+SELECT few.id FROM few ORDER BY id, generate_series(1,30) DESC;
 
 -- SRFs are computed after aggregation
 SET enable_hashagg TO 0; -- stable output order
@@ -59,31 +59,31 @@ SELECT few.dataa, count(*), min(id), max(id), unnest('{1,1,3}'::int[]) FROM few 
 RESET enable_hashagg;
 
 -- check HAVING works when GROUP BY does [not] reference SRF output
-SELECT dataa, generate_series(1,1), count(*) FROM few GROUP BY 1 HAVING count(*) > 1;
-SELECT dataa, generate_series(1,1), count(*) FROM few GROUP BY 1, 2 HAVING count(*) > 1;
+SELECT dataa, generate_series(1,10), count(*) FROM few GROUP BY 1 HAVING count(*) > 1;
+SELECT dataa, generate_series(1,10), count(*) FROM few GROUP BY 1, 2 HAVING count(*) > 1;
 
 -- it's weird to have GROUP BYs that increase the number of results
 SELECT few.dataa, count(*) FROM few WHERE dataa = 'a' GROUP BY few.dataa ORDER BY 2;
 SELECT few.dataa, count(*) FROM few WHERE dataa = 'a' GROUP BY few.dataa, unnest('{1,1,3}'::int[]) ORDER BY 2;
 
 -- SRFs are not allowed if they'd need to be conditionally executed
-SELECT q1, case when q1 > 0 then generate_series(1,3) else 0 end FROM int8_tbl;
-SELECT q1, coalesce(generate_series(1,3), 0) FROM int8_tbl;
+SELECT q1, case when q1 > 0 then generate_series(1,30) else 0 end FROM int8_tbl;
+SELECT q1, coalesce(generate_series(1,30), 0) FROM int8_tbl;
 
 -- SRFs are not allowed in aggregate arguments
 SELECT min(generate_series(1, 3)) FROM few;
 
 -- ... unless they're within a sub-select
-SELECT sum((3 = ANY(SELECT generate_series(1,4)))::int);
+SELECT sum((3 = ANY(SELECT generate_series(1,40)))::int);
 
 SELECT sum((3 = ANY(SELECT lag(x) over(order by x)
-                    FROM generate_series(1,4) x))::int);
+                    FROM generate_series(1,40) x))::int);
 
 -- SRFs are not allowed in window function arguments, either
 SELECT min(generate_series(1, 3)) OVER() FROM few;
 
 -- SRFs are normally computed after window functions
-SELECT id,lag(id) OVER(), count(*) OVER(), generate_series(1,3) FROM few;
+SELECT id,lag(id) OVER(), count(*) OVER(), generate_series(1,30) FROM few;
 -- unless referencing SRFs
 SELECT SUM(count(*)) OVER(PARTITION BY generate_series(1,3) ORDER BY generate_series(1,3)), generate_series(1,3) g FROM few GROUP BY g;
 

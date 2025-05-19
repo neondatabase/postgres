@@ -126,7 +126,7 @@ from int8_tbl group by q1 order by q1;
 -- Unspecified-type literals in output columns should resolve as text
 
 SELECT *, pg_typeof(f1) FROM
-  (SELECT 'foo' AS f1 FROM generate_series(1,3)) ss ORDER BY 1;
+  (SELECT 'foo' AS f1 FROM generate_series(1,30)) ss ORDER BY 1;
 
 -- ... unless there's context to suggest differently
 
