@@ -93,7 +93,7 @@ SELECT array_to_json(ARRAY [jsonb '{"a":1}', jsonb '{"b":[2,3]}']);
 
 CREATE TEMP TABLE rows AS
 SELECT x, 'txt' || x as y
-FROM generate_series(1,30) AS x;
+FROM generate_series(1,3000) AS x;
 
 analyze rows;
 
@@ -129,7 +129,7 @@ SELECT jsonb_agg(q)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,2) x,
+         FROM generate_series(1,200) x,
               generate_series(4,5) y) q;
 
 SELECT jsonb_agg(q ORDER BY x, y)

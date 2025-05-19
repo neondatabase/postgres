@@ -213,7 +213,7 @@ set parallel_tuple_cost = 0;
 set max_parallel_workers_per_gather = 2;
 
 create table t (a int, b int, c int);
-insert into t select mod(i,10),mod(i,10),i from generate_series(1,100000) s(i);
+insert into t select mod(i,10),mod(i,10),i from generate_series(1,1000000) s(i);
 create index on t (a);
 analyze t;
 

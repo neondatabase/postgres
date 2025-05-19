@@ -41,7 +41,7 @@ create temporary view vw_ord as select * from rows from(unnest(array[10,20],arra
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;
-create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,2)) as z(a,b,c);
+create temporary view vw_ord as select * from rows from(unnest(array[10,20],array['foo','bar']), generate_series(1,200)) as z(a,b,c);
 select * from vw_ord;
 select definition from pg_views where viewname='vw_ord';
 drop view vw_ord;

@@ -93,7 +93,7 @@ select format('%2$s, %1$s', variadic array[1, 2]);
 select format('Hello', variadic NULL::int[]);
 -- variadic argument allows simulating more than FUNC_MAX_ARGS parameters
 select format(string_agg('%s',','), variadic array_agg(i))
-from generate_series(1,2000) g(i);
+from generate_series(1,20000) g(i);
 -- check field widths and left, right alignment
 select format('>>%10s<<', 'Hello');
 select format('>>%10s<<', NULL);

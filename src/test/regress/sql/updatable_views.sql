@@ -9,7 +9,7 @@ SET extra_float_digits = 0;
 -- messages
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW ro_view1 AS SELECT DISTINCT a, b FROM base_tbl; -- DISTINCT not supported
 CREATE VIEW ro_view2 AS SELECT a, b FROM base_tbl GROUP BY a, b; -- GROUP BY not supported
@@ -22,7 +22,7 @@ CREATE VIEW ro_view8 AS SELECT a, b FROM base_tbl ORDER BY a OFFSET 1; -- OFFSET
 CREATE VIEW ro_view9 AS SELECT a, b FROM base_tbl ORDER BY a LIMIT 1; -- LIMIT not supported
 CREATE VIEW ro_view10 AS SELECT 1 AS a; -- No base relations
 CREATE VIEW ro_view11 AS SELECT b1.a, b2.b FROM base_tbl b1, base_tbl b2; -- Multiple base relations
-CREATE VIEW ro_view12 AS SELECT * FROM generate_series(1, 10) AS g(a); -- SRF in rangetable
+CREATE VIEW ro_view12 AS SELECT * FROM generate_series(1, 1000) AS g(a); -- SRF in rangetable
 CREATE VIEW ro_view13 AS SELECT a, b FROM (SELECT * FROM base_tbl) AS t; -- Subselect in rangetable
 CREATE VIEW rw_view14 AS SELECT ctid, a, b FROM base_tbl; -- System columns may be part of an updatable view
 CREATE VIEW rw_view15 AS SELECT a, upper(b) FROM base_tbl; -- Expression/function may be part of an updatable view
@@ -122,7 +122,7 @@ DROP SEQUENCE uv_seq CASCADE;
 -- simple updatable view
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a>0;
 
@@ -170,7 +170,7 @@ DROP TABLE base_tbl_hist;
 -- view on top of view
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW rw_view1 AS SELECT b AS bb, a AS aa FROM base_tbl WHERE a>0;
 CREATE VIEW rw_view2 AS SELECT aa AS aaa, bb AS bbb FROM rw_view1 WHERE aa<10;
@@ -203,7 +203,7 @@ DROP TABLE base_tbl CASCADE;
 -- view on top of view with rules
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a>0 OFFSET 0; -- not updatable without rules/triggers
 CREATE VIEW rw_view2 AS SELECT * FROM rw_view1 WHERE a<10;
@@ -291,7 +291,7 @@ DROP TABLE base_tbl CASCADE;
 -- view on top of view with triggers
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW rw_view1 AS SELECT * FROM base_tbl WHERE a>0 OFFSET 0; -- not updatable without rules/triggers
 CREATE VIEW rw_view2 AS SELECT * FROM rw_view1 WHERE a<10;
@@ -406,7 +406,7 @@ DROP FUNCTION rw_view1_trig_fn();
 -- update using whole row from view
 
 CREATE TABLE base_tbl (a int PRIMARY KEY, b text DEFAULT 'Unspecified');
-INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-2, 2) g(i);
+INSERT INTO base_tbl SELECT i, 'Row ' || i FROM generate_series(-200, 200) g(i);
 
 CREATE VIEW rw_view1 AS SELECT b AS bb, a AS aa FROM base_tbl;
 
@@ -835,7 +835,7 @@ DROP TABLE base_tbl CASCADE;
 -- views with updatable and non-updatable columns
 
 CREATE TABLE base_tbl(a float);
-INSERT INTO base_tbl SELECT i/10.0 FROM generate_series(1,10) g(i);
+INSERT INTO base_tbl SELECT i/10.0 FROM generate_series(1,1000) g(i);
 
 CREATE VIEW rw_view1 AS
   SELECT ctid, sin(a) s, a, cos(a) c
@@ -920,8 +920,8 @@ DROP TABLE base_tbl CASCADE;
 
 CREATE TABLE base_tbl_parent (a int);
 CREATE TABLE base_tbl_child (CHECK (a > 0)) INHERITS (base_tbl_parent);
-INSERT INTO base_tbl_parent SELECT * FROM generate_series(-8, -1);
-INSERT INTO base_tbl_child SELECT * FROM generate_series(1, 8);
+INSERT INTO base_tbl_parent SELECT * FROM generate_series(-800, -1);
+INSERT INTO base_tbl_child SELECT * FROM generate_series(1, 800);
 
 CREATE VIEW rw_view1 AS SELECT * FROM base_tbl_parent;
 CREATE VIEW rw_view2 AS SELECT * FROM ONLY base_tbl_parent;
@@ -1064,7 +1064,7 @@ DROP TABLE base_tbl CASCADE;
 
 CREATE TABLE base_tbl (a int);
 CREATE TABLE ref_tbl (a int PRIMARY KEY);
-INSERT INTO ref_tbl SELECT * FROM generate_series(1,10);
+INSERT INTO ref_tbl SELECT * FROM generate_series(1,1000);
 
 CREATE VIEW rw_view1 AS
   SELECT * FROM base_tbl b

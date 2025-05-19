@@ -224,7 +224,7 @@ SELECT * FROM target ORDER BY tid;
 ROLLBACK;
 
 -- index plans
-INSERT INTO target SELECT generate_series(1000,2500), 0;
+INSERT INTO target SELECT generate_series(1000,250000), 0;
 ALTER TABLE target ADD PRIMARY KEY (tid);
 ANALYZE target;
 
@@ -885,8 +885,8 @@ CREATE TABLE ex_mtarget (a int, b int)
   WITH (autovacuum_enabled=off);
 CREATE TABLE ex_msource (a int, b int)
   WITH (autovacuum_enabled=off);
-INSERT INTO ex_mtarget SELECT i, i*10 FROM generate_series(1,100,2) i;
-INSERT INTO ex_msource SELECT i, i*10 FROM generate_series(1,100,1) i;
+INSERT INTO ex_mtarget SELECT i, i*10 FROM generate_series(1,10000,2) i;
+INSERT INTO ex_msource SELECT i, i*10 FROM generate_series(1,10000,1) i;
 
 CREATE FUNCTION explain_merge(query text) RETURNS SETOF text
 LANGUAGE plpgsql AS

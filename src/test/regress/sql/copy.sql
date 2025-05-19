@@ -81,9 +81,9 @@ alter table parted_copytest attach partition parted_copytest_a2 for values in(2)
 
 -- We must insert enough rows to trigger multi-inserts.  These are only
 -- enabled adaptively when there are few enough partition changes.
-insert into parted_copytest select x,1,'One' from generate_series(1,10000) x;
-insert into parted_copytest select x,2,'Two' from generate_series(10001,10100) x;
-insert into parted_copytest select x,1,'One' from generate_series(10101,10200) x;
+insert into parted_copytest select x,1,'One' from generate_series(1,100000) x;
+insert into parted_copytest select x,2,'Two' from generate_series(100001,101000) x;
+insert into parted_copytest select x,1,'One' from generate_series(101001,102000) x;
 
 \set filename :abs_builddir '/results/parted_copytest.csv'
 copy (select * from parted_copytest order by a) to :'filename';

@@ -435,7 +435,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from generate_series(1,500) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -445,7 +445,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from generate_series(1,500) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -455,7 +455,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from generate_series(1,500) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -465,7 +465,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from generate_series(1,500) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
