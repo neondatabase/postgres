@@ -432,7 +432,7 @@ SELECT '{[1,4), [7,10)}'::nummultirange * '{[0,2), [3,8), [9,12)}'::nummultirang
 
 -- test GiST index
 create table test_multirange_gist(mr int4multirange);
-insert into test_multirange_gist select int4multirange(int4range(g, g+10),int4range(g+20, g+30),int4range(g+40, g+50)) from generate_series(1,200000) g;
+insert into test_multirange_gist select int4multirange(int4range(g, g+10),int4range(g+20, g+30),int4range(g+40, g+50)) from generate_series(1,2000000) g;
 insert into test_multirange_gist select '{}'::int4multirange from generate_series(1,500) g;
 insert into test_multirange_gist select int4multirange(int4range(g, g+10000)) from generate_series(1,1000) g;
 insert into test_multirange_gist select int4multirange(int4range(NULL, g*10, '(]'), int4range(g*10, g*20, '(]')) from generate_series(1,100) g;

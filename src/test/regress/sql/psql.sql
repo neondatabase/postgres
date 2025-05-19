@@ -84,7 +84,7 @@ select 1 as var1, NULL as var2, 3 as var3 \gset
 \echo :var1 :var2 :var3
 
 -- \gset requires just one tuple
-select 10 as test01, 20 as test02 from generate_series(1,300) \gset
+select 10 as test01, 20 as test02 from generate_series(1,3000) \gset
 select 10 as test01, 20 as test02 from generate_series(1,0) \gset
 
 -- \gset should work in FETCH_COUNT mode too
@@ -92,7 +92,7 @@ select 10 as test01, 20 as test02 from generate_series(1,0) \gset
 
 select 1 as x, 2 as y \gset pref01_ \\ \echo :pref01_x
 select 3 as x, 4 as y \gset pref01_ \echo :pref01_x \echo :pref01_y
-select 10 as test01, 20 as test02 from generate_series(1,300) \gset
+select 10 as test01, 20 as test02 from generate_series(1,3000) \gset
 select 10 as test01, 20 as test02 from generate_series(1,0) \gset
 
 \unset FETCH_COUNT

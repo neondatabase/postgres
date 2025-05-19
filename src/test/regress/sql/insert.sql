@@ -320,8 +320,8 @@ create table part_ee_ff3_2 partition of part_ee_ff3 for values from (25) to (30)
 
 truncate list_parted;
 insert into list_parted values ('aa'), ('cc');
-insert into list_parted select 'Ff', s.a from generate_series(1, 29) s(a);
-insert into list_parted select 'gg', s.a from generate_series(1, 9) s(a);
+insert into list_parted select 'Ff', s.a from generate_series(1, 290) s(a);
+insert into list_parted select 'gg', s.a from generate_series(1, 90) s(a);
 insert into list_parted (b) values (1);
 select tableoid::regclass::text, a, min(b) as min_b, max(b) as max_b from list_parted group by 1, 2 order by 1;
 

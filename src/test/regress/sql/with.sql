@@ -8,7 +8,7 @@ SELECT * FROM q1, q1 AS q2;
 
 -- Multiple uses are evaluated only once
 SELECT count(*) FROM (
-  WITH q1(x) AS (SELECT random() FROM generate_series(1, 5))
+  WITH q1(x) AS (SELECT random() FROM generate_series(1, 50))
     SELECT * FROM q1
   UNION
     SELECT * FROM q1

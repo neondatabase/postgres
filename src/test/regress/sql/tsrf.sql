@@ -3,27 +3,27 @@
 --
 
 -- simple srf
-SELECT generate_series(1, 3);
+SELECT generate_series(1, 30);
 
 -- parallel iteration
-SELECT generate_series(1, 3), generate_series(3,5);
+SELECT generate_series(1, 30), generate_series(3,50);
 
 -- parallel iteration, different number of rows
-SELECT generate_series(1, 2000), generate_series(1,4000);
+SELECT generate_series(1, 20000), generate_series(1,40000);
 
 -- srf, with SRF argument
-SELECT generate_series(1, generate_series(1, 3));
+SELECT generate_series(1, generate_series(1, 30));
 
 -- but we've traditionally rejected the same in FROM
-SELECT * FROM generate_series(1, generate_series(1, 3));
+SELECT * FROM generate_series(1, generate_series(1, 30));
 
 -- srf, with two SRF arguments
 SELECT generate_series(generate_series(1,30), generate_series(2, 40));
 
 -- check proper nesting of SRFs in different expressions
 explain (verbose, costs off)
-SELECT generate_series(1, generate_series(1, 3)), generate_series(2, 4);
-SELECT generate_series(1, generate_series(1, 3)), generate_series(2, 4);
+SELECT generate_series(1, generate_series(1, 30)), generate_series(2, 40);
+SELECT generate_series(1, generate_series(1, 30)), generate_series(2, 40);
 
 CREATE TABLE few(id int, dataa text, datab text);
 INSERT INTO few VALUES(1, 'a', 'foo'),(2, 'a', 'bar'),(3, 'b', 'bar');
@@ -121,7 +121,7 @@ VALUES(1, generate_series(1,2));
 
 -- We allow tSRFs that are not at top level
 SELECT int4mul(generate_series(1,2), 10);
-SELECT generate_series(1,3) IS DISTINCT FROM 2;
+SELECT generate_series(1,30) IS DISTINCT FROM 2;
 
 -- but SRFs in function RTEs must be at top level (annoying restriction)
 SELECT * FROM int4mul(generate_series(1,2), 10);
@@ -131,16 +131,16 @@ SELECT * FROM int4mul(generate_series(1,2), 10);
 -- BY reference can be implicitly generated, if there's no other ORDER BY.
 
 -- implicit reference (via implicit ORDER) to all columns
-SELECT DISTINCT ON (a) a, b, generate_series(1,3) g
+SELECT DISTINCT ON (a) a, b, generate_series(1,30) g
 FROM (VALUES (3, 2), (3,1), (1,1), (1,4), (5,3), (5,1)) AS t(a, b);
 
 -- unreferenced in DISTINCT ON or ORDER BY
-SELECT DISTINCT ON (a) a, b, generate_series(1,3) g
+SELECT DISTINCT ON (a) a, b, generate_series(1,30) g
 FROM (VALUES (3, 2), (3,1), (1,1), (1,4), (5,3), (5,1)) AS t(a, b)
 ORDER BY a, b DESC;
 
 -- referenced in ORDER BY
-SELECT DISTINCT ON (a) a, b, generate_series(1,3) g
+SELECT DISTINCT ON (a) a, b, generate_series(1,30) g
 FROM (VALUES (3, 2), (3,1), (1,1), (1,4), (5,3), (5,1)) AS t(a, b)
 ORDER BY a, b DESC, g DESC;
 
@@ -159,9 +159,9 @@ SELECT a, generate_series(1,2) FROM (VALUES(1),(2),(3)) r(a) LIMIT 2 OFFSET 2;
 SELECT 1 LIMIT generate_series(1,3);
 
 -- tSRF in correlated subquery, referencing table outside
-SELECT (SELECT generate_series(1,3) LIMIT 1 OFFSET few.id) FROM few;
+SELECT (SELECT generate_series(1,30) LIMIT 1 OFFSET few.id) FROM few;
 -- tSRF in correlated subquery, referencing SRF outside
-SELECT (SELECT generate_series(1,3) LIMIT 1 OFFSET g.i) FROM generate_series(0,3) g(i);
+SELECT (SELECT generate_series(1,30) LIMIT 1 OFFSET g.i) FROM generate_series(0,30) g(i);
 
 -- Operators can return sets too
 CREATE OPERATOR |@| (PROCEDURE = unnest, RIGHTARG = ANYARRAY);
@@ -169,16 +169,16 @@ SELECT |@|ARRAY[1,2,3];
 
 -- Some fun cases involving duplicate SRF calls
 explain (verbose, costs off)
-select generate_series(1,3) as x, generate_series(1,3) + 1 as xp1;
-select generate_series(1,3) as x, generate_series(1,3) + 1 as xp1;
+select generate_series(1,30) as x, generate_series(1,30) + 1 as xp1;
+select generate_series(1,30) as x, generate_series(1,30) + 1 as xp1;
 explain (verbose, costs off)
-select generate_series(1,3)+1 order by generate_series(1,3);
-select generate_series(1,3)+1 order by generate_series(1,3);
+select generate_series(1,30)+1 order by generate_series(1,30);
+select generate_series(1,30)+1 order by generate_series(1,30);
 
 -- Check that SRFs of same nesting level run in lockstep
 explain (verbose, costs off)
-select generate_series(1,3) as x, generate_series(3,6) + 1 as y;
-select generate_series(1,3) as x, generate_series(3,6) + 1 as y;
+select generate_series(1,30) as x, generate_series(3,60) + 1 as y;
+select generate_series(1,30) as x, generate_series(3,60) + 1 as y;
 
 -- Clean up
 DROP TABLE few;

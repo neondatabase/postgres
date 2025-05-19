@@ -533,7 +533,7 @@ explain (costs off)
 select * from int8_tbl t1
     left join int8_tbl t2 on true
     left join lateral
-      (select * from generate_series(t2.q1, 100)) s
+      (select * from generate_series(t2.q1, 1000)) s
       on t2.q1 = 1;
 
 explain (costs off)
@@ -698,7 +698,7 @@ reset enable_nestloop;
 --
 
 create temp table tbl_ra(a int unique, b int);
-insert into tbl_ra select i, i%100 from generate_series(1,100000)i;
+insert into tbl_ra select i, i%100 from generate_series(1,10000000)i;
 create index on tbl_ra (b);
 analyze tbl_ra;
 
@@ -740,7 +740,7 @@ reset enable_memoize;
 --
 
 create temp table tt3(f1 int, f2 text);
-insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,100000) x;
+insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,10000000) x;
 analyze tt3;
 
 create temp table tt4(f1 int);
@@ -2414,10 +2414,10 @@ explain (costs off)
 
 -- lateral with UNION ALL subselect
 explain (costs off)
-  select * from generate_series(100,200) g,
+  select * from generate_series(100,2000) g,
     lateral (select * from int8_tbl a where g = q1 union all
              select * from int8_tbl b where g = q2) ss;
-select * from generate_series(100,200) g,
+select * from generate_series(100,2000) g,
   lateral (select * from int8_tbl a where g = q1 union all
            select * from int8_tbl b where g = q2) ss;
 
@@ -2456,9 +2456,9 @@ select * from ((select f1/2 as x from int4_tbl) ss1 join int4_tbl i4 on x = f1) 
 
 -- lateral references requiring pullup
 select * from (values(1)) x(lb),
-  lateral generate_series(lb,4) x4;
+  lateral generate_series(lb,40) x4;
 select * from (select f1/1000000000 from int4_tbl) x(lb),
-  lateral generate_series(lb,4) x4;
+  lateral generate_series(lb,40) x4;
 select * from (values(1)) x(lb),
   lateral (values(lb)) y(lbcopy);
 select * from (values(1)) x(lb),
@@ -2702,7 +2702,7 @@ drop table join_ut1;
 begin;
 
 create table fkest (x integer, x10 integer, x10b integer, x100 integer);
-insert into fkest select x, x/10, x/10, x/100 from generate_series(1,10000) x;
+insert into fkest select x, x/10, x/10, x/100 from generate_series(1,1000000) x;
 create unique index on fkest(x, x10, x100);
 analyze fkest;
 
@@ -2732,8 +2732,8 @@ begin;
 create table fkest (a int, b int, c int unique, primary key(a,b));
 create table fkest1 (a int, b int, primary key(a,b));
 
-insert into fkest select x/10, x%10, x from generate_series(1,10000) x;
-insert into fkest1 select x/10, x%10 from generate_series(1,10000) x;
+insert into fkest select x/10, x%10, x from generate_series(1,1000000) x;
+insert into fkest1 select x/10, x%10 from generate_series(1,1000000) x;
 
 alter table fkest1
   add constraint fkest1_a_b_fkey foreign key (a,b) references fkest;

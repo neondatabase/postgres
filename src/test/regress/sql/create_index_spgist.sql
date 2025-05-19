@@ -6,7 +6,7 @@ CREATE TABLE quad_point_tbl AS
     SELECT point(unique1,unique2) AS p FROM tenk1;
 
 INSERT INTO quad_point_tbl
-    SELECT '(333.0,400.0)'::point FROM generate_series(1,100000);
+    SELECT '(333.0,400.0)'::point FROM generate_series(1,1000000);
 
 INSERT INTO quad_point_tbl VALUES (NULL), (NULL), (NULL);
 
@@ -20,7 +20,7 @@ CREATE TABLE radix_text_tbl AS
     SELECT name AS t FROM road WHERE name !~ '^[0-9]';
 
 INSERT INTO radix_text_tbl
-    SELECT 'P0123456789abcdef' FROM generate_series(1,1000);
+    SELECT 'P0123456789abcdef' FROM generate_series(1,100000);
 INSERT INTO radix_text_tbl VALUES ('P0123456789abcde');
 INSERT INTO radix_text_tbl VALUES ('P0123456789abcdefF');
 

@@ -47,7 +47,7 @@ DEALLOCATE select1;
 -- (temporarily hide query, to avoid the long CREATE TABLE stmt)
 \set ECHO none
 SELECT 'CREATE TABLE extra_wide_table(firstc text, '|| array_to_string(array_agg('c'||i||' bool'),',')||', lastc text);'
-FROM generate_series(1, 1100) g(i)
+FROM generate_series(1, 11000) g(i)
 \gexec
 \set ECHO all
 INSERT INTO extra_wide_table(firstc, lastc) VALUES('first col', 'last col');
@@ -74,7 +74,7 @@ CREATE TABLE default_expr_agg (a int DEFAULT (avg(1)));
 -- invalid use of subquery
 CREATE TABLE default_expr_agg (a int DEFAULT (select 1));
 -- invalid use of set-returning function
-CREATE TABLE default_expr_agg (a int DEFAULT (generate_series(1,3)));
+CREATE TABLE default_expr_agg (a int DEFAULT (generate_series(1,300)));
 
 -- Verify that subtransaction rollback restores rd_createSubid.
 BEGIN;
@@ -306,7 +306,7 @@ CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (sum(a)
 CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (sum(somename));
 CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (sum(1));
 CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN ((select 1));
-CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (generate_series(4, 6));
+CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN (generate_series(4, 600));
 CREATE TABLE part_bogus_expr_fail PARTITION OF list_parted FOR VALUES IN ((1+1) collate "POSIX");
 
 -- syntax does not allow empty list of values for list partitions
@@ -365,7 +365,7 @@ CREATE TABLE part_bogus_expr_fail PARTITION OF range_parted
 CREATE TABLE part_bogus_expr_fail PARTITION OF range_parted
   FOR VALUES FROM ((select 1)) TO ('2019-01-01');
 CREATE TABLE part_bogus_expr_fail PARTITION OF range_parted
-  FOR VALUES FROM (generate_series(1, 3)) TO ('2019-01-01');
+  FOR VALUES FROM (generate_series(1, 300)) TO ('2019-01-01');
 
 -- trying to specify list for range partitioned table
 CREATE TABLE fail_part PARTITION OF range_parted FOR VALUES IN ('a');

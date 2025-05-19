@@ -12,7 +12,7 @@
 -- take as many as 3000 values and still have less than 1e-9 chance
 -- of failure, per https://en.wikipedia.org/wiki/Birthday_problem)
 SELECT r, count(*)
-FROM (SELECT random() r FROM generate_series(1, 1000)) ss
+FROM (SELECT random() r FROM generate_series(1, 10000)) ss
 GROUP BY r HAVING count(*) > 1;
 
 -- The range should be [0, 1).  We can expect that at least one out of 2000
@@ -22,7 +22,7 @@ GROUP BY r HAVING count(*) > 1;
 SELECT count(*) FILTER (WHERE r < 0 OR r >= 1) AS out_of_range,
        (count(*) FILTER (WHERE r < 0.01)) > 0 AS has_small,
        (count(*) FILTER (WHERE r > 0.99)) > 0 AS has_large
-FROM (SELECT random() r FROM generate_series(1, 2000)) ss;
+FROM (SELECT random() r FROM generate_series(1, 20000)) ss;
 
 -- Check for uniform distribution using the Kolmogorov-Smirnov test.
 
@@ -58,16 +58,16 @@ SELECT ks_test_uniform_random() OR
 
 -- As above, there should be no duplicates in 1000 random_normal() values.
 SELECT r, count(*)
-FROM (SELECT random_normal() r FROM generate_series(1, 1000)) ss
+FROM (SELECT random_normal() r FROM generate_series(1, 10000)) ss
 GROUP BY r HAVING count(*) > 1;
 
 -- ... unless we force the range (standard deviation) to zero.
 -- This is a good place to check that the mean input does something, too.
 SELECT r, count(*)
-FROM (SELECT random_normal(10, 0) r FROM generate_series(1, 100)) ss
+FROM (SELECT random_normal(10, 0) r FROM generate_series(1, 1000)) ss
 GROUP BY r;
 SELECT r, count(*)
-FROM (SELECT random_normal(-10, 0) r FROM generate_series(1, 100)) ss
+FROM (SELECT random_normal(-10, 0) r FROM generate_series(1, 1000)) ss
 GROUP BY r;
 
 -- Check standard normal distribution using the Kolmogorov-Smirnov test.
@@ -104,12 +104,12 @@ SELECT ks_test_normal_random() OR
 
 SELECT setseed(0.5);
 
-SELECT random() FROM generate_series(1, 10);
+SELECT random() FROM generate_series(1, 100);
 
 -- Likewise for random_normal(); however, since its implementation relies
 -- on libm functions that have different roundoff behaviors on different
 -- machines, we have to round off the results a bit to get consistent output.
 SET extra_float_digits = -1;
 
-SELECT random_normal() FROM generate_series(1, 10);
-SELECT random_normal(mean => 1, stddev => 0.1) r FROM generate_series(1, 10);
+SELECT random_normal() FROM generate_series(1, 100);
+SELECT random_normal(mean => 1, stddev => 0.1) r FROM generate_series(1, 100);

@@ -404,7 +404,7 @@ select null::int = all ('{1,2,3}');
 select 33 = all ('{1,null,3}');
 select 33 = all ('{33,null,33}');
 -- nulls later in the bitmap
-SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 900) FROM generate_series(1,1000) g(i)));
+SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 90000) FROM generate_series(1,100000) g(i)));
 
 -- test indexes on arrays
 create temp table arr_tbl (f1 int[] unique);

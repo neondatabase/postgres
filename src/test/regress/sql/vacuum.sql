@@ -59,7 +59,7 @@ ANALYZE vaccluster;
 -- https://postgr.es/m/c7988239-d42c-ddc4-41db-171b23b35e4f%40ssinger.info
 -- (which hopefully is unlikely to be reintroduced), but also seems
 -- independently worthwhile to cover.
-INSERT INTO vactst SELECT generate_series(1, 300);
+INSERT INTO vactst SELECT generate_series(1, 30000);
 DELETE FROM vactst WHERE i % 7 = 0; -- delete a few rows outside
 BEGIN;
 INSERT INTO vactst SELECT generate_series(301, 400);

@@ -638,7 +638,7 @@ create aggregate first_el_agg_any(anyelement) (
   FINALFUNC = first_el
 );
 
-select first_el_agg_f8(x::float8) from generate_series(1,1000) x;
+select first_el_agg_f8(x::float8) from generate_series(1,10000) x;
 select first_el_agg_any(x) from generate_series(1,1000) x;
 select first_el_agg_f8(x::float8) over(order by x) from generate_series(1,1000) x;
 select first_el_agg_any(x) over(order by x) from generate_series(1,1000) x;

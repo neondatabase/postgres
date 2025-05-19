@@ -831,7 +831,7 @@ SELECT i as pow,
 	round((0.5 * 10 ^ i)::numeric, -i),
 	round((1.5 * 10 ^ i)::numeric, -i),
 	round((2.5 * 10 ^ i)::numeric, -i)
-FROM generate_series(-5,5) AS t(i);
+FROM generate_series(-5,50) AS t(i);
 
 -- Check limits of rounding before the decimal point
 SELECT round(4.4e131071, -131071) = 4e131071;

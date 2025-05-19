@@ -500,13 +500,13 @@ order by 1, 2;
 --
 
 create temp table patest0 (id, x) as
-  select x, x from generate_series(0,1000) x;
+  select x, x from generate_series(0,100000) x;
 create temp table patest1() inherits (patest0);
 insert into patest1
-  select x, x from generate_series(0,1000) x;
+  select x, x from generate_series(0,100000) x;
 create temp table patest2() inherits (patest0);
 insert into patest2
-  select x, x from generate_series(0,1000) x;
+  select x, x from generate_series(0,100000) x;
 create index patest0i on patest0(id);
 create index patest1i on patest1(id);
 create index patest2i on patest2(id);

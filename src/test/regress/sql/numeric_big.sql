@@ -1212,7 +1212,7 @@ SELECT trim_scale(ln(x::numeric)-bc_result) AS diff FROM t;
 --
 
 -- input very small, exact result known
-WITH t(x) AS (SELECT '1e-'||n FROM generate_series(1, 100) g(n))
+WITH t(x) AS (SELECT '1e-'||n FROM generate_series(1, 10000) g(n))
 SELECT x, log(x::numeric) FROM t;
 
 -- input very small, non-exact results
@@ -1327,7 +1327,7 @@ WITH t(x, bc_result) AS (VALUES
 SELECT '1+'||x, bc_result, log(1.0+x::numeric), log(1.0+x::numeric)-bc_result AS diff FROM t;
 
 -- input very large, exact result known
-WITH t(x) AS (SELECT '1e'||n FROM generate_series(1, 100) g(n))
+WITH t(x) AS (SELECT '1e'||n FROM generate_series(1, 10000) g(n))
 SELECT x, log(x::numeric) FROM t;
 
 -- input very large, non-exact results

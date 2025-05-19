@@ -42,12 +42,12 @@ CREATE TABLE quad_poly_tbl (id int, p polygon);
 
 INSERT INTO quad_poly_tbl
 	SELECT (x - 1) * 100 + y, polygon(circle(point(x * 10, y * 10), 1 + (x + y) % 10))
-	FROM generate_series(1, 100) x,
-		 generate_series(1, 100) y;
+	FROM generate_series(1, 1000) x,
+		 generate_series(1, 1000) y;
 
 INSERT INTO quad_poly_tbl
 	SELECT i, polygon '((200, 300),(210, 310),(230, 290))'
-	FROM generate_series(10001, 11000) AS i;
+	FROM generate_series(10001, 20000) AS i;
 
 INSERT INTO quad_poly_tbl
 	VALUES

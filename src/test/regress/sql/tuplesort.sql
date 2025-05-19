@@ -19,7 +19,7 @@ INSERT INTO abbrev_abort_uuids (abort_increasing, abort_decreasing, noabort_incr
         ('00000000-0000-0000-0000-'||to_char(20000 - g.i, '000000000000FM'))::uuid abort_decreasing,
         (to_char(g.i % 10009, '00000000FM')||'-0000-0000-0000-'||to_char(g.i, '000000000000FM'))::uuid noabort_increasing,
         (to_char(((20000 - g.i) % 10009), '00000000FM')||'-0000-0000-0000-'||to_char(20000 - g.i, '000000000000FM'))::uuid noabort_decreasing
-    FROM generate_series(0, 20000, 1) g(i);
+    FROM generate_series(0, 200000, 1) g(i);
 
 -- and a few NULLs
 INSERT INTO abbrev_abort_uuids(id) VALUES(0);
@@ -267,7 +267,7 @@ ROLLBACK;
 CREATE TEMP TABLE test_mark_restore(col1 int, col2 int, col12 int);
 -- need a few duplicates for mark/restore to matter
 INSERT INTO test_mark_restore(col1, col2, col12)
-   SELECT a.i, b.i, a.i * b.i FROM generate_series(1, 500) a(i), generate_series(1, 5) b(i);
+   SELECT a.i, b.i, a.i * b.i FROM generate_series(1, 5000) a(i), generate_series(1, 5) b(i);
 
 BEGIN;
 

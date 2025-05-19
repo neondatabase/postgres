@@ -126,7 +126,7 @@ from int8_tbl group by q1 order by q1;
 -- Unspecified-type literals in output columns should resolve as text
 
 SELECT *, pg_typeof(f1) FROM
-  (SELECT 'foo' AS f1 FROM generate_series(1,30)) ss ORDER BY 1;
+  (SELECT 'foo' AS f1 FROM generate_series(1,3000)) ss ORDER BY 1;
 
 -- ... unless there's context to suggest differently
 
@@ -571,7 +571,7 @@ where (exists(select 1 from tenk1 k where k.unique1 = t.unique2) or ten < 0)
 create temp table exists_tbl (c1 int, c2 int, c3 int) partition by list (c1);
 create temp table exists_tbl_null partition of exists_tbl for values in (null);
 create temp table exists_tbl_def partition of exists_tbl default;
-insert into exists_tbl select x, x/2, x+1 from generate_series(0,10) x;
+insert into exists_tbl select x, x/2, x+1 from generate_series(0,1000) x;
 analyze exists_tbl;
 explain (costs off)
 select * from exists_tbl t1
@@ -688,7 +688,7 @@ select exists(select * from nocolumns);
 -- Check behavior with a SubPlan in VALUES (bug #14924)
 --
 select val.x
-  from generate_series(1,10) as s(i),
+  from generate_series(1,1000) as s(i),
   lateral (
     values ((select s.i + 1)), (s.i + 101)
   ) as val(x)
@@ -724,9 +724,9 @@ select * from int4_tbl where
 --
 explain (verbose, costs off)
 select * from int4_tbl o where (f1, f1) in
-  (select f1, generate_series(1,50) / 10 g from int4_tbl i group by f1);
+  (select f1, generate_series(1,5000) / 10 g from int4_tbl i group by f1);
 select * from int4_tbl o where (f1, f1) in
-  (select f1, generate_series(1,50) / 10 g from int4_tbl i group by f1);
+  (select f1, generate_series(1,5000) / 10 g from int4_tbl i group by f1);
 
 --
 -- check for over-optimization of whole-row Var referencing an Append plan
@@ -868,7 +868,7 @@ drop table sq_limit;
 begin;
 
 declare c1 scroll cursor for
- select * from generate_series(1,4) i
+ select * from generate_series(1,400) i
   where i <> all (values (2),(3));
 
 move forward all in c1;

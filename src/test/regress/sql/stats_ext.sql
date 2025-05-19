@@ -115,9 +115,9 @@ DROP TABLE ab1 CASCADE;
 CREATE TABLE stxdinh(a int, b int);
 CREATE TABLE stxdinh1() INHERITS(stxdinh);
 CREATE TABLE stxdinh2() INHERITS(stxdinh);
-INSERT INTO stxdinh SELECT mod(a,50), mod(a,100) FROM generate_series(0, 1999) a;
-INSERT INTO stxdinh1 SELECT mod(a,100), mod(a,100) FROM generate_series(0, 999) a;
-INSERT INTO stxdinh2 SELECT mod(a,100), mod(a,100) FROM generate_series(0, 999) a;
+INSERT INTO stxdinh SELECT mod(a,50), mod(a,100) FROM generate_series(0, 199900) a;
+INSERT INTO stxdinh1 SELECT mod(a,100), mod(a,100) FROM generate_series(0, 99900) a;
+INSERT INTO stxdinh2 SELECT mod(a,100), mod(a,100) FROM generate_series(0, 99900) a;
 VACUUM ANALYZE stxdinh, stxdinh1, stxdinh2;
 -- Ensure non-inherited stats are not applied to inherited query
 -- Without stats object, it looks like this
@@ -138,7 +138,7 @@ DROP TABLE stxdinh, stxdinh1, stxdinh2;
 -- Ensure inherited stats ARE applied to inherited query in partitioned table
 CREATE TABLE stxdinp(i int, a int, b int) PARTITION BY RANGE (i);
 CREATE TABLE stxdinp1 PARTITION OF stxdinp FOR VALUES FROM (1) TO (100);
-INSERT INTO stxdinp SELECT 1, a/100, a/100 FROM generate_series(1, 999) a;
+INSERT INTO stxdinp SELECT 1, a/100, a/100 FROM generate_series(1, 99900) a;
 CREATE STATISTICS stxdinp ON (a + 1), a, b FROM stxdinp;
 VACUUM ANALYZE stxdinp; -- partitions are processed recursively
 SELECT 1 FROM pg_statistic_ext WHERE stxrelid = 'stxdinp'::regclass;
@@ -175,7 +175,7 @@ INSERT INTO ab1
 SELECT x / 10, x / 3,
     '2020-10-01'::timestamp + x * interval '1 day',
     '2020-10-01'::timestamptz + x * interval '1 day'
-FROM generate_series(1, 100) x;
+FROM generate_series(1, 10000) x;
 ANALYZE ab1;
 
 -- apply some stats
@@ -235,7 +235,7 @@ WITH (autovacuum_enabled = off);
 -- over-estimates when using only per-column statistics
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT i/100, i/100, i/100, cash_words((i/100)::money)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,100000) s(i);
 
 ANALYZE ndistinct;
 
@@ -300,7 +300,7 @@ TRUNCATE TABLE ndistinct;
 INSERT INTO ndistinct (a, b, c, filler1)
      SELECT mod(i,13), mod(i,17), mod(i,19),
             cash_words(mod(i,23)::int::money)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,100000) s(i);
 
 ANALYZE ndistinct;
 
@@ -408,7 +408,7 @@ TRUNCATE ndistinct;
 -- two mostly independent groups of columns
 INSERT INTO ndistinct (a, b, c, d)
      SELECT mod(i,3), mod(i,9), mod(i,5), mod(i,20)
-       FROM generate_series(1,1000) s(i);
+       FROM generate_series(1,100000) s(i);
 
 ANALYZE ndistinct;
 
@@ -563,7 +563,7 @@ CREATE INDEX fdeps_abc_idx ON functional_dependencies (a, b, c);
 
 -- random data (no functional dependencies)
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT mod(i, 5), mod(i, 7), mod(i, 11), i FROM generate_series(1,1000) s(i);
+     SELECT mod(i, 5), mod(i, 7), mod(i, 11), i FROM generate_series(1,100000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -586,7 +586,7 @@ DROP STATISTICS func_deps_stat;
 
 -- now do the same thing, but with expressions
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,5000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,500000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -608,7 +608,7 @@ TRUNCATE functional_dependencies;
 DROP STATISTICS func_deps_stat;
 
 INSERT INTO functional_dependencies (a, b, c, filler1)
-     SELECT mod(i,100), mod(i,50), mod(i,25), i FROM generate_series(1,5000) s(i);
+     SELECT mod(i,100), mod(i,50), mod(i,25), i FROM generate_series(1,500000) s(i);
 
 ANALYZE functional_dependencies;
 
@@ -884,7 +884,7 @@ INSERT INTO functional_dependencies_multi (a, b, c, d)
          mod(i,7),
          mod(i,11),
          mod(i,11)
-    FROM generate_series(1,5000) s(i);
+    FROM generate_series(1,500000) s(i);
 
 ANALYZE functional_dependencies_multi;
 
@@ -924,7 +924,7 @@ WITH (autovacuum_enabled = off);
 
 -- random data (no MCV list)
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT mod(i,37), mod(i,41), mod(i,43), mod(i,47) FROM generate_series(1,5000) s(i);
+     SELECT mod(i,37), mod(i,41), mod(i,43), mod(i,47) FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -946,7 +946,7 @@ DROP STATISTICS mcv_lists_stats;
 
 -- random data (no MCV list), but with expression
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,1000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,100000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -969,7 +969,7 @@ DROP STATISTICS mcv_lists_stats;
 
 INSERT INTO mcv_lists (a, b, c, ia, filler1)
      SELECT mod(i,100), mod(i,50), mod(i,25), array[mod(i,25)], i
-       FROM generate_series(1,5000) s(i);
+       FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1099,7 +1099,7 @@ TRUNCATE mcv_lists;
 DROP STATISTICS mcv_lists_stats;
 
 INSERT INTO mcv_lists (a, b, c, filler1)
-     SELECT i, i, i, i FROM generate_series(1,1000) s(i);
+     SELECT i, i, i, i FROM generate_series(1,100000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1195,7 +1195,7 @@ INSERT INTO mcv_lists (a, b, c, filler1)
          (CASE WHEN mod(i,50) = 1  THEN NULL ELSE mod(i,50) END),
          (CASE WHEN mod(i,25) = 1  THEN NULL ELSE mod(i,25) END),
          i
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1226,7 +1226,7 @@ SELECT * FROM check_estimated_rows('SELECT * FROM mcv_lists WHERE a IN (0, 1) AN
 
 -- test pg_mcv_list_items with a very simple (single item) MCV list
 TRUNCATE mcv_lists;
-INSERT INTO mcv_lists (a, b, c) SELECT 1, 2, 3 FROM generate_series(1,1000) s(i);
+INSERT INTO mcv_lists (a, b, c) SELECT 1, 2, 3 FROM generate_series(1,100000) s(i);
 ANALYZE mcv_lists;
 
 SELECT m.*
@@ -1245,7 +1245,7 @@ INSERT INTO mcv_lists (a, b, c, d)
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END),
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 0 END),
          (CASE WHEN mod(i,2) = 0 THEN NULL ELSE 'x' END)
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists;
 
@@ -1286,7 +1286,7 @@ INSERT INTO mcv_lists_uuid (a, b, c)
          fipshash(mod(i,100)::text)::uuid,
          fipshash(mod(i,50)::text)::uuid,
          fipshash(mod(i,25)::text)::uuid
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists_uuid;
 
@@ -1318,7 +1318,7 @@ INSERT INTO mcv_lists_arrays (a, b, c)
          ARRAY[fipshash((i/100)::text), fipshash((i/100-1)::text), fipshash((i/100+1)::text)],
          ARRAY[(i/100-1)::numeric/1000, (i/100)::numeric/1000, (i/100+1)::numeric/1000],
          ARRAY[(i/100-1), i/100, (i/100+1)]
-     FROM generate_series(1,5000) s(i);
+     FROM generate_series(1,500000) s(i);
 
 CREATE STATISTICS mcv_lists_arrays_stats (mcv) ON a, b, c
   FROM mcv_lists_arrays;
@@ -1336,7 +1336,7 @@ WITH (autovacuum_enabled = off);
 INSERT INTO mcv_lists_bool (a, b, c)
      SELECT
          (mod(i,2) = 0), (mod(i,4) = 0), (mod(i,8) = 0)
-     FROM generate_series(1,10000) s(i);
+     FROM generate_series(1,1000000) s(i);
 
 ANALYZE mcv_lists_bool;
 
@@ -1374,7 +1374,7 @@ INSERT INTO mcv_lists_partial (a, b, c)
          mod(i,10),
          mod(i,10),
          mod(i,10)
-     FROM generate_series(0,999) s(i);
+     FROM generate_series(0,99900) s(i);
 
 -- 100 groups that will make it to the MCV list (includes the 10 frequent ones)
 INSERT INTO mcv_lists_partial (a, b, c)
@@ -1382,7 +1382,7 @@ INSERT INTO mcv_lists_partial (a, b, c)
          i,
          i,
          i
-     FROM generate_series(0,99) s(i);
+     FROM generate_series(0,9900) s(i);
 
 -- 4000 groups in total, most of which won't make it (just a single item)
 INSERT INTO mcv_lists_partial (a, b, c)
@@ -1390,7 +1390,7 @@ INSERT INTO mcv_lists_partial (a, b, c)
          i,
          i,
          i
-     FROM generate_series(0,3999) s(i);
+     FROM generate_series(0,399900) s(i);
 
 ANALYZE mcv_lists_partial;
 
@@ -1448,7 +1448,7 @@ INSERT INTO mcv_lists_multi (a, b, c, d)
          mod(i,5),
          mod(i,7),
          mod(i,7)
-    FROM generate_series(1,5000) s(i);
+    FROM generate_series(1,500000) s(i);
 
 ANALYZE mcv_lists_multi;
 
@@ -1480,7 +1480,7 @@ DROP TABLE mcv_lists_multi;
 
 -- statistics on integer expressions
 CREATE TABLE expr_stats (a int, b int, c int);
-INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,1000) s(i);
+INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,100000) s(i);
 ANALYZE expr_stats;
 
 SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE (2*a) = 0 AND (3*b) = 0');
@@ -1497,7 +1497,7 @@ DROP TABLE expr_stats;
 
 -- statistics on a mix columns and expressions
 CREATE TABLE expr_stats (a int, b int, c int);
-INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,1000) s(i);
+INSERT INTO expr_stats SELECT mod(i,10), mod(i,10), mod(i,10) FROM generate_series(1,100000) s(i);
 ANALYZE expr_stats;
 
 SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (2*a) = 0 AND (3*b) = 0');
@@ -1515,7 +1515,7 @@ DROP TABLE expr_stats;
 
 -- statistics on expressions with different data types
 CREATE TABLE expr_stats (a int, b name, c text);
-INSERT INTO expr_stats SELECT mod(i,10), fipshash(mod(i,10)::text), fipshash(mod(i,10)::text) FROM generate_series(1,1000) s(i);
+INSERT INTO expr_stats SELECT mod(i,10), fipshash(mod(i,10)::text), fipshash(mod(i,10)::text) FROM generate_series(1,100000) s(i);
 ANALYZE expr_stats;
 
 SELECT * FROM check_estimated_rows('SELECT * FROM expr_stats WHERE a = 0 AND (b || c) <= ''z'' AND (c || b) >= ''0''');
@@ -1560,7 +1560,7 @@ CREATE TABLE tststats.priv_test_tbl (
 );
 
 INSERT INTO tststats.priv_test_tbl
-     SELECT mod(i,5), mod(i,10) FROM generate_series(1,100) s(i);
+     SELECT mod(i,5), mod(i,10) FROM generate_series(1,10000) s(i);
 
 CREATE STATISTICS tststats.priv_test_stats (mcv) ON a, b
   FROM tststats.priv_test_tbl;

@@ -219,13 +219,13 @@ select daterange('2000-01-01'::date, 'infinity'::date, '[]');
 create table test_range_gist(ir int4range);
 create index test_range_gist_idx on test_range_gist using gist (ir);
 
-insert into test_range_gist select int4range(g, g+10) from generate_series(1,200000) g;
+insert into test_range_gist select int4range(g, g+10) from generate_series(1,2000000) g;
 insert into test_range_gist select 'empty'::int4range from generate_series(1,5000) g;
 insert into test_range_gist select int4range(g, g+10000) from generate_series(1,10000) g;
 insert into test_range_gist select 'empty'::int4range from generate_series(1,5000) g;
 insert into test_range_gist select int4range(NULL,g*10,'(]') from generate_series(1,1000) g;
 insert into test_range_gist select int4range(g*10,NULL,'(]') from generate_series(1,1000) g;
-insert into test_range_gist select int4range(g, g+10) from generate_series(1,200000) g;
+insert into test_range_gist select int4range(g, g+10) from generate_series(1,2000000) g;
 
 -- test statistics and selectivity estimation as well
 --

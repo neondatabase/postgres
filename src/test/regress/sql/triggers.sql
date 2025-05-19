@@ -667,7 +667,7 @@ CREATE TRIGGER serializable_update_trig BEFORE UPDATE ON serializable_update_tab
 	FOR EACH ROW EXECUTE PROCEDURE serializable_update_trig();
 
 INSERT INTO serializable_update_tab SELECT a, repeat('xyzxz', 100), 'new'
-	FROM generate_series(1, 50) a;
+	FROM generate_series(1, 500) a;
 
 BEGIN;
 SET TRANSACTION ISOLATION LEVEL SERIALIZABLE;

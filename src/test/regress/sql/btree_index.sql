@@ -163,7 +163,7 @@ select * from btree_bpchar where f1::bpchar like 'foo%';
 select * from btree_bpchar where f1::bpchar like 'foo%';
 
 -- get test coverage for "single value" deduplication strategy:
-insert into btree_bpchar select 'foo' from generate_series(1,150000);
+insert into btree_bpchar select 'foo' from generate_series(1,1500000);
 
 --
 -- Perform unique checking, with and without the use of deduplication
@@ -188,7 +188,7 @@ END$$;
 -- coverage (note that this test also assumes BLCKSZ is 8192 or less):
 DROP INDEX plain_unique;
 DELETE FROM dedup_unique_test_table WHERE a = 1;
-INSERT INTO dedup_unique_test_table SELECT i FROM generate_series(0,450) i;
+INSERT INTO dedup_unique_test_table SELECT i FROM generate_series(0,4500) i;
 
 --
 -- Test B-tree fast path (cache rightmost leaf page) optimization.
@@ -207,13 +207,13 @@ create table btree_tall_tbl(id int4, t text);
 alter table btree_tall_tbl alter COLUMN t set storage plain;
 create index btree_tall_idx on btree_tall_tbl (t, id) with (fillfactor = 10);
 insert into btree_tall_tbl select g, repeat('x', 250)
-from generate_series(1, 130) g;
+from generate_series(1, 1300) g;
 
 --
 -- Test for multilevel page deletion
 --
 CREATE TABLE delete_test_table (a bigint, b bigint, c bigint, d bigint);
-INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,800000) i;
+INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,8000000) i;
 ALTER TABLE delete_test_table ADD PRIMARY KEY (a,b,c,d);
 -- Delete most entries, and vacuum, deleting internal pages and creating "fast
 -- root"
@@ -227,7 +227,7 @@ VACUUM delete_test_table;
 --
 -- The vacuum above should've turned the leaf page into a fast root. We just
 -- need to insert some rows to cause the fast root page to split.
-INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,10000) i;
+INSERT INTO delete_test_table SELECT i, 1, 2, 3 FROM generate_series(1,100000) i;
 
 -- Test unsupported btree opclass parameters
 create index on btree_tall_tbl (id int4_ops(foo=1));

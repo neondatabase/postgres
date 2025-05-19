@@ -20,10 +20,10 @@ create index gist_pointidx5 on gist_point_tbl using gist(p) with (fillfactor=101
 
 -- Insert enough data to create a tree that's a couple of levels deep.
 insert into gist_point_tbl (id, p)
-select g,        point(g*10, g*10) from generate_series(1, 10000) g;
+select g,        point(g*10, g*10) from generate_series(1, 100000) g;
 
 insert into gist_point_tbl (id, p)
-select g+100000, point(g*10+1, g*10+1) from generate_series(1, 10000) g;
+select g+100000, point(g*10+1, g*10+1) from generate_series(1, 100000) g;
 
 -- To test vacuum, delete some entries from all over the index.
 delete from gist_point_tbl where id % 2 = 1;
@@ -47,7 +47,7 @@ insert into gist_tbl
 select box(point(0.05*i, 0.05*i), point(0.05*i, 0.05*i)),
        point(0.05*i, 0.05*i),
        circle(point(0.05*i, 0.05*i), 1.0)
-from generate_series(0,10000) as i;
+from generate_series(0,100000) as i;
 
 vacuum analyze gist_tbl;
 
@@ -184,5 +184,5 @@ drop table gist_tbl;
 create unlogged table gist_tbl (b box);
 create index gist_tbl_box_index on gist_tbl using gist (b);
 insert into gist_tbl
-  select box(point(0.05*i, 0.05*i)) from generate_series(0,10) as i;
+  select box(point(0.05*i, 0.05*i)) from generate_series(0,100) as i;
 drop table gist_tbl;

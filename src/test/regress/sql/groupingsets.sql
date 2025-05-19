@@ -45,7 +45,7 @@ create function gstest_data(v integer, out a integer, out b integer)
   returns setof record
   as $f$
     begin
-      return query select v, i from generate_series(1,300) i;
+      return query select v, i from generate_series(1,30000) i;
     end;
   $f$ language plpgsql;
 
@@ -145,11 +145,11 @@ select a, d, grouping(a,b,c)
 -- even if they are equal()
 explain (costs off)
 select g as alias1, g as alias2
-  from generate_series(1,3) g
+  from generate_series(1,300) g
  group by alias1, rollup(alias2);
 
 select g as alias1, g as alias2
-  from generate_series(1,3) g
+  from generate_series(1,300) g
  group by alias1, rollup(alias2);
 
 -- check that pulled-up subquery outputs still go to null when appropriate

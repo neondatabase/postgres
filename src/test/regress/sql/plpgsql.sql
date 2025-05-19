@@ -2623,7 +2623,7 @@ set plpgsql.extra_warnings to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2000) g(v) into x;
+  select v from generate_series(1,200000) g(v) into x;
 end;
 $$;
 
@@ -2632,7 +2632,7 @@ set plpgsql.extra_errors to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2000) g(v) into x;
+  select v from generate_series(1,200000) g(v) into x;
 end;
 $$;
 

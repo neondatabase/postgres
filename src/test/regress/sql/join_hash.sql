@@ -56,7 +56,7 @@ $$;
 -- Make a simple relation with well distributed keys and correctly
 -- estimated size.
 create table simple as
-  select generate_series(1, 20000) AS id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  select generate_series(1, 200000) AS id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 alter table simple set (parallel_workers = 2);
 analyze simple;
 
