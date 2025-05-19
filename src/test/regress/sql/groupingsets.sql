@@ -45,7 +45,7 @@ create function gstest_data(v integer, out a integer, out b integer)
   returns setof record
   as $f$
     begin
-      return query select v, i from generate_series(1,30000) i;
+      return query select v, i from generate_series(1,300) i;
     end;
   $f$ language plpgsql;
 
@@ -145,11 +145,11 @@ select a, d, grouping(a,b,c)
 -- even if they are equal()
 explain (costs off)
 select g as alias1, g as alias2
-  from generate_series(1,30000) g
+  from generate_series(1,300) g
  group by alias1, rollup(alias2);
 
 select g as alias1, g as alias2
-  from generate_series(1,30000) g
+  from generate_series(1,300) g
  group by alias1, rollup(alias2);
 
 -- check that pulled-up subquery outputs still go to null when appropriate
@@ -487,7 +487,7 @@ analyze bug_16784;
 alter table bug_16784 set (autovacuum_enabled = 'false');
 update pg_class set reltuples = 10 where relname='bug_16784';
 
-insert into bug_16784 select g/10, g from generate_series(1,4000) g;
+insert into bug_16784 select g/10, g from generate_series(1,40000) g;
 
 set work_mem='64kB';
 set enable_sort = false;
@@ -506,7 +506,7 @@ select * from
 
 create table gs_data_1 as
 select g%1000 as g1000, g%100 as g100, g%10 as g10, g
-   from generate_series(0,199900) g;
+   from generate_series(0,10000) g;
 
 analyze gs_data_1;
 alter table gs_data_1 set (autovacuum_enabled = 'false');

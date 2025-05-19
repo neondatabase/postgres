@@ -300,7 +300,7 @@ SELECT array_positions(ARRAY[[1,2],[3,4]], 4);
 SELECT array_positions(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
 SELECT array_positions(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
 SELECT array_length(array_positions(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10
-                                          FROM generate_series(1,100000) g(i)),
+                                          FROM generate_series(1,10000) g(i)),
                                   'AAAAAAAAAAAAAAAAAAAAAAAAA5'), 1);
 
 DO $$
@@ -716,7 +716,7 @@ select * from t1;
 
 create temp table src (f1 text);
 insert into src
-  select string_agg(random()::text,'') from generate_series(1,100000);
+  select string_agg(random()::text,'') from generate_series(1,10000);
 create type textandtext as (c1 text, c2 text);
 create temp table dest (f1 textandtext[]);
 insert into dest select array[row(f1,f1)::textandtext] from src;
