@@ -5,7 +5,7 @@
 -- Regular index with included columns
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
 -- size is chosen to exceed page size and trigger actual truncation
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,1000000) AS x;
 CREATE INDEX tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c2,c3);
 SELECT pg_get_indexdef(i.indexrelid)
 FROM pg_index i JOIN pg_class c ON i.indexrelid = c.oid
@@ -24,7 +24,7 @@ DROP TABLE tbl_gist;
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
 -- size is chosen to exceed page size and trigger actual truncation
 CREATE INDEX tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c2,c3);
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,1000000) AS x;
 SELECT pg_get_indexdef(i.indexrelid)
 FROM pg_index i JOIN pg_class c ON i.indexrelid = c.oid
 WHERE i.indrelid = 'tbl_gist'::regclass ORDER BY c.relname;
@@ -38,7 +38,7 @@ DROP TABLE tbl_gist;
  * 2. CREATE INDEX CONCURRENTLY
  */
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,100000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000) AS x;
 CREATE INDEX CONCURRENTLY tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c2,c3);
 SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl_gist' ORDER BY indexname;
 DROP TABLE tbl_gist;
@@ -48,7 +48,7 @@ DROP TABLE tbl_gist;
  * 3. REINDEX
  */
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,100000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000) AS x;
 CREATE INDEX tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c3);
 SELECT indexdef FROM pg_indexes WHERE tablename = 'tbl_gist' ORDER BY indexname;
 REINDEX INDEX tbl_gist_idx;
@@ -61,7 +61,7 @@ DROP TABLE tbl_gist;
  * 4. Update, delete values in indexed table.
  */
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,100000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000) AS x;
 CREATE INDEX tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c3);
 UPDATE tbl_gist SET c1 = 100 WHERE c1 = 2;
 UPDATE tbl_gist SET c1 = 1 WHERE c1 = 3;
@@ -72,7 +72,7 @@ DROP TABLE tbl_gist;
  * 5. Alter column type.
  */
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box);
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,100000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000) AS x;
 CREATE INDEX tbl_gist_idx ON tbl_gist using gist (c4) INCLUDE (c1,c3);
 ALTER TABLE tbl_gist ALTER c1 TYPE bigint;
 ALTER TABLE tbl_gist ALTER c3 TYPE bigint;
@@ -83,8 +83,8 @@ DROP TABLE tbl_gist;
  * 6. EXCLUDE constraint.
  */
 CREATE TABLE tbl_gist (c1 int, c2 int, c3 int, c4 box, EXCLUDE USING gist (c4 WITH &&) INCLUDE (c1, c2, c3));
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,100000) AS x;
-INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(3*x,2*x),point(3*x+1,2*x+1)) FROM generate_series(1,1000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(x,x+1),point(2*x,2*x+1)) FROM generate_series(1,10000) AS x;
+INSERT INTO tbl_gist SELECT x, 2*x, 3*x, box(point(3*x,2*x),point(3*x+1,2*x+1)) FROM generate_series(1,10000) AS x;
 EXPLAIN  (costs off) SELECT * FROM tbl_gist where c4 <@ box(point(1,1),point(10,10));
 \d tbl_gist
 DROP TABLE tbl_gist;
