@@ -318,15 +318,15 @@ CREATE TABLE T (pk INT NOT NULL PRIMARY KEY);
 
 SELECT set('t');
 
-INSERT INTO T SELECT * FROM generate_series(1, 100) a;
+INSERT INTO T SELECT * FROM generate_series(1, 10000) a;
 
 ALTER TABLE T ADD COLUMN c_bigint BIGINT NOT NULL DEFAULT -1;
 
-INSERT INTO T SELECT b, b - 10 FROM generate_series(11, 200) a(b);
+INSERT INTO T SELECT b, b - 10 FROM generate_series(11, 20000) a(b);
 
 ALTER TABLE T ADD COLUMN c_text TEXT DEFAULT 'hello';
 
-INSERT INTO T SELECT b, b - 10, (b + 10)::text FROM generate_series(21, 300) a(b);
+INSERT INTO T SELECT b, b - 10, (b + 10)::text FROM generate_series(21, 30000) a(b);
 
 -- WHERE clause
 SELECT c_bigint, c_text FROM T WHERE c_bigint = -1 LIMIT 1;
