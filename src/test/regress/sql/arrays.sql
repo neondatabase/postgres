@@ -300,7 +300,7 @@ SELECT array_positions(ARRAY[[1,2],[3,4]], 4);
 SELECT array_positions(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
 SELECT array_positions(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
 SELECT array_length(array_positions(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10
-                                          FROM generate_series(1,10000) g(i)),
+                                          FROM generate_series(1,100000) g(i)),
                                   'AAAAAAAAAAAAAAAAAAAAAAAAA5'), 1);
 
 DO $$
@@ -404,7 +404,7 @@ select null::int = all ('{1,2,3}');
 select 33 = all ('{1,null,3}');
 select 33 = all ('{33,null,33}');
 -- nulls later in the bitmap
-SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 900000) FROM generate_series(1,1000000) g(i)));
+SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 90000) FROM generate_series(1,100000) g(i)));
 
 -- test indexes on arrays
 create temp table arr_tbl (f1 int[] unique);
@@ -644,16 +644,16 @@ select array_agg(unique1) from tenk1 where unique1 < -15;
 select array_agg(ar)
   from (values ('{1,2}'::int[]), ('{3,4}'::int[])) v(ar);
 select array_agg(distinct ar order by ar desc)
-  from (select array[i / 2] from generate_series(1,1000) a(i)) b(ar);
+  from (select array[i / 2] from generate_series(1,100000) a(i)) b(ar);
 select array_agg(ar)
   from (select array_agg(array[i, i+1, i-1])
-        from generate_series(1,200) a(i)) b(ar);
-select array_agg(array[i+1.2, i+1.3, i+1.4]) from generate_series(1,300) g(i);
-select array_agg(array['Hello', i::text]) from generate_series(9,1100) g(i);
-select array_agg(array[i, nullif(i, 3), i+1]) from generate_series(1,400) g(i);
+        from generate_series(1,2000) a(i)) b(ar);
+select array_agg(array[i+1.2, i+1.3, i+1.4]) from generate_series(1,3000) g(i);
+select array_agg(array['Hello', i::text]) from generate_series(9,11000) g(i);
+select array_agg(array[i, nullif(i, 3), i+1]) from generate_series(1,4000) g(i);
 -- errors
-select array_agg('{}'::int[]) from generate_series(1,200);
-select array_agg(null::int[]) from generate_series(1,200);
+select array_agg('{}'::int[]) from generate_series(1,2000);
+select array_agg(null::int[]) from generate_series(1,2000);
 select array_agg(ar)
   from (values ('{1,2}'::int[]), ('{3}'::int[])) v(ar);
 
@@ -679,16 +679,16 @@ select array_replace(array[1,NULL,3],NULL,NULL);
 select array_replace(array['AB',NULL,'CDE'],NULL,'12');
 
 -- array(select array-value ...)
-select array(select array[i,i/2] from generate_series(1,500) i);
-select array(select array['Hello', i::text] from generate_series(9,1100) i);
+select array(select array[i,i/2] from generate_series(1,5000) i);
+select array(select array['Hello', i::text] from generate_series(9,11000) i);
 
 -- int2vector and oidvector should be treated as scalar types for this purpose
-select pg_typeof(array(select '11 22 33'::int2vector from generate_series(1,500)));
-select array(select '11 22 33'::int2vector from generate_series(1,500));
-select unnest(array(select '11 22 33'::int2vector from generate_series(1,500)));
-select pg_typeof(array(select '11 22 33'::oidvector from generate_series(1,500)));
-select array(select '11 22 33'::oidvector from generate_series(1,500));
-select unnest(array(select '11 22 33'::oidvector from generate_series(1,500)));
+select pg_typeof(array(select '11 22 33'::int2vector from generate_series(1,5000)));
+select array(select '11 22 33'::int2vector from generate_series(1,5000));
+select unnest(array(select '11 22 33'::int2vector from generate_series(1,5000)));
+select pg_typeof(array(select '11 22 33'::oidvector from generate_series(1,5000)));
+select array(select '11 22 33'::oidvector from generate_series(1,5000));
+select unnest(array(select '11 22 33'::oidvector from generate_series(1,5000)));
 
 -- array[] should do the same
 select pg_typeof(array['11 22 33'::int2vector]);
@@ -716,7 +716,7 @@ select * from t1;
 
 create temp table src (f1 text);
 insert into src
-  select string_agg(random()::text,'') from generate_series(1,10000);
+  select string_agg(random()::text,'') from generate_series(1,100000);
 create type textandtext as (c1 text, c2 text);
 create temp table dest (f1 textandtext[]);
 insert into dest select array[row(f1,f1)::textandtext] from src;
