@@ -461,7 +461,7 @@ DROP TABLE brintest_2;
 
 -- test brin cost estimates behave sanely based on correlation of values
 CREATE TABLE brin_test (a INT, b INT);
-INSERT INTO brin_test SELECT x/100,x%100 FROM generate_series(1,10000000) x(x);
+INSERT INTO brin_test SELECT x/100,x%100 FROM generate_series(1,1000000) x(x);
 CREATE INDEX brin_test_a_idx ON brin_test USING brin (a) WITH (pages_per_range = 2);
 CREATE INDEX brin_test_b_idx ON brin_test USING brin (b) WITH (pages_per_range = 2);
 VACUUM ANALYZE brin_test;

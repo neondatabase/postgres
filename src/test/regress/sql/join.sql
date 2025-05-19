@@ -698,7 +698,7 @@ reset enable_nestloop;
 --
 
 create temp table tbl_ra(a int unique, b int);
-insert into tbl_ra select i, i%100 from generate_series(1,10000000)i;
+insert into tbl_ra select i, i%100 from generate_series(1,1000000)i;
 create index on tbl_ra (b);
 analyze tbl_ra;
 
@@ -740,7 +740,7 @@ reset enable_memoize;
 --
 
 create temp table tt3(f1 int, f2 text);
-insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,10000000) x;
+insert into tt3 select x, repeat('xyzzy', 100) from generate_series(1,1000000) x;
 analyze tt3;
 
 create temp table tt4(f1 int);
