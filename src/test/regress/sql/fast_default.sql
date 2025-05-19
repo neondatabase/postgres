@@ -410,7 +410,7 @@ FROM generate_series(1,2000) q;
 ALTER TABLE t1 ADD COLUMN c text;
 
 SELECT a,
-       stddev(cast((SELECT sum(1) FROM generate_series(1,2000) x) AS float4))
+       stddev(cast((SELECT sum(1) FROM generate_series(1,20000) x) AS float4))
           OVER (PARTITION BY a,b,c ORDER BY b)
        AS z
 FROM t1;

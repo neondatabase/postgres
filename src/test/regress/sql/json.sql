@@ -81,7 +81,7 @@ SELECT '{
 
 SELECT array_to_json(array(select 1 as a));
 SELECT array_to_json(array_agg(q),false) from (select x as b, x * 2 as c from generate_series(1,3000) x) q;
-SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,300) x) q;
+SELECT array_to_json(array_agg(q),true) from (select x as b, x * 2 as c from generate_series(1,3000) x) q;
 SELECT array_to_json(array_agg(q),false)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),

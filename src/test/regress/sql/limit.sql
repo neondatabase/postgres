@@ -118,17 +118,17 @@ select unique1, unique2, nextval('testseq')
 select currval('testseq');
 
 explain (verbose, costs off)
-select unique1, unique2, generate_series(1,10000)
+select unique1, unique2, generate_series(1,1000000)
   from tenk1 order by unique2 limit 7;
 
-select unique1, unique2, generate_series(1,10000)
+select unique1, unique2, generate_series(1,1000000)
   from tenk1 order by unique2 limit 7;
 
 explain (verbose, costs off)
-select unique1, unique2, generate_series(1,10000)
+select unique1, unique2, generate_series(1,1000000)
   from tenk1 order by tenthous limit 7;
 
-select unique1, unique2, generate_series(1,10000)
+select unique1, unique2, generate_series(1,1000000)
   from tenk1 order by tenthous limit 7;
 
 -- use of random() is to keep planner from folding the expressions together
