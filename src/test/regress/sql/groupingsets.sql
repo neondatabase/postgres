@@ -487,7 +487,7 @@ analyze bug_16784;
 alter table bug_16784 set (autovacuum_enabled = 'false');
 update pg_class set reltuples = 10 where relname='bug_16784';
 
-insert into bug_16784 select g/10, g from generate_series(1,40) g;
+insert into bug_16784 select g/10, g from generate_series(1,4000) g;
 
 set work_mem='64kB';
 set enable_sort = false;
@@ -506,7 +506,7 @@ select * from
 
 create table gs_data_1 as
 select g%1000 as g1000, g%100 as g100, g%10 as g10, g
-   from generate_series(0,1999) g;
+   from generate_series(0,199900) g;
 
 analyze gs_data_1;
 alter table gs_data_1 set (autovacuum_enabled = 'false');

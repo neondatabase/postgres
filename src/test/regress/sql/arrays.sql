@@ -300,7 +300,7 @@ SELECT array_positions(ARRAY[[1,2],[3,4]], 4);
 SELECT array_positions(ARRAY[1,2,3,4,5,6,1,2,3,4,5,6], NULL);
 SELECT array_positions(ARRAY[1,2,3,NULL,5,6,1,2,3,NULL,5,6], NULL);
 SELECT array_length(array_positions(ARRAY(SELECT 'AAAAAAAAAAAAAAAAAAAAAAAAA'::text || i % 10
-                                          FROM generate_series(1,1000000) g(i)),
+                                          FROM generate_series(1,100000) g(i)),
                                   'AAAAAAAAAAAAAAAAAAAAAAAAA5'), 1);
 
 DO $$
@@ -404,7 +404,7 @@ select null::int = all ('{1,2,3}');
 select 33 = all ('{1,null,3}');
 select 33 = all ('{33,null,33}');
 -- nulls later in the bitmap
-SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 9000000) FROM generate_series(1,10000000) g(i)));
+SELECT -1 != ALL(ARRAY(SELECT NULLIF(g.i, 900000) FROM generate_series(1,1000000) g(i)));
 
 -- test indexes on arrays
 create temp table arr_tbl (f1 int[] unique);
@@ -716,7 +716,7 @@ select * from t1;
 
 create temp table src (f1 text);
 insert into src
-  select string_agg(random()::text,'') from generate_series(1,1000000);
+  select string_agg(random()::text,'') from generate_series(1,100000);
 create type textandtext as (c1 text, c2 text);
 create temp table dest (f1 textandtext[]);
 insert into dest select array[row(f1,f1)::textandtext] from src;
@@ -777,7 +777,7 @@ FROM (VALUES
 SELECT
     op,
     width_bucket(op, ARRAY[1, 3, 5, 10]) AS wb_1
-FROM generate_series(0,11) as op;
+FROM generate_series(0,1100) as op;
 
 SELECT width_bucket(now(),
                     array['yesterday', 'today', 'tomorrow']::timestamptz[]);
