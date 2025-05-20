@@ -218,9 +218,9 @@ SELECT h.seqno AS f20000
 -- Cause some overflow insert and splits.
 --
 CREATE TABLE hash_split_heap (keycol INT);
-INSERT INTO hash_split_heap SELECT 1 FROM generate_series(1, 500) a;
+INSERT INTO hash_split_heap SELECT 1 FROM scaled_series(1, 500) a;
 CREATE INDEX hash_split_index on hash_split_heap USING HASH (keycol);
-INSERT INTO hash_split_heap SELECT 1 FROM generate_series(1, 5000) a;
+INSERT INTO hash_split_heap SELECT 1 FROM scaled_series(1, 5000) a;
 
 -- Let's do a backward scan.
 BEGIN;
@@ -236,7 +236,7 @@ END;
 
 -- DELETE, INSERT, VACUUM.
 DELETE FROM hash_split_heap WHERE keycol = 1;
-INSERT INTO hash_split_heap SELECT a/2 FROM generate_series(1, 25000) a;
+INSERT INTO hash_split_heap SELECT a/2 FROM scaled_series(1, 25000) a;
 
 VACUUM hash_split_heap;
 

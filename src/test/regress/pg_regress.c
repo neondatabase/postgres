@@ -99,6 +99,7 @@ static _stringlist *loadextension = NULL;
 static int	max_connections = 0;
 static int	max_concurrent_tests = 0;
 static char *encoding = NULL;
+static int scale_factor = 1;  /* Default scale factor is 1 */
 static _stringlist *schedulelist = NULL;
 static _stringlist *extra_tests = NULL;
 static char *temp_instance = NULL;
@@ -714,6 +715,7 @@ initialize_environment(void)
 	setenv("PG_ABS_BUILDDIR", outputdir, 1);
 	setenv("PG_LIBDIR", dlpath, 1);
 	setenv("PG_DLSUFFIX", DLSUFFIX, 1);
+	setenv("PG_SCALE_FACTOR", psprintf("%d", scale_factor), 1);
 
 	if (nolocale)
 	{
@@ -2050,6 +2052,7 @@ help(void)
 	printf(_("                                (can be used multiple times to concatenate)\n"));
 	printf(_("      --temp-instance=DIR       create a temporary instance in DIR\n"));
 	printf(_("      --use-existing            use an existing installation\n"));
+	printf(_("      --scale-factor=N          scale factor for regression tests (default is 1)\n"));
 	printf(_("  -V, --version                 output version information, then exit\n"));
 	printf(_("\n"));
 	printf(_("Options for \"temp-instance\" mode:\n"));
@@ -2100,6 +2103,7 @@ regression_main(int argc, char *argv[],
 		{"config-auth", required_argument, NULL, 24},
 		{"max-concurrent-tests", required_argument, NULL, 25},
 		{"expecteddir", required_argument, NULL, 26},
+		{"scale-factor", required_argument, NULL, 27},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -2228,6 +2232,11 @@ regression_main(int argc, char *argv[],
 				break;
 			case 26:
 				expecteddir = pg_strdup(optarg);
+				break;
+			case 27:
+				scale_factor = atoi(optarg);
+				if (scale_factor < 1)
+					scale_factor = 1;
 				break;
 			default:
 				/* getopt_long already emitted a complaint */

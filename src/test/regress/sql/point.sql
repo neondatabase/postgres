@@ -78,7 +78,7 @@ SELECT p1.f1 AS point1, p2.f1 AS point2, (p1.f1 <-> p2.f1) AS distance
 
 -- Test that GiST indexes provide same behavior as sequential scan
 CREATE TEMP TABLE point_gist_tbl(f1 point);
-INSERT INTO point_gist_tbl SELECT '(0,0)' FROM generate_series(0,1000);
+INSERT INTO point_gist_tbl SELECT '(0,0)' FROM scaled_series(0,1000);
 CREATE INDEX point_gist_tbl_index ON point_gist_tbl USING gist (f1);
 INSERT INTO point_gist_tbl VALUES ('(0.0000009,0.0000009)');
 SET enable_seqscan TO true;

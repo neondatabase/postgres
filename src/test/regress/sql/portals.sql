@@ -525,8 +525,8 @@ BEGIN;
 CREATE TABLE current_check (currentid int, payload text);
 CREATE TABLE current_check_1 () INHERITS (current_check);
 CREATE TABLE current_check_2 () INHERITS (current_check);
-INSERT INTO current_check_1 SELECT i, 'p' || i FROM generate_series(1,9) i;
-INSERT INTO current_check_2 SELECT i, 'P' || i FROM generate_series(10,19) i;
+INSERT INTO current_check_1 SELECT i, 'p' || i FROM scaled_series(1,9) i;
+INSERT INTO current_check_2 SELECT i, 'P' || i FROM scaled_series(10,19) i;
 
 DECLARE c1 SCROLL CURSOR FOR SELECT * FROM current_check;
 
@@ -575,9 +575,9 @@ fetch all in c1;
 fetch backward all in c1;
 rollback;
 begin;
-explain (costs off) declare c2 cursor for select generate_series(1,3) as g;
-explain (costs off) declare c2 scroll cursor for select generate_series(1,3) as g;
-declare c2 scroll cursor for select generate_series(1,3) as g;
+explain (costs off) declare c2 cursor for select scaled_series(1,3) as g;
+explain (costs off) declare c2 scroll cursor for select scaled_series(1,3) as g;
+declare c2 scroll cursor for select scaled_series(1,3) as g;
 fetch all in c2;
 fetch backward all in c2;
 rollback;
@@ -591,7 +591,7 @@ set default_toast_compression = 'pglz';
 
 create table toasted_data (f1 int[]);
 insert into toasted_data
-  select array_agg(i) from generate_series(12345678, 12345678 + 1000) i;
+  select array_agg(i) from scaled_series(12345678, 12345678 + 1000) i;
 
 declare local_portal cursor for select * from toasted_data;
 fetch all in local_portal;

@@ -208,7 +208,7 @@ explain (costs off)
 select count(*) from tenk1, tenk2 where tenk1.hundred > 1 and tenk2.thousand=0;
 
 create table bmscantest (a int, t text);
-insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM generate_series(1,100000) r;
+insert into bmscantest select r, 'fooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo' FROM scaled_series(1,100000) r;
 create index i_bmtest ON bmscantest(a);
 select count(*) from bmscantest where a>1;
 
@@ -282,9 +282,9 @@ drop function sp_simple_func(integer);
 -- test handling of SRFs in targetlist (bug in 10.0)
 
 explain (costs off)
-   select count(*), generate_series(1,2) from tenk1 group by twenty;
+   select count(*), scaled_series(1,2) from tenk1 group by twenty;
 
-select count(*), generate_series(1,2) from tenk1 group by twenty;
+select count(*), scaled_series(1,2) from tenk1 group by twenty;
 
 -- test gather merge with parallel leader participation disabled
 set parallel_leader_participation = off;
@@ -365,7 +365,7 @@ END;
 $$;
 SAVEPOINT settings;
 SET LOCAL debug_parallel_query = 1;
-SELECT make_record(x) FROM (SELECT generate_series(1, 5) x) ss ORDER BY x;
+SELECT make_record(x) FROM (SELECT scaled_series(1, 5) x) ss ORDER BY x;
 ROLLBACK TO SAVEPOINT settings;
 DROP function make_record(n int);
 
@@ -430,7 +430,7 @@ SELECT * FROM information_schema.foreign_data_wrapper_options
 ORDER BY 1, 2, 3;
 
 EXPLAIN (VERBOSE, COSTS OFF)
-SELECT generate_series(1, two), array(select generate_series(1, two))
+SELECT generate_series(1, two), array(select scaled_series(1, two))
   FROM tenk1 ORDER BY tenthous;
 
 -- must disallow pushing sort below gather when pathkey contains an SRF
@@ -501,7 +501,7 @@ $$;
 
 CREATE TABLE parallel_hang (i int4);
 INSERT INTO parallel_hang
-	(SELECT * FROM generate_series(1, 400) gs);
+	(SELECT * FROM scaled_series(1, 400) gs);
 
 CREATE OPERATOR CLASS int4_custom_ops FOR TYPE int4 USING btree AS
 	OPERATOR 1 < (int4, int4), OPERATOR 2 <= (int4, int4),

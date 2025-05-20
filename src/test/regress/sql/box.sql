@@ -135,7 +135,7 @@ CREATE TEMPORARY TABLE box_temp (f1 box);
 
 INSERT INTO box_temp
 	SELECT box(point(i, i), point(i * 2, i * 2))
-	FROM generate_series(1, 50) AS i;
+	FROM scaled_series(1, 50) AS i;
 
 CREATE INDEX box_spgist ON box_temp USING spgist (f1);
 
@@ -196,13 +196,13 @@ CREATE TABLE quad_box_tbl (id int, b box);
 
 INSERT INTO quad_box_tbl
   SELECT (x - 1) * 100 + y, box(point(x * 10, y * 10), point(x * 10 + 5, y * 10 + 5))
-  FROM generate_series(1, 100) x,
-       generate_series(1, 100) y;
+  FROM scaled_series(1, 100) x,
+       scaled_series(1, 100) y;
 
 -- insert repeating data to test allTheSame
 INSERT INTO quad_box_tbl
   SELECT i, '((200, 300),(210, 310))'
-  FROM generate_series(10001, 11000) AS i;
+  FROM scaled_series(10001, 11000) AS i;
 
 INSERT INTO quad_box_tbl
 VALUES

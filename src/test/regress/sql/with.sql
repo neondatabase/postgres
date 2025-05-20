@@ -8,7 +8,7 @@ SELECT * FROM q1, q1 AS q2;
 
 -- Multiple uses are evaluated only once
 SELECT count(*) FROM (
-  WITH q1(x) AS (SELECT random() FROM generate_series(1, 5))
+  WITH q1(x) AS (SELECT random() FROM scaled_series(1, 5))
     SELECT * FROM q1
   UNION
     SELECT * FROM q1
@@ -844,7 +844,7 @@ WITH RECURSIVE
 --
 
 CREATE TEMPORARY TABLE y (a INTEGER);
-INSERT INTO y SELECT generate_series(1, 10);
+INSERT INTO y SELECT scaled_series(1, 10);
 
 WITH t AS (
 	SELECT a FROM y
@@ -938,7 +938,7 @@ WITH RECURSIVE x(n) AS (
 
 
 CREATE TEMPORARY TABLE y (a INTEGER);
-INSERT INTO y SELECT generate_series(1, 10);
+INSERT INTO y SELECT scaled_series(1, 10);
 
 -- LEFT JOIN
 
@@ -1257,7 +1257,7 @@ DROP RULE y_rule ON y;
 
 -- check merging of outer CTE with CTE in a rule action
 CREATE TEMP TABLE bug6051 AS
-  select i from generate_series(1,3) as t(i);
+  select i from scaled_series(1,3) as t(i);
 
 SELECT * FROM bug6051;
 
@@ -1289,7 +1289,7 @@ INSERT INTO bug6051 SELECT * FROM t1;
 
 -- silly example to verify that hasModifyingCTE flag is propagated
 CREATE TEMP TABLE bug6051_3 AS
-  SELECT a FROM generate_series(11,13) AS a;
+  SELECT a FROM scaled_series(11,13) AS a;
 
 CREATE RULE bug6051_3_ins AS ON INSERT TO bug6051_3 DO INSTEAD
   SELECT i FROM bug6051_2;
@@ -1366,12 +1366,12 @@ SELECT * FROM t LIMIT 10;
 SELECT * FROM y;
 
 -- data-modifying WITH containing INSERT...ON CONFLICT DO UPDATE
-CREATE TABLE withz AS SELECT i AS k, (i || ' v')::text v FROM generate_series(1, 16, 3) i;
+CREATE TABLE withz AS SELECT i AS k, (i || ' v')::text v FROM scaled_series(1, 16, 3) i;
 ALTER TABLE withz ADD UNIQUE (k);
 
 WITH t AS (
     INSERT INTO withz SELECT i, 'insert'
-    FROM generate_series(0, 16) i
+    FROM scaled_series(0, 16) i
     ON CONFLICT (k) DO UPDATE SET v = withz.v || ', now update'
     RETURNING *
 )
@@ -1424,7 +1424,7 @@ RETURNING k, v;
 DROP TABLE withz;
 
 -- WITH referenced by MERGE statement
-CREATE TABLE m AS SELECT i AS k, (i || ' v')::text v FROM generate_series(1, 16, 3) i;
+CREATE TABLE m AS SELECT i AS k, (i || ' v')::text v FROM scaled_series(1, 16, 3) i;
 ALTER TABLE m ADD UNIQUE (k);
 
 WITH RECURSIVE cte_basic AS (SELECT 1 a, 'cte_basic val' b)
@@ -1482,7 +1482,7 @@ DROP TABLE m;
 -- check that run to completion happens in proper ordering
 
 TRUNCATE TABLE y;
-INSERT INTO y SELECT generate_series(1, 3);
+INSERT INTO y SELECT scaled_series(1, 3);
 CREATE TEMPORARY TABLE yy (a INTEGER);
 
 WITH RECURSIVE t1 AS (
@@ -1508,7 +1508,7 @@ SELECT * FROM yy;
 -- triggers
 
 TRUNCATE TABLE y;
-INSERT INTO y SELECT generate_series(1, 10);
+INSERT INTO y SELECT scaled_series(1, 10);
 
 CREATE FUNCTION y_trigger() RETURNS trigger AS $$
 begin

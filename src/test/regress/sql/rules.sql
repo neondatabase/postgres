@@ -964,7 +964,7 @@ create rule t1_upd_2 as on update to t1
 
 set constraint_exclusion = on;
 
-insert into t1 select * from generate_series(5,19,1) g;
+insert into t1 select * from scaled_series(5,19,1) g;
 update t1 set a = 4 where a = 5;
 
 select * from only t1;

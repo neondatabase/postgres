@@ -1327,7 +1327,7 @@ WITH t(x, bc_result) AS (VALUES
 SELECT '1+'||x, bc_result, log(1.0+x::numeric), log(1.0+x::numeric)-bc_result AS diff FROM t;
 
 -- input very large, exact result known
-WITH t(x) AS (SELECT '1e'||n FROM generate_series(1, 100) g(n))
+WITH t(x) AS (SELECT '1e'||n FROM scaled_series(1, 100) g(n))
 SELECT x, log(x::numeric) FROM t;
 
 -- input very large, non-exact results

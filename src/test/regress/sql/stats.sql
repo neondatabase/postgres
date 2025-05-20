@@ -538,7 +538,7 @@ SELECT pg_stat_have_stats('database', :dboid, 1);
 SELECT pg_stat_have_stats('database', :dboid, 0);
 
 -- pg_stat_have_stats returns true for committed index creation
-CREATE table stats_test_tab1 as select generate_series(1,10) a;
+CREATE table stats_test_tab1 as select scaled_series(1,10) a;
 CREATE index stats_test_idx1 on stats_test_tab1(a);
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
 SET enable_seqscan TO off;
@@ -604,7 +604,7 @@ SELECT sum(writes) AS writes, sum(fsyncs) AS fsyncs
   FROM pg_stat_io
   WHERE object = 'relation' \gset io_sum_shared_before_
 CREATE TABLE test_io_shared(a int);
-INSERT INTO test_io_shared SELECT i FROM generate_series(1,100)i;
+INSERT INTO test_io_shared SELECT i FROM scaled_series(1,100)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_shared_after_extends
   FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
@@ -677,7 +677,7 @@ SELECT sum(extends) AS extends, sum(evictions) AS evictions, sum(writes) AS writ
 -- Insert tuples into the temporary table, generating extends in the stats.
 -- Insert enough values that we need to reuse and write out dirty local
 -- buffers, generating evictions and writes.
-INSERT INTO test_io_local SELECT generate_series(1, 5000) as id, repeat('a', 200);
+INSERT INTO test_io_local SELECT scaled_series(1, 5000) as id, repeat('a', 200);
 -- Ensure the table is large enough to exceed our temp_buffers setting.
 SELECT pg_relation_size('test_io_local') / current_setting('block_size')::int8 > 100;
 
@@ -724,7 +724,7 @@ SET wal_skip_threshold = '1 kB';
 SELECT sum(reuses) AS reuses, sum(reads) AS reads, sum(evictions) AS evictions
   FROM pg_stat_io WHERE context = 'vacuum' \gset io_sum_vac_strategy_before_
 CREATE TABLE test_io_vac_strategy(a int, b int) WITH (autovacuum_enabled = 'false');
-INSERT INTO test_io_vac_strategy SELECT i, i from generate_series(1, 4500)i;
+INSERT INTO test_io_vac_strategy SELECT i, i from scaled_series(1, 4500)i;
 -- Ensure that the next VACUUM will need to perform IO by rewriting the table
 -- first with VACUUM (FULL).
 VACUUM (FULL) test_io_vac_strategy;
@@ -743,7 +743,7 @@ RESET wal_skip_threshold;
 -- BufferAccessStrategy, are tracked in pg_stat_io.
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_before
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
-CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM generate_series(1,100)i;
+CREATE TABLE test_io_bulkwrite_strategy AS SELECT i FROM scaled_series(1,100)i;
 SELECT pg_stat_force_next_flush();
 SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_after
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
@@ -765,7 +765,7 @@ CREATE TABLE brin_hot (
   val integer NOT NULL
 ) WITH (autovacuum_enabled = off, fillfactor = 70);
 
-INSERT INTO brin_hot SELECT *, 0 FROM generate_series(1, 235);
+INSERT INTO brin_hot SELECT *, 0 FROM scaled_series(1, 235);
 CREATE INDEX val_brin ON brin_hot using brin(val);
 
 CREATE FUNCTION wait_for_hot_stats() RETURNS void AS $$
@@ -829,7 +829,7 @@ DROP TABLE brin_hot_2;
 -- BRIN column.
 -- https://postgr.es/m/05ebcb44-f383-86e3-4f31-0a97a55634cf@enterprisedb.com
 CREATE TABLE brin_hot_3 (a int, filler text) WITH (fillfactor = 10);
-INSERT INTO brin_hot_3 SELECT 1, repeat(' ', 500) FROM generate_series(1, 20);
+INSERT INTO brin_hot_3 SELECT 1, repeat(' ', 500) FROM scaled_series(1, 20);
 CREATE INDEX ON brin_hot_3 USING brin (a) WITH (pages_per_range = 1);
 UPDATE brin_hot_3 SET a = 2;
 

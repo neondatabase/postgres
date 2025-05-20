@@ -79,16 +79,16 @@ SELECT var_pop('nan'::numeric), var_samp('nan'::numeric);
 SELECT stddev_pop('nan'::numeric), stddev_samp('nan'::numeric);
 
 -- verify correct results for null and NaN inputs
-select sum(null::int4) from generate_series(1,3);
-select sum(null::int8) from generate_series(1,3);
-select sum(null::numeric) from generate_series(1,3);
-select sum(null::float8) from generate_series(1,3);
-select avg(null::int4) from generate_series(1,3);
-select avg(null::int8) from generate_series(1,3);
-select avg(null::numeric) from generate_series(1,3);
-select avg(null::float8) from generate_series(1,3);
-select sum('NaN'::numeric) from generate_series(1,3);
-select avg('NaN'::numeric) from generate_series(1,3);
+select sum(null::int4) from scaled_series(1,3);
+select sum(null::int8) from scaled_series(1,3);
+select sum(null::numeric) from scaled_series(1,3);
+select sum(null::float8) from scaled_series(1,3);
+select avg(null::int4) from scaled_series(1,3);
+select avg(null::int8) from scaled_series(1,3);
+select avg(null::numeric) from scaled_series(1,3);
+select avg(null::float8) from scaled_series(1,3);
+select sum('NaN'::numeric) from scaled_series(1,3);
+select avg('NaN'::numeric) from scaled_series(1,3);
 
 -- verify correct results for infinite inputs
 SELECT sum(x::float8), avg(x::float8), var_pop(x::float8)
@@ -199,23 +199,23 @@ from tenk1 o;
 -- Per bug report from Jeevan Chalke.
 explain (verbose, costs off)
 select s1, s2, sm
-from generate_series(1, 3) s1,
+from scaled_series(1, 3) s1,
      lateral (select s2, sum(s1 + s2) sm
-              from generate_series(1, 3) s2 group by s2) ss
+              from scaled_series(1, 3) s2 group by s2) ss
 order by 1, 2;
 select s1, s2, sm
-from generate_series(1, 3) s1,
+from scaled_series(1, 3) s1,
      lateral (select s2, sum(s1 + s2) sm
-              from generate_series(1, 3) s2 group by s2) ss
+              from scaled_series(1, 3) s2 group by s2) ss
 order by 1, 2;
 
 explain (verbose, costs off)
 select array(select sum(x+y) s
-            from generate_series(1,3) y group by y order by s)
-  from generate_series(1,3) x;
+            from scaled_series(1,3) y group by y order by s)
+  from scaled_series(1,3) x;
 select array(select sum(x+y) s
-            from generate_series(1,3) y group by y order by s)
-  from generate_series(1,3) x;
+            from scaled_series(1,3) y group by y order by s)
+  from scaled_series(1,3) x;
 
 --
 -- test for bitwise integer aggregates
@@ -402,8 +402,8 @@ explain (costs off)
   select max(unique2) from tenk1 order by max(unique2)+1;
 select max(unique2) from tenk1 order by max(unique2)+1;
 explain (costs off)
-  select max(unique2), generate_series(1,3) as g from tenk1 order by g desc;
-select max(unique2), generate_series(1,3) as g from tenk1 order by g desc;
+  select max(unique2), scaled_series(1,3) as g from tenk1 order by g desc;
+select max(unique2), scaled_series(1,3) as g from tenk1 order by g desc;
 
 -- interesting corner case: constant gets optimized into a seqscan
 explain (costs off)
@@ -587,7 +587,7 @@ group by ten;
 
 -- Ensure consecutive NULLs are properly treated as distinct from each other
 select array_agg(distinct val)
-from (select null as val from generate_series(1, 2));
+from (select null as val from scaled_series(1, 2));
 
 -- Ensure no ordering is requested when enable_presorted_aggregate is off
 set enable_presorted_aggregate to off;
@@ -645,32 +645,32 @@ select aggfns(a,b,c)
 
 select aggfstr(distinct a,b,c)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,3) i;
+       scaled_series(1,3) i;
 select aggfns(distinct a,b,c)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,3) i;
+       scaled_series(1,3) i;
 
 select aggfstr(distinct a,b,c order by b)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,3) i;
+       scaled_series(1,3) i;
 select aggfns(distinct a,b,c order by b)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,3) i;
+       scaled_series(1,3) i;
 
 -- test specific code paths
 
 select aggfns(distinct a,a,c order by c using ~<~,a)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,2) i;
+       scaled_series(1,2) i;
 select aggfns(distinct a,a,c order by c using ~<~)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,2) i;
+       scaled_series(1,2) i;
 select aggfns(distinct a,a,c order by a)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,2) i;
+       scaled_series(1,2) i;
 select aggfns(distinct a,b,c order by a,c using ~<~,b)
   from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-       generate_series(1,2) i;
+       scaled_series(1,2) i;
 
 -- test a more complex permutation that has previous caused issues
 select
@@ -693,7 +693,7 @@ select pg_get_viewdef('agg_view1'::regclass);
 create or replace view agg_view1 as
   select aggfns(distinct a,b,c)
     from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-         generate_series(1,3) i;
+         scaled_series(1,3) i;
 
 select * from agg_view1;
 select pg_get_viewdef('agg_view1'::regclass);
@@ -701,7 +701,7 @@ select pg_get_viewdef('agg_view1'::regclass);
 create or replace view agg_view1 as
   select aggfns(distinct a,b,c order by b)
     from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-         generate_series(1,3) i;
+         scaled_series(1,3) i;
 
 select * from agg_view1;
 select pg_get_viewdef('agg_view1'::regclass);
@@ -730,7 +730,7 @@ select pg_get_viewdef('agg_view1'::regclass);
 create or replace view agg_view1 as
   select aggfns(distinct a,b,c order by a,c using ~<~,b)
     from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-         generate_series(1,2) i;
+         scaled_series(1,2) i;
 
 select * from agg_view1;
 select pg_get_viewdef('agg_view1'::regclass);
@@ -740,13 +740,13 @@ drop view agg_view1;
 -- incorrect DISTINCT usage errors
 
 select aggfns(distinct a,b,c order by i)
-  from (values (1,1,'foo')) v(a,b,c), generate_series(1,2) i;
+  from (values (1,1,'foo')) v(a,b,c), scaled_series(1,2) i;
 select aggfns(distinct a,b,c order by a,b+1)
-  from (values (1,1,'foo')) v(a,b,c), generate_series(1,2) i;
+  from (values (1,1,'foo')) v(a,b,c), scaled_series(1,2) i;
 select aggfns(distinct a,b,c order by a,b,i,c)
-  from (values (1,1,'foo')) v(a,b,c), generate_series(1,2) i;
+  from (values (1,1,'foo')) v(a,b,c), scaled_series(1,2) i;
 select aggfns(distinct a,a,c order by a,b)
-  from (values (1,1,'foo')) v(a,b,c), generate_series(1,2) i;
+  from (values (1,1,'foo')) v(a,b,c), scaled_series(1,2) i;
 
 -- string_agg tests
 select string_agg(a,',') from (values('aaaa'),('bbbb'),('cccc')) g(a);
@@ -781,7 +781,7 @@ drop table bytea_test_table;
 create table pagg_test (x int, y int) with (autovacuum_enabled = off);
 insert into pagg_test
 select (case x % 4 when 1 then null else x end), x % 10
-from generate_series(1,5000) x;
+from scaled_series(1,5000) x;
 
 set parallel_setup_cost TO 0;
 set parallel_tuple_cost TO 0;
@@ -885,7 +885,7 @@ select sum(unique1) FILTER (WHERE
 -- exercise lots of aggregate parts with FILTER
 select aggfns(distinct a,b,c order by a,c using ~<~,b) filter (where a > 1)
     from (values (1,3,'foo'),(0,null,null),(2,2,'bar'),(3,1,'baz')) v(a,b,c),
-    generate_series(1,2) i;
+    scaled_series(1,2) i;
 
 -- check handling of bare boolean Var in FILTER
 select max(0) filter (where b1) from bool_test;
@@ -901,22 +901,22 @@ select (select max(unique1) filter (where bool_or(ten > 0)) from int8_tbl) from 
 -- ordered-set aggregates
 
 select p, percentile_cont(p) within group (order by x::float8)
-from generate_series(1,5) x,
+from scaled_series(1,5) x,
      (values (0::float8),(0.1),(0.25),(0.4),(0.5),(0.6),(0.75),(0.9),(1)) v(p)
 group by p order by p;
 
 select p, percentile_cont(p order by p) within group (order by x)  -- error
-from generate_series(1,5) x,
+from scaled_series(1,5) x,
      (values (0::float8),(0.1),(0.25),(0.4),(0.5),(0.6),(0.75),(0.9),(1)) v(p)
 group by p order by p;
 
 select p, sum() within group (order by x::float8)  -- error
-from generate_series(1,5) x,
+from scaled_series(1,5) x,
      (values (0::float8),(0.1),(0.25),(0.4),(0.5),(0.6),(0.75),(0.9),(1)) v(p)
 group by p order by p;
 
 select p, percentile_cont(p,p)  -- error
-from generate_series(1,5) x,
+from scaled_series(1,5) x,
      (values (0::float8),(0.1),(0.25),(0.4),(0.5),(0.6),(0.75),(0.9),(1)) v(p)
 group by p order by p;
 
@@ -940,7 +940,7 @@ from tenk1;
 select percentile_disc(array[[null,1,0.5],[0.75,0.25,null]]) within group (order by thousand)
 from tenk1;
 select percentile_cont(array[0,1,0.25,0.75,0.5,1,0.3,0.32,0.35,0.38,0.4]) within group (order by x)
-from generate_series(1,6) x;
+from scaled_series(1,6) x;
 
 select ten, mode() within group (order by string4) from tenk1 group by ten;
 
@@ -957,28 +957,28 @@ from (values (1),(1),(2),(2),(3),(3),(4)) v(x);
 select test_percentile_disc(0.5) within group (order by thousand) from tenk1;
 
 -- ordered-set aggs can't use ungrouped vars in direct args:
-select rank(x) within group (order by x) from generate_series(1,5) x;
+select rank(x) within group (order by x) from scaled_series(1,5) x;
 
 -- outer-level agg can't use a grouped arg of a lower level, either:
 select array(select percentile_disc(a) within group (order by x)
                from (values (0.3),(0.7)) v(a) group by a)
-  from generate_series(1,5) g(x);
+  from scaled_series(1,5) g(x);
 
 -- agg in the direct args is a grouping violation, too:
-select rank(sum(x)) within group (order by x) from generate_series(1,5) x;
+select rank(sum(x)) within group (order by x) from scaled_series(1,5) x;
 
 -- hypothetical-set type unification and argument-count failures:
 select rank(3) within group (order by x) from (values ('fred'),('jim')) v(x);
 select rank(3) within group (order by stringu1,stringu2) from tenk1;
-select rank('fred') within group (order by x) from generate_series(1,5) x;
+select rank('fred') within group (order by x) from scaled_series(1,5) x;
 select rank('adam'::text collate "C") within group (order by x collate "POSIX")
   from (values ('fred'),('jim')) v(x);
 -- hypothetical-set type unification successes:
 select rank('adam'::varchar) within group (order by x) from (values ('fred'),('jim')) v(x);
-select rank('3') within group (order by x) from generate_series(1,5) x;
+select rank('3') within group (order by x) from scaled_series(1,5) x;
 
 -- divide by zero check
-select percent_rank(0) within group (order by x) from generate_series(1,0) x;
+select percent_rank(0) within group (order by x) from scaled_series(1,0) x;
 
 -- deparse and multiple features:
 create view aggordview1 as
@@ -1382,11 +1382,11 @@ set enable_sort to default;
 set work_mem='64kB';
 
 create table agg_data_2k as
-select g from generate_series(0, 1999) g;
+select g from scaled_series(0, 1999) g;
 analyze agg_data_2k;
 
 create table agg_data_20k as
-select g from generate_series(0, 19999) g;
+select g from scaled_series(0, 19999) g;
 analyze agg_data_20k;
 
 -- Produce results with sorting.

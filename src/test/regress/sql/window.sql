@@ -155,7 +155,7 @@ select first_value(max(x)) over (), y
 
 -- window functions returning pass-by-ref values from different rows
 select x, lag(x, 1) over (order by x), lead(x, 3) over (order by x)
-from (select x::numeric as x from generate_series(1,10) x);
+from (select x::numeric as x from scaled_series(1,10) x);
 
 -- test non-default frame specifications
 SELECT four, ten,
@@ -277,7 +277,7 @@ FROM tenk1 WHERE unique1 < 10;
 
 CREATE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following) as sum_rows
-	FROM generate_series(1, 10) i;
+	FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
@@ -285,7 +285,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude current row) as sum_rows FROM generate_series(1, 10) i;
+	exclude current row) as sum_rows FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
@@ -293,7 +293,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude group) as sum_rows FROM generate_series(1, 10) i;
+	exclude group) as sum_rows FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
@@ -301,7 +301,7 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude ties) as sum_rows FROM generate_series(1, 10) i;
+	exclude ties) as sum_rows FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
@@ -309,14 +309,14 @@ SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
 	SELECT i, sum(i) over (order by i rows between 1 preceding and 1 following
-	exclude no others) as sum_rows FROM generate_series(1, 10) i;
+	exclude no others) as sum_rows FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
 SELECT pg_get_viewdef('v_window');
 
 CREATE OR REPLACE TEMP VIEW v_window AS
-	SELECT i, sum(i) over (order by i groups between 1 preceding and 1 following) as sum_rows FROM generate_series(1, 10) i;
+	SELECT i, sum(i) over (order by i groups between 1 preceding and 1 following) as sum_rows FROM scaled_series(1, 10) i;
 
 SELECT * FROM v_window;
 
@@ -326,7 +326,7 @@ DROP VIEW v_window;
 
 CREATE TEMP VIEW v_window AS
 	SELECT i, min(i) over (order by i range between '1 day' preceding and '10 days' following) as min_i
-  FROM generate_series(now(), now()+'100 days'::interval, '1 hour') i;
+  FROM scaled_series(now(), now()+'100 days'::interval, '1 hour') i;
 
 SELECT pg_get_viewdef('v_window');
 
@@ -439,7 +439,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from scaled_series(1,5) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -449,7 +449,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from scaled_series(1,5) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -459,7 +459,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from scaled_series(1,5) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -469,7 +469,7 @@ select x, y,
        first_value(y) over w,
        last_value(y) over w
 from
-  (select x, x as y from generate_series(1,5) as x
+  (select x, x as y from scaled_series(1,5) as x
    union all select null, 42
    union all select null, 43) ss
 window w as
@@ -544,22 +544,22 @@ DROP FUNCTION unbounded;
 -- Check overflow behavior for various integer sizes
 
 select x, last_value(x) over (order by x::smallint range between current row and 2147450884 following)
-from generate_series(32764, 32766) x;
+from scaled_series(32764, 32766) x;
 
 select x, last_value(x) over (order by x::smallint desc range between current row and 2147450885 following)
-from generate_series(-32766, -32764) x;
+from scaled_series(-32766, -32764) x;
 
 select x, last_value(x) over (order by x range between current row and 4 following)
-from generate_series(2147483644, 2147483646) x;
+from scaled_series(2147483644, 2147483646) x;
 
 select x, last_value(x) over (order by x desc range between current row and 5 following)
-from generate_series(-2147483646, -2147483644) x;
+from scaled_series(-2147483646, -2147483644) x;
 
 select x, last_value(x) over (order by x range between current row and 4 following)
-from generate_series(9223372036854775804, 9223372036854775806) x;
+from scaled_series(9223372036854775804, 9223372036854775806) x;
 
 select x, last_value(x) over (order by x desc range between current row and 5 following)
-from generate_series(-9223372036854775806, -9223372036854775804) x;
+from scaled_series(-9223372036854775806, -9223372036854775804) x;
 
 -- Test in_range for other numeric datatypes
 
@@ -848,21 +848,21 @@ select last_value(salary) over(order by enroll_date groups between 1 following a
 
 -- Show differences in offset interpretation between ROWS, RANGE, and GROUPS
 WITH cte (x) AS (
-        SELECT * FROM generate_series(1, 35, 2)
+        SELECT * FROM scaled_series(1, 35, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
 WINDOW w AS (ORDER BY x rows between 1 preceding and 1 following);
 
 WITH cte (x) AS (
-        SELECT * FROM generate_series(1, 35, 2)
+        SELECT * FROM scaled_series(1, 35, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
 WINDOW w AS (ORDER BY x range between 1 preceding and 1 following);
 
 WITH cte (x) AS (
-        SELECT * FROM generate_series(1, 35, 2)
+        SELECT * FROM scaled_series(1, 35, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
@@ -870,7 +870,7 @@ WINDOW w AS (ORDER BY x groups between 1 preceding and 1 following);
 
 WITH cte (x) AS (
         select 1 union all select 1 union all select 1 union all
-        SELECT * FROM generate_series(5, 49, 2)
+        SELECT * FROM scaled_series(5, 49, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
@@ -878,7 +878,7 @@ WINDOW w AS (ORDER BY x rows between 1 preceding and 1 following);
 
 WITH cte (x) AS (
         select 1 union all select 1 union all select 1 union all
-        SELECT * FROM generate_series(5, 49, 2)
+        SELECT * FROM scaled_series(5, 49, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
@@ -886,7 +886,7 @@ WINDOW w AS (ORDER BY x range between 1 preceding and 1 following);
 
 WITH cte (x) AS (
         select 1 union all select 1 union all select 1 union all
-        SELECT * FROM generate_series(5, 49, 2)
+        SELECT * FROM scaled_series(5, 49, 2)
 )
 SELECT x, (sum(x) over w)
 FROM cte
@@ -958,7 +958,7 @@ SELECT rank() OVER (PARTITION BY four, ORDER BY ten) FROM tenk1;
 
 SELECT count() OVER () FROM tenk1;
 
-SELECT generate_series(1, 100) OVER () FROM empsalary;
+SELECT scaled_series(1, 100) OVER () FROM empsalary;
 
 SELECT ntile(0) OVER (ORDER BY ten), ten, four FROM tenk1;
 
@@ -1579,7 +1579,7 @@ CREATE AGGREGATE sum_int_randomrestart (int4)
 WITH
 vs AS (
 	SELECT i, (random() * 100)::int4 AS v
-	FROM generate_series(1, 100) AS i
+	FROM scaled_series(1, 100) AS i
 ),
 sum_following AS (
 	SELECT i, SUM(v) OVER
@@ -1746,14 +1746,14 @@ SELECT i, b, bool_and(b) OVER w, bool_or(b) OVER w
 
 -- test walker (fails with collation error if expressions are not walked)
 SELECT array_agg(i) OVER w
-  FROM generate_series(1,5) i
+  FROM scaled_series(1,5) i
 WINDOW w AS (ORDER BY i ROWS BETWEEN (('foo' < 'foobar')::integer) PRECEDING AND CURRENT ROW);
 
 -- test mutator (fails when inlined if expressions are not mutated)
 CREATE FUNCTION pg_temp.f(group_size BIGINT) RETURNS SETOF integer[]
 AS $$
     SELECT array_agg(s) OVER w
-      FROM generate_series(1,5) s
+      FROM scaled_series(1,5) s
     WINDOW w AS (ORDER BY s ROWS BETWEEN CURRENT ROW AND GROUP_SIZE FOLLOWING)
 $$ LANGUAGE SQL STABLE;
 

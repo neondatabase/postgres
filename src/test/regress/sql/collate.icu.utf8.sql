@@ -806,7 +806,7 @@ SET enable_incremental_sort TO off;
 CREATE TABLE pagg_tab3 (a text, c text collate case_insensitive) PARTITION BY LIST(c collate "C");
 CREATE TABLE pagg_tab3_p1 PARTITION OF pagg_tab3 FOR VALUES IN ('a', 'b');
 CREATE TABLE pagg_tab3_p2 PARTITION OF pagg_tab3 FOR VALUES IN ('B', 'A');
-INSERT INTO pagg_tab3 SELECT i % 4 + 1, substr('abAB', (i % 4) + 1 , 1) FROM generate_series(0, 19) i;
+INSERT INTO pagg_tab3 SELECT i % 4 + 1, substr('abAB', (i % 4) + 1 , 1) FROM scaled_series(0, 19) i;
 ANALYZE pagg_tab3;
 
 SET enable_partitionwise_aggregate TO false;

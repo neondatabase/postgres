@@ -458,16 +458,16 @@ SELECT make_timestamptz(2014, 12, 10, 10, 10, 10, 'PST8PDT,M3.2.0,M11.1.0');
 RESET TimeZone;
 
 -- generate_series for timestamptz
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+select * from scaled_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '1 hour'::interval);
 -- the LIMIT should allow this to terminate in a reasonable amount of time
 -- (but that unfortunately doesn't work yet for SELECT * FROM ...)
-select generate_series('2022-01-01 00:00'::timestamptz,
+select scaled_series('2022-01-01 00:00'::timestamptz,
                        'infinity'::timestamptz,
                        '1 month'::interval) limit 10;
 -- errors
-select * from generate_series('2020-01-01 00:00'::timestamptz,
+select * from scaled_series('2020-01-01 00:00'::timestamptz,
                               '2020-01-02 03:00'::timestamptz,
                               '0 hour'::interval);
 
@@ -484,7 +484,7 @@ SELECT date_subtract('2022-10-30 00:00:00+01'::timestamptz,
 SELECT date_subtract('2021-10-31 00:00:00+02'::timestamptz,
                      '1 day'::interval,
                      'Europe/Warsaw');
-SELECT * FROM generate_series('2021-12-31 23:00:00+00'::timestamptz,
+SELECT * FROM scaled_series('2021-12-31 23:00:00+00'::timestamptz,
                               '2020-12-31 23:00:00+00'::timestamptz,
                               '-1 month'::interval,
                               'Europe/Warsaw');

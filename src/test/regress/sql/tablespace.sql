@@ -52,7 +52,7 @@ REINDEX (TABLESPACE pg_global) TABLE CONCURRENTLY pg_authid;
 CREATE TABLE regress_tblspace_test_tbl (num1 bigint, num2 double precision, t text);
 INSERT INTO regress_tblspace_test_tbl (num1, num2, t)
   SELECT round(random()*100), random(), 'text'
-  FROM generate_series(1, 10) s(i);
+  FROM scaled_series(1, 10) s(i);
 CREATE INDEX regress_tblspace_test_tbl_idx ON regress_tblspace_test_tbl (num1);
 -- move to global tablespace, fail
 REINDEX (TABLESPACE pg_global) INDEX regress_tblspace_test_tbl_idx;

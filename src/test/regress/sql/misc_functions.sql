@@ -15,7 +15,7 @@ SELECT num_nonnulls(NULL::text, NULL::int);
 SELECT num_nonnulls(1, 2, NULL::text, NULL::point, '', int8 '9', 1.0 / NULL);
 SELECT num_nonnulls(VARIADIC '{1,2,NULL,3}'::int[]);
 SELECT num_nonnulls(VARIADIC '{"1","2","3","4"}'::text[]);
-SELECT num_nonnulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM generate_series(1, 100) i));
+SELECT num_nonnulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM scaled_series(1, 100) i));
 
 SELECT num_nulls(NULL);
 SELECT num_nulls('1');
@@ -24,7 +24,7 @@ SELECT num_nulls(NULL::text, NULL::int);
 SELECT num_nulls(1, 2, NULL::text, NULL::point, '', int8 '9', 1.0 / NULL);
 SELECT num_nulls(VARIADIC '{1,2,NULL,3}'::int[]);
 SELECT num_nulls(VARIADIC '{"1","2","3","4"}'::text[]);
-SELECT num_nulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM generate_series(1, 100) i));
+SELECT num_nulls(VARIADIC ARRAY(SELECT CASE WHEN i <> 40 THEN i END FROM scaled_series(1, 100) i));
 
 -- special cases
 SELECT num_nonnulls(VARIADIC NULL::text[]);
@@ -215,7 +215,7 @@ WHERE my_int_eq(a.unique2, 42);
 -- Also test non-default rowcount estimate
 CREATE FUNCTION my_gen_series(int, int) RETURNS SETOF integer
   LANGUAGE internal STRICT IMMUTABLE PARALLEL SAFE
-  AS $$generate_series_int4$$
+  AS $$scaled_series_int4$$
   SUPPORT test_support_func;
 
 EXPLAIN (COSTS OFF)

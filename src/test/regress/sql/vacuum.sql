@@ -59,10 +59,10 @@ ANALYZE vaccluster;
 -- https://postgr.es/m/c7988239-d42c-ddc4-41db-171b23b35e4f%40ssinger.info
 -- (which hopefully is unlikely to be reintroduced), but also seems
 -- independently worthwhile to cover.
-INSERT INTO vactst SELECT generate_series(1, 300);
+INSERT INTO vactst SELECT scaled_series(1, 300);
 DELETE FROM vactst WHERE i % 7 = 0; -- delete a few rows outside
 BEGIN;
-INSERT INTO vactst SELECT generate_series(301, 400);
+INSERT INTO vactst SELECT scaled_series(301, 400);
 DELETE FROM vactst WHERE i % 5 <> 0; -- delete a few rows inside
 ANALYZE vactst;
 COMMIT;
@@ -106,7 +106,7 @@ VACUUM (DISABLE_PAGE_SKIPPING) vaccluster;
 
 -- PARALLEL option
 CREATE TABLE pvactst (i INT, a INT[], p POINT) with (autovacuum_enabled = off);
-INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM generate_series(1,1000) i;
+INSERT INTO pvactst SELECT i, array[1,2,3], point(i, i+1) FROM scaled_series(1,1000) i;
 CREATE INDEX btree_pvactst ON pvactst USING btree (i);
 CREATE INDEX hash_pvactst ON pvactst USING hash (i);
 CREATE INDEX brin_pvactst ON pvactst USING brin (i);
@@ -143,7 +143,7 @@ CREATE TABLE no_index_cleanup (i INT PRIMARY KEY, t TEXT);
 -- Use uncompressed data stored in toast.
 CREATE INDEX no_index_cleanup_idx ON no_index_cleanup(t);
 ALTER TABLE no_index_cleanup ALTER COLUMN t SET STORAGE EXTERNAL;
-INSERT INTO no_index_cleanup(i, t) VALUES (generate_series(1,30),
+INSERT INTO no_index_cleanup(i, t) VALUES (scaled_series(1,30),
     repeat('1234567890',269));
 -- index cleanup option is ignored if VACUUM FULL
 VACUUM (INDEX_CLEANUP TRUE, FULL TRUE) no_index_cleanup;
@@ -159,7 +159,7 @@ VACUUM no_index_cleanup;
 ALTER TABLE no_index_cleanup SET (vacuum_index_cleanup = auto);
 VACUUM no_index_cleanup;
 -- Parameter is set for both the parent table and its toast relation.
-INSERT INTO no_index_cleanup(i, t) VALUES (generate_series(31,60),
+INSERT INTO no_index_cleanup(i, t) VALUES (scaled_series(31,60),
     repeat('1234567890',269));
 DELETE FROM no_index_cleanup WHERE i < 45;
 -- Only toast index is cleaned up.
@@ -206,7 +206,7 @@ CREATE TABLE vacparted_i1 PARTITION OF vacparted_i
   FOR VALUES WITH (MODULUS 2, REMAINDER 0);
 CREATE TABLE vacparted_i2 PARTITION OF vacparted_i
   FOR VALUES WITH (MODULUS 2, REMAINDER 1);
-INSERT INTO vacparted_i SELECT i, 'test_'|| i from generate_series(1,10) i;
+INSERT INTO vacparted_i SELECT i, 'test_'|| i from scaled_series(1,10) i;
 VACUUM (ANALYZE) vacparted_i;
 VACUUM (FULL) vacparted_i;
 VACUUM (FREEZE) vacparted_i;
@@ -262,7 +262,7 @@ COMMIT;
 
 -- PROCESS_TOAST option
 CREATE TABLE vac_option_tab (a INT, t TEXT);
-INSERT INTO vac_option_tab SELECT a, 't' || a FROM generate_series(1, 10) AS a;
+INSERT INTO vac_option_tab SELECT a, 't' || a FROM scaled_series(1, 10) AS a;
 ALTER TABLE vac_option_tab ALTER COLUMN t SET STORAGE EXTERNAL;
 -- Check the number of vacuums done on table vac_option_tab and on its
 -- toast relation, to check that PROCESS_TOAST and PROCESS_MAIN work on

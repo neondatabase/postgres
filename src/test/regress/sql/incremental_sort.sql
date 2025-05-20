@@ -114,7 +114,7 @@ end;
 $$;
 
 -- A single large group tested around each mode transition point.
-insert into t(a, b) select i/100 + 1, i + 1 from generate_series(0, 999) n(i);
+insert into t(a, b) select i/100 + 1, i + 1 from scaled_series(0, 999) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 31;
 select * from (select * from t order by a) s order by a, b limit 31;
@@ -129,7 +129,7 @@ select * from (select * from t order by a) s order by a, b limit 66;
 delete from t;
 
 -- An initial large group followed by a small group.
-insert into t(a, b) select i/50 + 1, i + 1 from generate_series(0, 999) n(i);
+insert into t(a, b) select i/50 + 1, i + 1 from scaled_series(0, 999) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 55;
 select * from (select * from t order by a) s order by a, b limit 55;
@@ -140,7 +140,7 @@ select explain_analyze_inc_sort_nodes_verify_invariants('select * from (select *
 delete from t;
 
 -- An initial small group followed by a large group.
-insert into t(a, b) select (case when i < 5 then i else 9 end), i from generate_series(1, 1000) n(i);
+insert into t(a, b) select (case when i < 5 then i else 9 end), i from scaled_series(1, 1000) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 70;
 select * from (select * from t order by a) s order by a, b limit 70;
@@ -169,7 +169,7 @@ select explain_analyze_inc_sort_nodes_verify_invariants('select * from (select *
 delete from t;
 
 -- Small groups of 10 tuples each tested around each mode transition point.
-insert into t(a, b) select i / 10, i from generate_series(1, 1000) n(i);
+insert into t(a, b) select i / 10, i from scaled_series(1, 1000) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 31;
 select * from (select * from t order by a) s order by a, b limit 31;
@@ -184,7 +184,7 @@ select * from (select * from t order by a) s order by a, b limit 66;
 delete from t;
 
 -- Small groups of only 1 tuple each tested around each mode transition point.
-insert into t(a, b) select i, i from generate_series(1, 1000) n(i);
+insert into t(a, b) select i, i from scaled_series(1, 1000) n(i);
 analyze t;
 explain (costs off) select * from (select * from t order by a) s order by a, b limit 31;
 select * from (select * from t order by a) s order by a, b limit 31;
@@ -208,7 +208,7 @@ set parallel_tuple_cost = 0;
 set max_parallel_workers_per_gather = 2;
 
 create table t (a int, b int, c int);
-insert into t select mod(i,10),mod(i,10),i from generate_series(1,10000) s(i);
+insert into t select mod(i,10),mod(i,10),i from scaled_series(1,10000) s(i);
 create index on t (a);
 analyze t;
 
@@ -242,15 +242,15 @@ set min_parallel_index_scan_size = 0;
 
 -- Parallel sort below join.
 explain (costs off) select distinct sub.unique1, stringu1
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub;
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub;
 explain (costs off) select sub.unique1, stringu1
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub
 order by 1, 2;
 -- Parallel sort but with expression that can be safely generated at the base rel.
 explain (costs off) select distinct sub.unique1, md5(stringu1)
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub;
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub;
 explain (costs off) select sub.unique1, md5(stringu1)
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub
 order by 1, 2;
 -- Parallel sort with an aggregate that can be safely generated in parallel,
 -- but we can't sort by partial aggregate values.
@@ -264,15 +264,15 @@ order by count(*);
 explain (costs off) select distinct
   unique1,
   (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
-from tenk1 t, generate_series(1, 1000);
+from tenk1 t, scaled_series(1, 1000);
 explain (costs off) select
   unique1,
   (select t.unique1 from tenk1 where tenk1.unique1 = t.unique1)
-from tenk1 t, generate_series(1, 1000)
+from tenk1 t, scaled_series(1, 1000)
 order by 1, 2;
 -- Parallel sort but with expression not available until the upper rel.
 explain (costs off) select distinct sub.unique1, stringu1 || random()::text
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub;
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub;
 explain (costs off) select sub.unique1, stringu1 || random()::text
-from tenk1, lateral (select tenk1.unique1 from generate_series(1, 1000)) as sub
+from tenk1, lateral (select tenk1.unique1 from scaled_series(1, 1000)) as sub
 order by 1, 2;

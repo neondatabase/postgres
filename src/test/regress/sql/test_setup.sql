@@ -6,8 +6,15 @@
 \getenv abs_srcdir PG_ABS_SRCDIR
 \getenv libdir PG_LIBDIR
 \getenv dlsuffix PG_DLSUFFIX
+\getenv scale_factor PG_SCALE_FACTOR
 
 \set regresslib :libdir '/regress' :dlsuffix
+
+\if :{?scale_factor}
+\set SCALE_FACTOR :scale_factor
+\else
+\set SCALE_FACTOR 1
+\endif
 
 --
 -- synchronous_commit=off delays when hint bits may be set. Some plans change
@@ -299,3 +306,17 @@ create function fipshash(text)
     returns text
     strict immutable parallel safe leakproof
     return substr(encode(sha256($1::bytea), 'hex'), 1, 32);
+
+--
+-- Create scaled_series functions that wrap generate_series with SCALE_FACTOR multiplication
+--
+
+CREATE OR REPLACE FUNCTION scaled_series(start anyelement, stop anyelement)
+RETURNS SETOF anyelement AS $$
+    SELECT * FROM generate_series(start, start + (stop - start) * :SCALE_FACTOR);
+$$ LANGUAGE SQL IMMUTABLE;
+
+CREATE OR REPLACE FUNCTION scaled_series(start anyelement, stop anyelement, step anyelement)
+RETURNS SETOF anyelement AS $$
+    SELECT * FROM generate_series(start, start + (stop - start) * :SCALE_FACTOR, step);
+$$ LANGUAGE SQL IMMUTABLE;

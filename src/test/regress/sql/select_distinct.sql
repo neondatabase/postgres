@@ -59,15 +59,15 @@ SET enable_hashagg=FALSE;
 SET jit_above_cost=0;
 
 EXPLAIN (costs off)
-SELECT DISTINCT g%1000 FROM generate_series(0,9999) g;
+SELECT DISTINCT g%1000 FROM scaled_series(0,9999) g;
 
 CREATE TABLE distinct_group_1 AS
-SELECT DISTINCT g%1000 FROM generate_series(0,9999) g;
+SELECT DISTINCT g%1000 FROM scaled_series(0,9999) g;
 
 SET jit_above_cost TO DEFAULT;
 
 CREATE TABLE distinct_group_2 AS
-SELECT DISTINCT (g%1000)::text FROM generate_series(0,9999) g;
+SELECT DISTINCT (g%1000)::text FROM scaled_series(0,9999) g;
 
 SET enable_seqscan = 0;
 
@@ -86,15 +86,15 @@ SET enable_sort=FALSE;
 SET jit_above_cost=0;
 
 EXPLAIN (costs off)
-SELECT DISTINCT g%1000 FROM generate_series(0,9999) g;
+SELECT DISTINCT g%1000 FROM scaled_series(0,9999) g;
 
 CREATE TABLE distinct_hash_1 AS
-SELECT DISTINCT g%1000 FROM generate_series(0,9999) g;
+SELECT DISTINCT g%1000 FROM scaled_series(0,9999) g;
 
 SET jit_above_cost TO DEFAULT;
 
 CREATE TABLE distinct_hash_2 AS
-SELECT DISTINCT (g%1000)::text FROM generate_series(0,9999) g;
+SELECT DISTINCT (g%1000)::text FROM scaled_series(0,9999) g;
 
 SET enable_sort=TRUE;
 

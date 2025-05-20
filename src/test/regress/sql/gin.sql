@@ -8,12 +8,12 @@
 create table gin_test_tbl(i int4[]) with (autovacuum_enabled = off);
 create index gin_test_idx on gin_test_tbl using gin (i)
   with (fastupdate = on, gin_pending_list_limit = 4096);
-insert into gin_test_tbl select array[1, 2, g] from generate_series(1, 20000) g;
-insert into gin_test_tbl select array[1, 3, g] from generate_series(1, 1000) g;
+insert into gin_test_tbl select array[1, 2, g] from scaled_series(1, 20000) g;
+insert into gin_test_tbl select array[1, 3, g] from scaled_series(1, 1000) g;
 
 select gin_clean_pending_list('gin_test_idx')>10 as many; -- flush the fastupdate buffers
 
-insert into gin_test_tbl select array[3, 1, g] from generate_series(1, 1000) g;
+insert into gin_test_tbl select array[3, 1, g] from scaled_series(1, 1000) g;
 
 vacuum gin_test_tbl; -- flush the fastupdate buffers
 
@@ -29,8 +29,8 @@ vacuum gin_test_tbl;
 -- recompression codepaths.
 alter index gin_test_idx set (fastupdate = off);
 
-insert into gin_test_tbl select array[1, 2, g] from generate_series(1, 1000) g;
-insert into gin_test_tbl select array[1, 3, g] from generate_series(1, 1000) g;
+insert into gin_test_tbl select array[1, 2, g] from scaled_series(1, 1000) g;
+insert into gin_test_tbl select array[1, 3, g] from scaled_series(1, 1000) g;
 
 delete from gin_test_tbl where i @> array[2];
 vacuum gin_test_tbl;
@@ -140,7 +140,7 @@ reset enable_bitmapscan;
 
 -- re-purpose t_gin_test_tbl to test scans involving posting trees
 insert into t_gin_test_tbl select array[1, g, g/10], array[2, g, g/10]
-  from generate_series(1, 20000) g;
+  from scaled_series(1, 20000) g;
 
 select gin_clean_pending_list('t_gin_test_tbl_i_j_idx') is not null;
 

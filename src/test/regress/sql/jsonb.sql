@@ -99,7 +99,7 @@ SELECT array_to_json(ARRAY [jsonb '{"a":1}', jsonb '{"b":[2,3]}']);
 
 CREATE TEMP TABLE rows AS
 SELECT x, 'txt' || x as y
-FROM generate_series(1,3) AS x;
+FROM scaled_series(1,3) AS x;
 
 analyze rows;
 
@@ -135,8 +135,8 @@ SELECT jsonb_agg(q)
   FROM ( SELECT $$a$$ || x AS b, y AS c,
                ARRAY[ROW(x.*,ARRAY[1,2,3]),
                ROW(y.*,ARRAY[4,5,6])] AS z
-         FROM generate_series(1,2) x,
-              generate_series(4,5) y) q;
+         FROM scaled_series(1,2) x,
+              scaled_series(4,5) y) q;
 
 SELECT jsonb_agg(q ORDER BY x, y)
   FROM rows q;
@@ -771,7 +771,7 @@ SELECT '{
 	"rec": {"a": "abc", "c": "01.02.2003", "x": 43.2},
 	"reca": [{"a": "abc", "b": 456}, null, {"c": "01.02.2003", "x": 43.2}]
 }'::jsonb
-FROM generate_series(1, 3);
+FROM scaled_series(1, 3);
 
 SELECT (jsonb_populate_record(NULL::jsbrec, js)).* FROM jsbpoptest;
 

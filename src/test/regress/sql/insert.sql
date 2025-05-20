@@ -320,8 +320,8 @@ create table part_ee_ff3_2 partition of part_ee_ff3 for values from (25) to (30)
 
 truncate list_parted;
 insert into list_parted values ('aa'), ('cc');
-insert into list_parted select 'Ff', s.a from generate_series(1, 29) s(a);
-insert into list_parted select 'gg', s.a from generate_series(1, 9) s(a);
+insert into list_parted select 'Ff', s.a from scaled_series(1, 29) s(a);
+insert into list_parted select 'gg', s.a from scaled_series(1, 9) s(a);
 insert into list_parted (b) values (1);
 select tableoid::regclass::text, a, min(b) as min_b, max(b) as max_b from list_parted group by 1, 2 order by 1;
 
@@ -335,7 +335,7 @@ create table hpart1 partition of hash_parted for values with (modulus 4, remaind
 create table hpart2 partition of hash_parted for values with (modulus 4, remainder 2);
 create table hpart3 partition of hash_parted for values with (modulus 4, remainder 3);
 
-insert into hash_parted values(generate_series(1,10));
+insert into hash_parted values(scaled_series(1,10));
 
 -- direct insert of values divisible by 4 - ok;
 insert into hpart0 values(12),(16);
@@ -440,7 +440,7 @@ alter table mlparted4 drop a;
 alter table mlparted4 add a int not null;
 alter table mlparted attach partition mlparted4 for values from (1, 30) to (1, 40);
 with ins (a, b, c) as
-  (insert into mlparted (b, a) select s.a, 1 from generate_series(2, 39) s(a) returning tableoid::regclass, *)
+  (insert into mlparted (b, a) select s.a, 1 from scaled_series(2, 39) s(a) returning tableoid::regclass, *)
   select a, b, min(c), max(c) from ins group by a, b order by 1;
 
 alter table mlparted add c text;

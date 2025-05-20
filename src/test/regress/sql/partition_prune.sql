@@ -505,7 +505,7 @@ create table list_part2 partition of list_part for values in (2);
 create table list_part3 partition of list_part for values in (3);
 create table list_part4 partition of list_part for values in (4);
 
-insert into list_part select generate_series(1,4);
+insert into list_part select scaled_series(1,4);
 
 begin;
 
@@ -594,7 +594,7 @@ select explain_parallel_append('select count(*) from ab where (a = (select 1) or
 -- Test pruning during parallel nested loop query
 create table lprt_a (a int not null);
 -- Insert some values we won't find in ab
-insert into lprt_a select 0 from generate_series(1,100);
+insert into lprt_a select 0 from scaled_series(1,100);
 
 -- and insert some values that we should find.
 insert into lprt_a values(1),(1);
@@ -933,7 +933,7 @@ create table ma_test (a int, b int) partition by range (a);
 create table ma_test_p1 partition of ma_test for values from (0) to (10);
 create table ma_test_p2 partition of ma_test for values from (10) to (20);
 create table ma_test_p3 partition of ma_test for values from (20) to (30);
-insert into ma_test select x,x from generate_series(0,29) t(x);
+insert into ma_test select x,x from scaled_series(0,29) t(x);
 create index on ma_test (b);
 
 analyze ma_test;
@@ -1267,8 +1267,8 @@ select
   case c when 0 then null else 3 end,
   case d when 0 then null else 4 end
 from
-  generate_series(0,1) a,
-  generate_series(0,1) b,
+  scaled_series(0,1) a,
+  scaled_series(0,1) b,
   generate_Series(0,1) c,
   generate_Series(0,1) d;
 

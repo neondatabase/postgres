@@ -100,7 +100,7 @@ INSERT INTO z VALUES (NULL, 'text'); -- should fail
 -- Check inherited UPDATE with first child excluded
 create table some_tab (f1 int, f2 int, f3 int, check (f1 < 10) no inherit);
 create table some_tab_child () inherits(some_tab);
-insert into some_tab_child select i, i+1, 0 from generate_series(1,1000) i;
+insert into some_tab_child select i, i+1, 0 from scaled_series(1,1000) i;
 create index on some_tab_child(f1, f2);
 -- while at it, also check that statement-level triggers fire
 create function some_tab_stmt_trig_func() returns trigger as
@@ -500,13 +500,13 @@ order by 1, 2;
 --
 
 create temp table patest0 (id, x) as
-  select x, x from generate_series(0,1000) x;
+  select x, x from scaled_series(0,1000) x;
 create temp table patest1() inherits (patest0);
 insert into patest1
-  select x, x from generate_series(0,1000) x;
+  select x, x from scaled_series(0,1000) x;
 create temp table patest2() inherits (patest0);
 insert into patest2
-  select x, x from generate_series(0,1000) x;
+  select x, x from scaled_series(0,1000) x;
 create index patest0i on patest0(id);
 create index patest1i on patest1(id);
 create index patest2i on patest2(id);
@@ -646,21 +646,21 @@ ORDER BY x, y;
 explain (costs off)
 SELECT
     ARRAY(SELECT f.i FROM (
-        (SELECT d + g.i FROM generate_series(4, 30, 3) d ORDER BY 1)
+        (SELECT d + g.i FROM scaled_series(4, 30, 3) d ORDER BY 1)
         UNION ALL
-        (SELECT d + g.i FROM generate_series(0, 30, 5) d ORDER BY 1)
+        (SELECT d + g.i FROM scaled_series(0, 30, 5) d ORDER BY 1)
     ) f(i)
     ORDER BY f.i LIMIT 10)
-FROM generate_series(1, 3) g(i);
+FROM scaled_series(1, 3) g(i);
 
 SELECT
     ARRAY(SELECT f.i FROM (
-        (SELECT d + g.i FROM generate_series(4, 30, 3) d ORDER BY 1)
+        (SELECT d + g.i FROM scaled_series(4, 30, 3) d ORDER BY 1)
         UNION ALL
-        (SELECT d + g.i FROM generate_series(0, 30, 5) d ORDER BY 1)
+        (SELECT d + g.i FROM scaled_series(0, 30, 5) d ORDER BY 1)
     ) f(i)
     ORDER BY f.i LIMIT 10)
-FROM generate_series(1, 3) g(i);
+FROM scaled_series(1, 3) g(i);
 
 reset enable_seqscan;
 reset enable_indexscan;
@@ -672,8 +672,8 @@ reset enable_bitmapscan;
 create table inhpar(f1 int, f2 name);
 create table inhcld(f2 name, f1 int);
 alter table inhcld inherit inhpar;
-insert into inhpar select x, x::text from generate_series(1,5) x;
-insert into inhcld select x::text, x from generate_series(6,10) x;
+insert into inhpar select x, x::text from scaled_series(1,5) x;
+insert into inhcld select x::text, x from scaled_series(6,10) x;
 
 explain (verbose, costs off)
 update inhpar i set (f1, f2) = (select i.f1, i.f2 || '-' from int4_tbl limit 1);
@@ -690,7 +690,7 @@ create table inhcld1(f2 name, f1 int primary key);
 create table inhcld2(f1 int primary key, f2 name);
 alter table inhpar attach partition inhcld1 for values from (1) to (5);
 alter table inhpar attach partition inhcld2 for values from (5) to (100);
-insert into inhpar select x, x::text from generate_series(1,10) x;
+insert into inhpar select x, x::text from scaled_series(1,10) x;
 
 explain (verbose, costs off)
 update inhpar i set (f1, f2) = (select i.f1, i.f2 || '-' from int4_tbl limit 1);
@@ -957,7 +957,7 @@ alter table permtest_child attach partition permtest_grandchild for values in ('
 alter table permtest_parent attach partition permtest_child for values in (1);
 create index on permtest_parent (left(c, 3));
 insert into permtest_parent
-  select 1, 'a', left(fipshash(i::text), 5) from generate_series(0, 100) i;
+  select 1, 'a', left(fipshash(i::text), 5) from scaled_series(0, 100) i;
 analyze permtest_parent;
 create role regress_no_child_access;
 revoke all on permtest_grandchild from regress_no_child_access;

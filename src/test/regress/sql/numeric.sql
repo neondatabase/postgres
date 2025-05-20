@@ -831,7 +831,7 @@ SELECT i as pow,
 	round((0.5 * 10 ^ i)::numeric, -i),
 	round((1.5 * 10 ^ i)::numeric, -i),
 	round((2.5 * 10 ^ i)::numeric, -i)
-FROM generate_series(-5,5) AS t(i);
+FROM scaled_series(-5,5) AS t(i);
 
 -- Check limits of rounding before the decimal point
 SELECT round(4.4e131071, -131071) = 4e131071;
@@ -930,10 +930,10 @@ DROP TABLE width_bucket_test;
 -- Simple test for roundoff error when results should be exact
 SELECT x, width_bucket(x::float8, 10, 100, 9) as flt,
        width_bucket(x::numeric, 10, 100, 9) as num
-FROM generate_series(0, 110, 10) x;
+FROM scaled_series(0, 110, 10) x;
 SELECT x, width_bucket(x::float8, 100, 10, 9) as flt,
        width_bucket(x::numeric, 100, 10, 9) as num
-FROM generate_series(0, 110, 10) x;
+FROM scaled_series(0, 110, 10) x;
 -- Another roundoff-error hazard
 SELECT width_bucket(0, -1e100::numeric, 1, 10);
 SELECT width_bucket(0, -1e100::float8, 1, 10);
@@ -1256,7 +1256,7 @@ select (-1.0) ^ 1000000000000001;
 
 -- integer powers of 10
 select n, 10.0 ^ n as "10^n", (10.0 ^ n) * (10.0 ^ (-n)) = 1 as ok
-from generate_series(-20, 20) n;
+from scaled_series(-20, 20) n;
 
 --
 -- Tests for raising to non-integer powers
@@ -1314,26 +1314,26 @@ select exp(1234.5678);
 --
 -- Tests for generate_series
 --
-select * from generate_series(0.0::numeric, 4.0::numeric);
-select * from generate_series(0.1::numeric, 4.0::numeric, 1.3::numeric);
-select * from generate_series(4.0::numeric, -1.5::numeric, -2.2::numeric);
+select * from scaled_series(0.0::numeric, 4.0::numeric);
+select * from scaled_series(0.1::numeric, 4.0::numeric, 1.3::numeric);
+select * from scaled_series(4.0::numeric, -1.5::numeric, -2.2::numeric);
 -- Trigger errors
-select * from generate_series(-100::numeric, 100::numeric, 0::numeric);
-select * from generate_series(-100::numeric, 100::numeric, 'nan'::numeric);
-select * from generate_series('nan'::numeric, 100::numeric, 10::numeric);
-select * from generate_series(0::numeric, 'nan'::numeric, 10::numeric);
-select * from generate_series('inf'::numeric, 'inf'::numeric, 10::numeric);
-select * from generate_series(0::numeric, 'inf'::numeric, 10::numeric);
-select * from generate_series(0::numeric, '42'::numeric, '-inf'::numeric);
+select * from scaled_series(-100::numeric, 100::numeric, 0::numeric);
+select * from scaled_series(-100::numeric, 100::numeric, 'nan'::numeric);
+select * from scaled_series('nan'::numeric, 100::numeric, 10::numeric);
+select * from scaled_series(0::numeric, 'nan'::numeric, 10::numeric);
+select * from scaled_series('inf'::numeric, 'inf'::numeric, 10::numeric);
+select * from scaled_series(0::numeric, 'inf'::numeric, 10::numeric);
+select * from scaled_series(0::numeric, '42'::numeric, '-inf'::numeric);
 -- Checks maximum, output is truncated
 select (i / (10::numeric ^ 131071))::numeric(1,0)
-	from generate_series(6 * (10::numeric ^ 131071),
+	from scaled_series(6 * (10::numeric ^ 131071),
 			     9 * (10::numeric ^ 131071),
 			     10::numeric ^ 131071) as a(i);
 -- Check usage with variables
-select * from generate_series(1::numeric, 3::numeric) i, generate_series(i,3) j;
-select * from generate_series(1::numeric, 3::numeric) i, generate_series(1,i) j;
-select * from generate_series(1::numeric, 3::numeric) i, generate_series(1,5,i) j;
+select * from generate_series(1::numeric, 3::numeric) i, scaled_series(i,3) j;
+select * from generate_series(1::numeric, 3::numeric) i, scaled_series(1,i) j;
+select * from generate_series(1::numeric, 3::numeric) i, scaled_series(1,5,i) j;
 
 --
 -- Tests for LN()
@@ -1439,7 +1439,7 @@ select trim_scale(1e100);
 --
 
 -- cases that need carry propagation
-SELECT SUM(9999::numeric) FROM generate_series(1, 100000);
+SELECT SUM(9999::numeric) FROM scaled_series(1, 100000);
 SELECT SUM((-9999)::numeric) FROM generate_series(1, 100000);
 
 --
@@ -1465,7 +1465,7 @@ ROLLBACK;
 
 -- case where sum of squares would overflow but variance does not
 DELETE FROM num_variance;
-INSERT INTO num_variance SELECT 9e131071 + x FROM generate_series(1, 5) x;
+INSERT INTO num_variance SELECT 9e131071 + x FROM scaled_series(1, 5) x;
 SELECT variance(a) FROM num_variance;
 
 -- check that parallel execution produces the same result

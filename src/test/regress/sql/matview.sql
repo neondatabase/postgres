@@ -201,7 +201,7 @@ refresh materialized view mvtest_error;  -- fail here
 drop materialized view mvtest_error;
 
 -- make sure that matview rows can be referenced as source rows (bug #9398)
-CREATE TABLE mvtest_v AS SELECT generate_series(1,10) AS a;
+CREATE TABLE mvtest_v AS SELECT scaled_series(1,10) AS a;
 CREATE MATERIALIZED VIEW mvtest_mv_v AS SELECT a FROM mvtest_v WHERE a <= 5;
 DELETE FROM mvtest_v WHERE EXISTS ( SELECT * FROM mvtest_mv_v WHERE mvtest_mv_v.a = mvtest_v.a );
 SELECT * FROM mvtest_v;
@@ -220,7 +220,7 @@ CREATE TABLE mvtest_foo_data AS SELECT i,
   fipshash(random()::text) AS newdata,
   fipshash(random()::text) AS newdata2,
   fipshash(random()::text) AS diff
-  FROM generate_series(1, 10) i;
+  FROM scaled_series(1, 10) i;
 CREATE MATERIALIZED VIEW mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
 CREATE MATERIALIZED VIEW mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
 CREATE MATERIALIZED VIEW IF NOT EXISTS mvtest_mv_foo AS SELECT * FROM mvtest_foo_data;
@@ -271,16 +271,16 @@ GRANT ALL ON SCHEMA matview_schema TO public;
 
 SET SESSION AUTHORIZATION regress_matview_user;
 CREATE MATERIALIZED VIEW matview_schema.mv_withdata1 (a) AS
-  SELECT generate_series(1, 10) WITH DATA;
+  SELECT scaled_series(1, 10) WITH DATA;
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW matview_schema.mv_withdata2 (a) AS
-  SELECT generate_series(1, 10) WITH DATA;
+  SELECT scaled_series(1, 10) WITH DATA;
 REFRESH MATERIALIZED VIEW matview_schema.mv_withdata2;
 CREATE MATERIALIZED VIEW matview_schema.mv_nodata1 (a) AS
-  SELECT generate_series(1, 10) WITH NO DATA;
+  SELECT scaled_series(1, 10) WITH NO DATA;
 EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF)
   CREATE MATERIALIZED VIEW matview_schema.mv_nodata2 (a) AS
-  SELECT generate_series(1, 10) WITH NO DATA;
+  SELECT scaled_series(1, 10) WITH NO DATA;
 REFRESH MATERIALIZED VIEW matview_schema.mv_nodata2;
 RESET SESSION AUTHORIZATION;
 

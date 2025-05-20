@@ -84,16 +84,16 @@ select 1 as var1, NULL as var2, 3 as var3 \gset
 \echo :var1 :var2 :var3
 
 -- \gset requires just one tuple
-select 10 as test01, 20 as test02 from generate_series(1,3) \gset
-select 10 as test01, 20 as test02 from generate_series(1,0) \gset
+select 10 as test01, 20 as test02 from scaled_series(1,3) \gset
+select 10 as test01, 20 as test02 from scaled_series(1,0) \gset
 
 -- \gset should work in FETCH_COUNT mode too
 \set FETCH_COUNT 1
 
 select 1 as x, 2 as y \gset pref01_ \\ \echo :pref01_x
 select 3 as x, 4 as y \gset pref01_ \echo :pref01_x \echo :pref01_y
-select 10 as test01, 20 as test02 from generate_series(1,3) \gset
-select 10 as test01, 20 as test02 from generate_series(1,0) \gset
+select 10 as test01, 20 as test02 from scaled_series(1,3) \gset
+select 10 as test01, 20 as test02 from scaled_series(1,0) \gset
 
 \unset FETCH_COUNT
 
@@ -154,7 +154,7 @@ order by attnum
 -- (though the fetch limit applies to the executed queries not the meta query)
 \set FETCH_COUNT 1
 
-select 'select 1 as ones', 'select x.y, x.y*2 as double from generate_series(1,4) as x(y)'
+select 'select 1 as ones', 'select x.y, x.y*2 as double from scaled_series(1,4) as x(y)'
 union all
 select 'drop table gexec_test', NULL
 union all
@@ -183,7 +183,7 @@ select 'drop table gexec_test', 'select ''2000-01-01''::date as party_over'
 prepare q as select array_to_string(array_agg(repeat('x',2*n)),E'\n') as "ab
 
 c", array_to_string(array_agg(repeat('y',20-2*n)),E'\n') as "a
-bc" from generate_series(1,10) as n(n) group by n>1 order by n>1;
+bc" from scaled_series(1,10) as n(n) group by n>1 order by n>1;
 
 \pset linestyle ascii
 
@@ -532,7 +532,7 @@ DROP ROLE regress_display_role;
 \pset numericlocale true
 
 select n, -n as m, n * 111 as x, '1e90'::float8 as f
-from generate_series(0,3) n;
+from scaled_series(0,3) n;
 
 \pset numericlocale false
 
@@ -554,7 +554,7 @@ from generate_series(0,3) n;
 
 prepare q as
   select 'some|text' as "a|title", '        ' as "empty ", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 \pset border 0
@@ -597,7 +597,7 @@ deallocate q;
 prepare q as
   select 'some"text' as "a""title", E'  <foo>\n<bar>' as "junk",
          '   ' as "empty", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 execute q;
@@ -645,7 +645,7 @@ select '\' as d1, '' as d2;
 prepare q as
   select 'some"text' as "a&title", E'  <foo>\n<bar>' as "junk",
          '   ' as "empty", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 \pset border 0
@@ -690,7 +690,7 @@ deallocate q;
 prepare q as
   select 'some\more_text' as "a$title", E'  #<foo>%&^~|\n{bar}' as "junk",
          '   ' as "empty", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 \pset border 0
@@ -739,7 +739,7 @@ deallocate q;
 prepare q as
   select 'some\more_text' as "a$title", E'  #<foo>%&^~|\n{bar}' as "junk",
          '   ' as "empty", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 \pset border 0
@@ -796,7 +796,7 @@ deallocate q;
 prepare q as
   select 'some\text' as "a\title", E'  <foo>\n<bar>' as "junk",
          '   ' as "empty", n as int
-  from generate_series(1,2) as n;
+  from scaled_series(1,2) as n;
 
 \pset expanded off
 \pset border 0
@@ -1212,7 +1212,7 @@ create table child_10_20 partition of parent_tab
   for values from (10) to (20);
 create table child_20_30 partition of parent_tab
   for values from (20) to (30);
-insert into parent_tab values (generate_series(0,29));
+insert into parent_tab values (scaled_series(0,29));
 create table child_30_40 partition of parent_tab
 for values from (30) to (40)
   partition by range(id);
@@ -1220,7 +1220,7 @@ create table child_30_35 partition of child_30_40
   for values from (30) to (35);
 create table child_35_40 partition of child_30_40
    for values from (35) to (40);
-insert into parent_tab values (generate_series(30,39));
+insert into parent_tab values (scaled_series(30,39));
 
 \dPt
 \dPi

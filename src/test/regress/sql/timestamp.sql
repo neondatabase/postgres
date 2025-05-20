@@ -384,7 +384,7 @@ SELECT to_char(d, 'FF1 FF2 FF3 FF4 FF5 FF6  ff1 ff2 ff3 ff4 ff5 ff6  MS US')
 SELECT i,
        to_char(i * interval '1mon', 'rm'),
        to_char(i * interval '1mon', 'RM')
-    FROM generate_series(-13, 13) i;
+    FROM scaled_series(-13, 13) i;
 
 -- timestamp numeric fields constructor
 SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);
@@ -393,15 +393,15 @@ SELECT make_timestamp(-44, 3, 15, 12, 30, 15);
 select make_timestamp(0, 7, 15, 12, 30, 15);
 
 -- generate_series for timestamp
-select * from generate_series('2020-01-01 00:00'::timestamp,
+select * from scaled_series('2020-01-01 00:00'::timestamp,
                               '2020-01-02 03:00'::timestamp,
                               '1 hour'::interval);
 -- the LIMIT should allow this to terminate in a reasonable amount of time
 -- (but that unfortunately doesn't work yet for SELECT * FROM ...)
-select generate_series('2022-01-01 00:00'::timestamp,
+select scaled_series('2022-01-01 00:00'::timestamp,
                        'infinity'::timestamp,
                        '1 month'::interval) limit 10;
 -- errors
-select * from generate_series('2020-01-01 00:00'::timestamp,
+select * from scaled_series('2020-01-01 00:00'::timestamp,
                               '2020-01-02 03:00'::timestamp,
                               '0 hour'::interval);

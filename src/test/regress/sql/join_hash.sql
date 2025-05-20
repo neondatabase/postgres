@@ -56,14 +56,14 @@ $$;
 -- Make a simple relation with well distributed keys and correctly
 -- estimated size.
 create table simple as
-  select generate_series(1, 20000) AS id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  select scaled_series(1, 20000) AS id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 alter table simple set (parallel_workers = 2);
 analyze simple;
 
 -- Make a relation whose size we will under-estimate.  We want stats
 -- to say 1000 rows, but actually there are 20,000 rows.
 create table bigger_than_it_looks as
-  select generate_series(1, 20000) as id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  select scaled_series(1, 20000) as id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 alter table bigger_than_it_looks set (autovacuum_enabled = 'false');
 alter table bigger_than_it_looks set (parallel_workers = 2);
 analyze bigger_than_it_looks;
@@ -78,13 +78,13 @@ alter table extremely_skewed set (parallel_workers = 2);
 analyze extremely_skewed;
 insert into extremely_skewed
   select 42 as id, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-  from generate_series(1, 20000);
+  from scaled_series(1, 20000);
 update pg_class
   set reltuples = 2, relpages = pg_relation_size('extremely_skewed') / 8192
   where relname = 'extremely_skewed';
 
 -- Make a relation with a couple of enormous tuples.
-create table wide as select generate_series(1, 2) as id, rpad('', 320000, 'x') as t;
+create table wide as select scaled_series(1, 2) as id, rpad('', 320000, 'x') as t;
 alter table wide set (parallel_workers = 2);
 
 -- The "optimal" case: the hash table fits in memory; we plan for 1
@@ -310,9 +310,9 @@ rollback to settings;
 -- Exercise rescans.  We'll turn off parallel_leader_participation so
 -- that we can check that instrumentation comes back correctly.
 
-create table join_foo as select generate_series(1, 3) as id, 'xxxxx'::text as t;
+create table join_foo as select scaled_series(1, 3) as id, 'xxxxx'::text as t;
 alter table join_foo set (parallel_workers = 0);
-create table join_bar as select generate_series(1, 10000) as id, 'xxxxx'::text as t;
+create table join_bar as select scaled_series(1, 10000) as id, 'xxxxx'::text as t;
 alter table join_bar set (parallel_workers = 2);
 
 -- multi-batch with rescan, parallel-oblivious

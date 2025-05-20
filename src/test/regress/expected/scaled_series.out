@@ -1,0 +1,161 @@
+--
+-- Test for scaled_series functionality
+--
+
+-- Basic test with default SCALE_FACTOR=1
+SELECT * FROM scaled_series(1, 5);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+(5 rows)
+
+SELECT * FROM scaled_series(1, 5, 1);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+(5 rows)
+
+-- Test with explicit SCALE_FACTOR=2
+\set SCALE_FACTOR 2
+SELECT * FROM scaled_series(1, 5);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+(9 rows)
+
+SELECT * FROM scaled_series(1, 5, 1);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+(9 rows)
+
+-- Test with SCALE_FACTOR=10
+\set SCALE_FACTOR 10
+SELECT * FROM scaled_series(1, 5);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+           10
+           11
+           12
+           13
+           14
+           15
+           16
+           17
+           18
+           19
+           20
+           21
+           22
+           23
+           24
+           25
+           26
+           27
+           28
+           29
+           30
+           31
+           32
+           33
+           34
+           35
+           36
+           37
+           38
+           39
+           40
+           41
+(41 rows)
+
+SELECT * FROM scaled_series(1, 5, 1);
+ scaled_series 
+--------------
+            1
+            2
+            3
+            4
+            5
+            6
+            7
+            8
+            9
+           10
+           11
+           12
+           13
+           14
+           15
+           16
+           17
+           18
+           19
+           20
+           21
+           22
+           23
+           24
+           25
+           26
+           27
+           28
+           29
+           30
+           31
+           32
+           33
+           34
+           35
+           36
+           37
+           38
+           39
+           40
+           41
+(41 rows)
+
+-- Test nested query case to verify complexity isn't exponential
+\set SCALE_FACTOR 2
+SELECT count(*) FROM 
+  (SELECT a FROM scaled_series(1, 5) a) a,
+  (SELECT b FROM scaled_series(1, 5) b) b;
+ count 
+-------
+    81
+(1 row)
+
+-- Reset SCALE_FACTOR to default
+\set SCALE_FACTOR 1

@@ -2623,7 +2623,7 @@ set plpgsql.extra_warnings to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2) g(v) into x;
+  select v from scaled_series(1,2) g(v) into x;
 end;
 $$;
 
@@ -2632,7 +2632,7 @@ set plpgsql.extra_errors to 'too_many_rows';
 do $$
 declare x int;
 begin
-  select v from generate_series(1,2) g(v) into x;
+  select v from scaled_series(1,2) g(v) into x;
 end;
 $$;
 
@@ -2796,7 +2796,7 @@ select * from sc_test();
 
 create or replace function sc_test() returns setof integer as $$
 declare
-  c cursor for select * from generate_series(1, 10);
+  c cursor for select * from scaled_series(1, 10);
   x integer;
 begin
   open c;
@@ -2818,7 +2818,7 @@ select * from sc_test();
 
 create or replace function sc_test() returns setof integer as $$
 declare
-  c cursor for select * from generate_series(1, 10);
+  c cursor for select * from scaled_series(1, 10);
   x integer;
 begin
   open c;
@@ -2864,7 +2864,7 @@ begin
     $1 := -1;
     $2 := -2;
     return next;
-    return query select x + 1, x * 10 from generate_series(0, 10) s (x);
+    return query select x + 1, x * 10 from scaled_series(0, 10) s (x);
     return next;
 end;
 $$ language plpgsql;
@@ -2876,7 +2876,7 @@ create type record_type as (x text, y int, z boolean);
 create or replace function ret_query2(lim int) returns setof record_type as $$
 begin
     return query select fipshash(s.x::text), s.x, s.x > 0
-                 from generate_series(-8, lim) s (x) where s.x % 2 = 0;
+                 from scaled_series(-8, lim) s (x) where s.x % 2 = 0;
 end;
 $$ language plpgsql;
 
@@ -2886,7 +2886,7 @@ select * from ret_query2(8);
 create function exc_using(int, text) returns int as $$
 declare i int;
 begin
-  for i in execute 'select * from generate_series(1,$1)' using $1+1 loop
+  for i in execute 'select * from scaled_series(1,$1)' using $1+1 loop
     raise notice '%', i;
   end loop;
   execute 'select $2 + $2*3 + length($1)' into i using $2,$1;
@@ -2903,7 +2903,7 @@ declare
   c refcursor;
   i int;
 begin
-  open c for execute 'select * from generate_series(1,$1)' using $1+1;
+  open c for execute 'select * from scaled_series(1,$1)' using $1+1;
   loop
     fetch c into i;
     exit when not found;
@@ -2923,9 +2923,9 @@ drop function exc_using(int);
 create or replace function forc01() returns void as $$
 declare
   c cursor(r1 integer, r2 integer)
-       for select * from generate_series(r1,r2) i;
+       for select * from scaled_series(r1,r2) i;
   c2 cursor
-       for select * from generate_series(41,43) i;
+       for select * from scaled_series(41,43) i;
 begin
   -- assign portal names to cursors to get stable output
   c := 'c';
@@ -2964,7 +2964,7 @@ select forc01();
 -- try updating the cursor's current row
 
 create temp table forc_test as
-  select n as i, n as j from generate_series(1,10) n;
+  select n as i, n as j from scaled_series(1,10) n;
 
 create or replace function forc01() returns void as $$
 declare
@@ -3517,7 +3517,7 @@ drop function pleast(numeric);
 
 create function tftest(int) returns table(a int, b int) as $$
 begin
-  return query select $1, $1+i from generate_series(1,5) g(i);
+  return query select $1, $1+i from scaled_series(1,5) g(i);
 end;
 $$ language plpgsql immutable strict;
 
@@ -4561,12 +4561,12 @@ CREATE TRIGGER transition_table_level2_ri_child_upd_trigger
 
 -- create initial test data
 INSERT INTO transition_table_level1 (level1_no)
-  SELECT generate_series(1,200);
+  SELECT scaled_series(1,200);
 ANALYZE transition_table_level1;
 
 INSERT INTO transition_table_level2 (level2_no, parent_no)
   SELECT level2_no, level2_no / 50 + 1 AS parent_no
-    FROM generate_series(1,9999) level2_no;
+    FROM scaled_series(1,9999) level2_no;
 ANALYZE transition_table_level2;
 
 INSERT INTO transition_table_status (level, node_no, status)
@@ -4577,7 +4577,7 @@ INSERT INTO transition_table_status (level, node_no, status)
 ANALYZE transition_table_status;
 
 INSERT INTO transition_table_level1(level1_no)
-  SELECT generate_series(201,1000);
+  SELECT scaled_series(201,1000);
 ANALYZE transition_table_level1;
 
 -- behave reasonably if someone tries to modify a transition table

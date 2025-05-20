@@ -303,32 +303,32 @@ set enable_hashagg = true;
 set enable_sort = false;
 
 explain (costs off)
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,5) union select from scaled_series(1,3);
 explain (costs off)
-select from generate_series(1,5) intersect select from generate_series(1,3);
+select from generate_series(1,5) intersect select from scaled_series(1,3);
 
-select from generate_series(1,5) union select from generate_series(1,3);
-select from generate_series(1,5) union all select from generate_series(1,3);
-select from generate_series(1,5) intersect select from generate_series(1,3);
-select from generate_series(1,5) intersect all select from generate_series(1,3);
-select from generate_series(1,5) except select from generate_series(1,3);
-select from generate_series(1,5) except all select from generate_series(1,3);
+select from generate_series(1,5) union select from scaled_series(1,3);
+select from generate_series(1,5) union all select from scaled_series(1,3);
+select from generate_series(1,5) intersect select from scaled_series(1,3);
+select from generate_series(1,5) intersect all select from scaled_series(1,3);
+select from generate_series(1,5) except select from scaled_series(1,3);
+select from generate_series(1,5) except all select from scaled_series(1,3);
 
 -- check sorted implementation
 set enable_hashagg = false;
 set enable_sort = true;
 
 explain (costs off)
-select from generate_series(1,5) union select from generate_series(1,3);
+select from generate_series(1,5) union select from scaled_series(1,3);
 explain (costs off)
-select from generate_series(1,5) intersect select from generate_series(1,3);
+select from generate_series(1,5) intersect select from scaled_series(1,3);
 
-select from generate_series(1,5) union select from generate_series(1,3);
-select from generate_series(1,5) union all select from generate_series(1,3);
-select from generate_series(1,5) intersect select from generate_series(1,3);
-select from generate_series(1,5) intersect all select from generate_series(1,3);
-select from generate_series(1,5) except select from generate_series(1,3);
-select from generate_series(1,5) except all select from generate_series(1,3);
+select from generate_series(1,5) union select from scaled_series(1,3);
+select from generate_series(1,5) union all select from scaled_series(1,3);
+select from generate_series(1,5) intersect select from scaled_series(1,3);
+select from generate_series(1,5) intersect all select from scaled_series(1,3);
+select from generate_series(1,5) except select from scaled_series(1,3);
+select from generate_series(1,5) except all select from scaled_series(1,3);
 
 reset enable_hashagg;
 reset enable_sort;
@@ -451,14 +451,14 @@ ORDER BY x;
 
 explain (costs off)
 SELECT * FROM
-  (SELECT 1 AS t, generate_series(1,10) AS x
+  (SELECT 1 AS t, scaled_series(1,10) AS x
    UNION
    SELECT 2 AS t, 4 AS x) ss
 WHERE x < 4
 ORDER BY x;
 
 SELECT * FROM
-  (SELECT 1 AS t, generate_series(1,10) AS x
+  (SELECT 1 AS t, scaled_series(1,10) AS x
    UNION
    SELECT 2 AS t, 4 AS x) ss
 WHERE x < 4
@@ -513,7 +513,7 @@ create function expensivefunc(int) returns int
 language plpgsql immutable strict cost 10000
 as $$begin return $1; end$$;
 
-create temp table t3 as select generate_series(-1000,1000) as x;
+create temp table t3 as select scaled_series(-1000,1000) as x;
 create index t3i on t3 (expensivefunc(x));
 analyze t3;
 

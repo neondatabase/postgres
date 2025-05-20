@@ -382,7 +382,7 @@ SELECT voidtest4(39);
 TABLE sometable;
 
 CREATE FUNCTION voidtest5(a int) RETURNS SETOF VOID LANGUAGE SQL AS
-$$ SELECT generate_series(1, a) $$ STABLE;
+$$ SELECT scaled_series(1, a) $$ STABLE;
 SELECT * FROM voidtest5(3);
 
 -- Regression tests for bugs:

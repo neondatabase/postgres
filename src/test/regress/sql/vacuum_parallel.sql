@@ -4,7 +4,7 @@ SET min_parallel_index_scan_size TO '128kB';
 -- Bug #17245: Make sure that we don't totally fail to VACUUM individual indexes that
 -- happen to be below min_parallel_index_scan_size during parallel VACUUM:
 CREATE TABLE parallel_vacuum_table (a int) WITH (autovacuum_enabled = off);
-INSERT INTO parallel_vacuum_table SELECT i from generate_series(1, 10000) i;
+INSERT INTO parallel_vacuum_table SELECT i from scaled_series(1, 10000) i;
 
 -- Parallel VACUUM will never be used unless there are at least two indexes
 -- that exceed min_parallel_index_scan_size.  Create two such indexes, and
@@ -37,7 +37,7 @@ VACUUM (PARALLEL 4, INDEX_CLEANUP ON) parallel_vacuum_table;
 
 -- Since vacuum_in_leader_small_index uses deduplication, we expect an
 -- assertion failure with bug #17245 (in the absence of bugfix):
-INSERT INTO parallel_vacuum_table SELECT i FROM generate_series(1, 10000) i;
+INSERT INTO parallel_vacuum_table SELECT i FROM scaled_series(1, 10000) i;
 
 RESET max_parallel_maintenance_workers;
 RESET min_parallel_index_scan_size;

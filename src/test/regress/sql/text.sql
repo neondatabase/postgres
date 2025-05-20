@@ -36,7 +36,7 @@ select concat_ws(',',10,20,null,30);
 select concat_ws('',10,20,null,30);
 select concat_ws(NULL,10,20,null,30) is null;
 select reverse('abcde');
-select i, left('ahoj', i), right('ahoj', i) from generate_series(-5, 5) t(i) order by i;
+select i, left('ahoj', i), right('ahoj', i) from scaled_series(-5, 5) t(i) order by i;
 select quote_literal('');
 select quote_literal('abc''');
 select quote_literal(e'\\');
@@ -93,7 +93,7 @@ select format('%2$s, %1$s', variadic array[1, 2]);
 select format('Hello', variadic NULL::int[]);
 -- variadic argument allows simulating more than FUNC_MAX_ARGS parameters
 select format(string_agg('%s',','), variadic array_agg(i))
-from generate_series(1,200) g(i);
+from scaled_series(1,200) g(i);
 -- check field widths and left, right alignment
 select format('>>%10s<<', 'Hello');
 select format('>>%10s<<', NULL);

@@ -48,7 +48,7 @@ DROP table idxpart, idxpart_two;
 CREATE TABLE idxpart (a INT, b TEXT, c INT) PARTITION BY RANGE(a);
 CREATE TABLE idxpart1 PARTITION OF idxpart FOR VALUES FROM (MINVALUE) TO (MAXVALUE);
 CREATE INDEX partidx_abc_idx ON idxpart (a, b, c);
-INSERT INTO idxpart (a, b, c) SELECT i, i, i FROM generate_series(1, 50) i;
+INSERT INTO idxpart (a, b, c) SELECT i, i, i FROM scaled_series(1, 50) i;
 ALTER TABLE idxpart ALTER COLUMN c TYPE numeric;
 DROP TABLE idxpart;
 
@@ -659,7 +659,7 @@ alter table idxpart2 drop column c;
 create unique index on idxpart (a);
 alter table idxpart attach partition idxpart2 for values from (100000) to (1000000);
 insert into idxpart values (0, 'zero'), (42, 'life'), (2^16, 'sixteen');
-insert into idxpart select 2^g, format('two to power of %s', g) from generate_series(15, 17) g;
+insert into idxpart select 2^g, format('two to power of %s', g) from scaled_series(15, 17) g;
 insert into idxpart values (16, 'sixteen');
 insert into idxpart (b, a) values ('one', 142857), ('two', 285714);
 insert into idxpart select a * 2, b || b from idxpart where a between 2^16 and 2^19;
