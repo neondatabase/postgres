@@ -8150,7 +8150,7 @@ StartupXLOG(void)
 	 * In a normal crash recovery, we can just extend the timeline we were in.
 	 */
 	PrevTimeLineID = ThisTimeLineID;
-	if (ArchiveRecoveryRequested && !ZenithRecoveryRequested))
+	if (ArchiveRecoveryRequested && !ZenithRecoveryRequested)
 	{
 		char		reason[200];
 		char		recoveryPath[MAXPGPATH];
