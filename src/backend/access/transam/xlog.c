@@ -10029,7 +10029,7 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	 * Writing to the WAL during shutdown checkpoint cause Postgres panic.
 	 * So do it before in PreCheckPointGuts.
 	 */
-	if (!(flags & CHECKPOINT_IS_SHUTDOWN))
+	if (!(flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY)))
 		CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */
