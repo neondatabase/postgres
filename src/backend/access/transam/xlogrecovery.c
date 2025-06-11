@@ -491,6 +491,32 @@ EnableStandbyMode(void)
 	disable_startup_progress_timeout();
 }
 
+static XLogRecPtr replayRecPtr = InvalidXLogRecPtr;
+
+/*
+ * Check if a record at given LSN has been replayed yet.
+ *
+ * Always returns TRUE when not in recovery mode.
+ */
+bool
+XLogRecordReplayFinished(XLogRecPtr redoEndRecPtr)
+{
+	if (!RecoveryInProgress())
+		return true;
+
+	/*
+	 * Check the backend-local variable first, we may be able to skip accessing
+	 * shared memory (which requires locking)
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return true;
+
+	/* update the backend-local cache with more up-to-date values */
+	replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+	return redoEndRecPtr <= replayRecPtr;
+}
+
 /*
  * Wait for recovery to complete replaying all WAL up to and including
  * redoEndRecPtr.
@@ -501,25 +527,17 @@ EnableStandbyMode(void)
 void
 XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 {
-	static XLogRecPtr replayRecPtr = 0;
-
 	if (!RecoveryInProgress())
 		return;
 
 	/*
-	 * Check the backend-local variable first, we may be able to skip accessing
-	 * shared memory (which requires locking)
+	 * Check if the record has been replayed yet. This includes up-to-date
+	 * information about current replay state - if it hasn't been replayed,
+	 * we're probably going to have to wait.
+	 *
+	 * This also returns if we're not in recovery mode.
 	 */
-	if (redoEndRecPtr <= replayRecPtr)
-		return;
-
-	replayRecPtr = GetXLogReplayRecPtr(NULL);
-
-	/*
-	 * Check again if we're going to need to wait, now that we've updated
-	 * the local cached variable.
-	 */
-	if (redoEndRecPtr <= replayRecPtr)
+	if (XLogRecordReplayFinished(redoEndRecPtr))
 		return;
 
 	/*
@@ -776,11 +794,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		CheckPointLoc = zenithLastRec;
 		CheckPointTLI = ControlFile->checkPointCopy.ThisTimeLineID;
 		RedoStartLSN = ControlFile->checkPointCopy.redo;
-		// FIXME needs review. rebase of ff41b709abea6a9c42100a4fcb0ff434b2c846c9
-		// Is it still relevant?
-		/* make basebackup LSN available for walproposer */
 		SetRedoStartLsn(RedoStartLSN);
-		//EndRecPtr = ControlFile->checkPointCopy.redo;
 
 		memcpy(&checkPoint, &ControlFile->checkPointCopy, sizeof(CheckPoint));
 
