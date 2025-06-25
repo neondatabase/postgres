@@ -43,6 +43,8 @@ static volatile sig_atomic_t time_to_stop = false;
 
 static const RelFileNode emptyRelFileNode = {0, 0, 0};
 
+static FILE* save_records_file;
+
 typedef struct XLogDumpPrivate
 {
 	TimeLineID	timeline;
@@ -78,6 +80,9 @@ typedef struct XLogDumpConfig
 	bool		filter_by_relation_block_enabled;
 	ForkNumber	filter_by_relation_forknum;
 	bool		filter_by_fpw;
+
+	/* save options */
+	char       *save_records_file_path;
 } XLogDumpConfig;
 
 
@@ -530,18 +535,20 @@ XLogDumpDisplayRecord(XLogDumpConfig *config, XLogReaderState *record)
 	XLogRecGetLen(record, &rec_len, &fpi_len);
 
 	if(private->input_filename)
-		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, offset: 0x%lX, prev %X/%08X, ",
+		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, offset: 0x%lX, end: %X/%08X prev %X/%08X, ",
  		   desc->rm_name,
  		   rec_len, XLogRecGetTotalLen(record),
  		   XLogRecGetXid(record),
 		   record->ReadRecPtr,
+		   LSN_FORMAT_ARGS(record->EndRecPtr),
  		   LSN_FORMAT_ARGS(xl_prev));
 	else
-		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, prev %X/%08X, ",
+		printf("rmgr: %-11s len (rec/tot): %6u/%6u, tx: %10u, lsn: %X/%08X, end: %X/%08X prev %X/%08X, ",
 			desc->rm_name,
 			rec_len, XLogRecGetTotalLen(record),
 			XLogRecGetXid(record),
 			LSN_FORMAT_ARGS(record->ReadRecPtr),
+			LSN_FORMAT_ARGS(record->EndRecPtr),
 			LSN_FORMAT_ARGS(xl_prev));
 
 
@@ -1255,6 +1262,28 @@ main(int argc, char **argv)
 	if (!xlogreader_state)
 		pg_fatal("out of memory while allocating a WAL reading processor");
 
+	if (save_records_file)
+ 	{
+		/*
+		 * NEON: We dump records in the format recognized by walredo process.
+		 * one character tag + 4 bytes length.
+		 * If relation and block number was specified, then BeginRedoForBlock ('B') record is first
+		 * written, containing relation info and block number. If fork is not specified, then main fork is assumed.
+		 * Then it is followed by ApplyRecord ('A') records which specify record LSN and assembled WAL record raw data.
+		 * Finally GetPage ('G') is written to make walredo to return image of the reconstructed page.
+		 */
+		if (config.filter_by_relation_enabled && config.filter_by_relation_block_enabled)
+		{
+			write_pq_message(save_records_file, 'B', 17);
+			fputc(config.filter_by_relation_forknum == InvalidForkNumber ? MAIN_FORKNUM : config.filter_by_relation_forknum, save_records_file);
+			write_pq_int32(save_records_file, config.filter_by_relation.spcOid);
+			write_pq_int32(save_records_file, config.filter_by_relation.dbOid);
+			write_pq_int32(save_records_file, config.filter_by_relation.relNumber);
+			write_pq_int32(save_records_file, config.filter_by_relation_block);
+		}
+		xlogreader_state->force_record_reassemble = true;
+	}
+
 	if(single_file)
 	{
 		if(config.ignore_format_errors)
@@ -1357,11 +1386,36 @@ main(int argc, char **argv)
 				XLogDumpDisplayRecord(&config, xlogreader_state);
 		}
 
+		if (save_records_file)
+		{
+			write_pq_message(save_records_file, 'A', record->xl_tot_len + sizeof(XLogRecPtr));
+			write_pq_int64(save_records_file, xlogreader_state->ReadRecPtr);
+			fwrite(xlogreader_state->readRecordBuf, record->xl_tot_len, 1, save_records_file);
+		}
+
+		/* save full pages if requested */
+		if (config.save_fullpage_path != NULL)
+			XLogRecordSaveFPWs(xlogreader_state, config.save_fullpage_path);
+
 		/* check whether we printed enough */
 		config.already_displayed_records++;
 		if (config.stop_after_records > 0 &&
 			config.already_displayed_records >= config.stop_after_records)
 			break;
+	}
+
+	if (save_records_file)
+	{
+		if (config.filter_by_relation_enabled && config.filter_by_relation_block_enabled)
+		{
+			write_pq_message(save_records_file, 'G', 17);
+			fputc(config.filter_by_relation_forknum == InvalidForkNumber ? MAIN_FORKNUM : config.filter_by_relation_forknum, save_records_file);
+			write_pq_int32(save_records_file, config.filter_by_relation.spcOid);
+			write_pq_int32(save_records_file, config.filter_by_relation.dbOid);
+			write_pq_int32(save_records_file, config.filter_by_relation.relNumber);
+			write_pq_int32(save_records_file, config.filter_by_relation_block);
+		}
+		fclose(save_records_file);
 	}
 
 	if (config.stats == true && !config.quiet)
