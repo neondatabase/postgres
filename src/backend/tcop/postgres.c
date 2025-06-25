@@ -3396,7 +3396,8 @@ retry:
 			LockErrorCleanup();
 			ereport(ERROR,
 					(errcode(ERRCODE_QUERY_CANCELED),
-					 errmsg("canceling statement due to statement timeout")));
+					 errmsg("canceling statement due to statement timeout"),
+					 errbacktrace()));
 		}
 		if (IsAutoVacuumWorkerProcess())
 		{
