@@ -10,4 +10,6 @@
 /*
  * macOS has a platform-specific implementation of prefetching.
  */
+#ifndef USE_PREFETCH
 #define USE_PREFETCH
+#endif
