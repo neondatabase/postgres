@@ -525,10 +525,10 @@ allocNewBuffer(Relation index, int flags)
 		Buffer		buffer;
 
 		buffer = SpGistNewBuffer(index);
-		SpGistInitBuffer(buffer, pageflags);
 
 		if (pageflags & SPGIST_LEAF)
 		{
+			SpGistInitBuffer(buffer, pageflags);
 			/* Leaf pages have no parity concerns, so just use it */
 			return buffer;
 		}
@@ -539,6 +539,7 @@ allocNewBuffer(Relation index, int flags)
 
 			if ((flags & GBUF_PARITY_MASK) == blkFlags)
 			{
+				SpGistInitBuffer(buffer, pageflags);
 				/* Page has right parity, use it */
 				return buffer;
 			}
