@@ -50,6 +50,7 @@
 #include "replication/slotsync.h"
 #include "replication/slot.h"
 #include "replication/walsender_private.h"
+#include "replication/logical.h"
 #include "replication/message.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -1611,7 +1612,8 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlotInvalidationCause cause,
 			{
 				case RS_INVAL_WAL_REMOVED:
 					if (initial_restart_lsn != InvalidXLogRecPtr &&
-						initial_restart_lsn < oldestLSN)
+						initial_restart_lsn < oldestLSN &&
+						!Custom_XLogReaderRoutines)
 						invalidation_cause = cause;
 					break;
 				case RS_INVAL_HORIZON:
