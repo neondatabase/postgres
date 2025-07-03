@@ -82,6 +82,7 @@
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
 #include "pgstat.h"
+#include "replication/logical.h"
 #include "replication/origin.h"
 #include "replication/slot.h"
 #include "storage/condition_variable.h"
