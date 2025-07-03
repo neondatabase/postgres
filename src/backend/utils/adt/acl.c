@@ -133,6 +133,32 @@ static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
 static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue);
 
+/*
+ * Name of the user-accessible privileged role in this system.
+ * Generally neon_superuser on neon.com
+ */
+char *privileged_role_name = NULL;
+
+/* Is the current user the designated privileged role */
+bool
+is_privileged_role(void)
+{
+	return is_privileged_role_arg(GetUserId());
+}
+
+/* Does this user (by OID) inherit the privileged role? */
+bool
+is_privileged_role_arg(Oid roleid)
+{
+	Oid privileged_role_oid;
+
+	if (privileged_role_name == NULL)
+		return false;
+
+	privileged_role_oid = get_role_oid(privileged_role_name, true /* missing_ok */);
+
+	return privileged_role_oid != InvalidOid && has_privs_of_role(roleid, privileged_role_oid);
+}
 
 /*
  * Test whether an identifier char can be left unquoted in ACLs.
