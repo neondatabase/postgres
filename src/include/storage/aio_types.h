@@ -66,7 +66,11 @@ typedef union PgAioTargetData
 		BlockNumber blockNum;	/* blknum relative to begin of reln */
 		BlockNumber nblocks;
 		ForkNumber	forkNum:8;	/* don't waste 4 byte for four values */
-		bool		is_temp:1;	/* proc can be inferred by owning AIO */
+		/*
+		 * Persistence requirement for this relation.
+		 * proc for RELPERSISTENCE_TEMP can be inferred by owning AIO.
+		 */
+		char		relpersistence:8;
 		bool		skip_fsync:1;
 	}			smgr;
 } PgAioTargetData;

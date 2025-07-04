@@ -237,7 +237,7 @@ smgrshutdown(int code, Datum arg)
  * This does not attempt to actually open the underlying files.
  */
 SMgrRelation
-smgropen(RelFileLocator rlocator, ProcNumber backend)
+smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 {
 	RelFileLocatorBackend brlocator;
 	SMgrRelation reln;
@@ -277,10 +277,21 @@ smgropen(RelFileLocator rlocator, ProcNumber backend)
 
 		/* it is not pinned yet */
 		reln->pincount = 0;
+
+		/* fill it with the right relpersistence */
+		reln->smgr_relpersistence = relpersistence;
 		dlist_push_tail(&unpinned_relns, &reln->node);
 
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
+	}
+	else if (reln->smgr_relpersistence == 0 && relpersistence != 0)
+	{
+		/*
+		 * fix the persistence of the SMgrRelation now that we know the correct
+		 * value
+		 */
+		reln->smgr_relpersistence = relpersistence;
 	}
 
 	RESUME_INTERRUPTS();
@@ -1042,7 +1053,7 @@ pgaio_io_set_target_smgr(PgAioHandle *ioh,
 	sd->smgr.forkNum = forknum;
 	sd->smgr.blockNum = blocknum;
 	sd->smgr.nblocks = nblocks;
-	sd->smgr.is_temp = SmgrIsTemp(smgr);
+	sd->smgr.relpersistence = smgr->smgr_relpersistence;
 	/* Temp relations should never be fsync'd */
 	sd->smgr.skip_fsync = skip_fsync && !SmgrIsTemp(smgr);
 }
@@ -1066,12 +1077,12 @@ smgr_aio_reopen(PgAioHandle *ioh)
 	 */
 	Assert(!INTERRUPTS_CAN_BE_PROCESSED());
 
-	if (sd->smgr.is_temp)
+	if (sd->smgr.relpersistence == RELPERSISTENCE_TEMP)
 		procno = pgaio_io_get_owner(ioh);
 	else
 		procno = INVALID_PROC_NUMBER;
 
-	reln = smgropen(sd->smgr.rlocator, procno);
+	reln = smgropen(sd->smgr.rlocator, procno, sd->smgr.relpersistence);
 	switch (pgaio_io_get_op(ioh))
 	{
 		case PGAIO_OP_INVALID:
@@ -1098,7 +1109,7 @@ smgr_aio_describe_identity(const PgAioTargetData *sd)
 	char	   *desc;
 
 	path = relpathbackend(sd->smgr.rlocator,
-						  sd->smgr.is_temp ?
+						  sd->smgr.relpersistence == RELPERSISTENCE_TEMP ?
 						  MyProcNumber : INVALID_PROC_NUMBER,
 						  sd->smgr.forkNum);
 

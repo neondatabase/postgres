@@ -275,7 +275,8 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	rlocator.dbOid = dbid;
 	rlocator.relNumber = relfilenumber;
 
-	smgr = smgropen(rlocator, INVALID_PROC_NUMBER);
+	/* NEON: This rlocator is for the pg_class table, which is always RP_PERMANENT */
+	smgr = smgropen(rlocator, INVALID_PROC_NUMBER, RELPERSISTENCE_PERMANENT);
 	nblocks = smgrnblocks(smgr, MAIN_FORKNUM);
 	smgrclose(smgr);
 

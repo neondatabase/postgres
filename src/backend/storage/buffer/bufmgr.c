@@ -848,10 +848,11 @@ ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
 						  BlockNumber blockNum, ReadBufferMode mode,
 						  BufferAccessStrategy strategy, bool permanent)
 {
-	SMgrRelation smgr = smgropen(rlocator, INVALID_PROC_NUMBER);
+	char		relpersistence = permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED;
+	SMgrRelation smgr = smgropen(rlocator, INVALID_PROC_NUMBER, relpersistence);
 
 	return ReadBuffer_common(NULL, smgr,
-							 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED,
+							 relpersistence,
 							 forkNum, blockNum,
 							 mode, strategy);
 }
@@ -4352,7 +4353,10 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER);
+		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER,
+						io_object == IOOBJECT_RELATION ?
+						RELPERSISTENCE_PERMANENT :
+						RELPERSISTENCE_UNLOGGED);
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
 										buf->tag.blockNum,
@@ -5177,6 +5181,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	Page		srcPage;
 	Page		dstPage;
 	bool		use_wal;
+	char		relpersistence = permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED;
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	PGIOAlignedBlock buf;
@@ -5194,7 +5199,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	use_wal = XLogIsNeeded() && (permanent || forkNum == INIT_FORKNUM);
 
 	/* Get number of blocks in the source relation. */
-	nblocks = smgrnblocks(smgropen(srclocator, INVALID_PROC_NUMBER),
+	nblocks = smgrnblocks(smgropen(srclocator, INVALID_PROC_NUMBER, relpersistence),
 						  forkNum);
 
 	/* Nothing to copy; just return. */
@@ -5206,7 +5211,8 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 * relation before starting to copy block by block.
 	 */
 	memset(buf.data, 0, BLCKSZ);
-	smgrextend(smgropen(dstlocator, INVALID_PROC_NUMBER), forkNum, nblocks - 1,
+	smgrextend(smgropen(dstlocator, INVALID_PROC_NUMBER, relpersistence),
+			   forkNum, nblocks - 1,
 			   buf.data, true);
 
 	/* This is a bulk operation, so use buffer access strategies. */
@@ -5216,7 +5222,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	/* Initialize streaming read */
 	p.current_blocknum = 0;
 	p.last_exclusive = nblocks;
-	src_smgr = smgropen(srclocator, INVALID_PROC_NUMBER);
+	src_smgr = smgropen(srclocator, INVALID_PROC_NUMBER, relpersistence);
 
 	/*
 	 * It is safe to use batchmode as block_range_read_stream_cb takes no
@@ -5226,7 +5232,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 												 READ_STREAM_USE_BATCHING,
 												 bstrategy_src,
 												 src_smgr,
-												 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED,
+												 relpersistence,
 												 forkNum,
 												 block_range_read_stream_cb,
 												 &p,
@@ -5293,8 +5299,8 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	relpersistence = permanent ?
 		RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED;
 
-	src_rel = smgropen(src_rlocator, INVALID_PROC_NUMBER);
-	dst_rel = smgropen(dst_rlocator, INVALID_PROC_NUMBER);
+	src_rel = smgropen(src_rlocator, INVALID_PROC_NUMBER, relpersistence);
+	dst_rel = smgropen(dst_rlocator, INVALID_PROC_NUMBER, relpersistence);
 
 	/*
 	 * Create and copy all forks of the relation.  During create database we
@@ -6564,7 +6570,7 @@ IssuePendingWritebacks(WritebackContext *wb_context, IOContext io_context)
 		i += ahead;
 
 		/* and finally tell the kernel to write the data to storage */
-		reln = smgropen(currlocator, INVALID_PROC_NUMBER);
+		reln = smgropen(currlocator, INVALID_PROC_NUMBER, 0);
 		smgrwriteback(reln, BufTagGetForkNum(&tag), tag.blockNum, nblocks);
 	}
 
@@ -7229,11 +7235,11 @@ buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
 
 	if (is_temp)
 	{
-		Assert(td->smgr.is_temp);
+		Assert(td->smgr.relpersistence == RELPERSISTENCE_TEMP);
 		Assert(pgaio_io_get_owner(ioh) == MyProcNumber);
 	}
 	else
-		Assert(!td->smgr.is_temp);
+		Assert(td->smgr.relpersistence != RELPERSISTENCE_TEMP);
 
 	/*
 	 * Iterate over all the buffers affected by this IO and call the
@@ -7322,7 +7328,7 @@ buffer_readv_report(PgAioResult result, const PgAioTargetData *td,
 	BlockNumber first = td->smgr.blockNum;
 	BlockNumber last = first + nblocks - 1;
 	ProcNumber	errProc =
-		td->smgr.is_temp ? MyProcNumber : INVALID_PROC_NUMBER;
+		(td->smgr.relpersistence == RELPERSISTENCE_TEMP) ? MyProcNumber : INVALID_PROC_NUMBER;
 	RelPathStr	rpath =
 		relpathbackend(td->smgr.rlocator, errProc, td->smgr.forkNum);
 	bool		zeroed_any,

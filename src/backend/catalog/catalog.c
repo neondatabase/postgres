@@ -600,7 +600,7 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 			locator.relNumber = GetNewObjectId();
 
 		/* Check for existing file of same name */
-		srel = smgropen(locator, procNumber);
+		srel = smgropen(locator, procNumber, relpersistence);
 		collides = smgrexists(srel, MAIN_FORKNUM);
 		smgrclose(srel);
 	} while (collides);

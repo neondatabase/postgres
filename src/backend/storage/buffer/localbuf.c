@@ -19,7 +19,6 @@
 #include "executor/instrument.h"
 #include "miscadmin.h"
 #include "pgstat.h"
-#include "../../../../../../pg_install/v17/include/postgresql/server/c.h"
 #include "storage/aio.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
@@ -201,7 +200,7 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
 		reln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag),
-						MyProcNumber);
+						MyProcNumber, RELPERSISTENCE_TEMP);
 
 	PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
 
