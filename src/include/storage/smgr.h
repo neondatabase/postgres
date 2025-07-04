@@ -15,6 +15,7 @@
 #define SMGR_H
 
 #include "lib/ilist.h"
+#include "catalog/pg_class.h"
 #include "storage/aio_types.h"
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
@@ -66,6 +67,11 @@ typedef struct SMgrRelationData
 	 * link in list of all unpinned SMgrRelations.
 	 */
 	int			pincount;
+
+	/*
+	 * Persistence of the relation
+	 */
+	char		smgr_relpersistence;
 	dlist_node	node;
 } SMgrRelationData;
 
@@ -77,7 +83,8 @@ typedef SMgrRelationData *SMgrRelation;
 extern PGDLLIMPORT const PgAioTargetInfo aio_smgr_target_info;
 
 extern void smgrinit(void);
-extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend);
+extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend,
+							 char relpersistence);
 extern bool smgrexists(SMgrRelation reln, ForkNumber forknum);
 extern void smgrpin(SMgrRelation reln);
 extern void smgrunpin(SMgrRelation reln);

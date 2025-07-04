@@ -1592,7 +1592,7 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 	srels = palloc(sizeof(SMgrRelation) * ndelrels);
 	for (i = 0; i < ndelrels; i++)
 	{
-		SMgrRelation srel = smgropen(delrels[i], INVALID_PROC_NUMBER);
+		SMgrRelation srel = smgropen(delrels[i], INVALID_PROC_NUMBER, 0);
 
 		if (isRedo)
 		{
@@ -1879,7 +1879,7 @@ _mdnblocks(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 int
 mdsyncfiletag(const FileTag *ftag, char *path)
 {
-	SMgrRelation reln = smgropen(ftag->rlocator, INVALID_PROC_NUMBER);
+	SMgrRelation reln = smgropen(ftag->rlocator, INVALID_PROC_NUMBER, 0);
 	File		file;
 	instr_time	io_start;
 	bool		need_to_close;
@@ -2034,7 +2034,8 @@ md_readv_report(PgAioResult result, const PgAioTargetData *td, int elevel)
 	RelPathStr	path;
 
 	path = relpathbackend(td->smgr.rlocator,
-						  td->smgr.is_temp ? MyProcNumber : INVALID_PROC_NUMBER,
+						  td->smgr.relpersistence == RELPERSISTENCE_TEMP ?
+						  MyProcNumber : INVALID_PROC_NUMBER,
 						  td->smgr.forkNum);
 
 	if (result.error_data != 0)
