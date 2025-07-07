@@ -97,6 +97,9 @@ static const f_smgr smgr_md = {
 	.smgr_registersync = mdregistersync,
 	.smgr_fd = mdfd,
 	.smgr_owns = mdowns,
+	.smgr_start_unlogged_build = NULL,
+	.smgr_finish_unlogged_build_phase_1 = NULL,
+	.smgr_end_unlogged_build = NULL,
 };
 
 static const f_smgr *smgrsw = &smgr_md;
@@ -280,7 +283,7 @@ smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 		/* implementation-specific initialization */
 		smgrsw[reln->smgr_which].smgr_open(reln);
 	}
-	else if (reln->smgr_relpersistence == 0 && relpersistence != 0)
+	else
 	{
 		/*
 		 * Fix the persistence of the SMgrRelation if we didn't know it already.
@@ -1006,6 +1009,30 @@ smgrfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
 	fd = smgrsw[reln->smgr_which].smgr_fd(reln, forknum, blocknum, off);
 
 	return fd;
+}
+
+/*
+ * NEON: functions to mark the phases of an unlogged index build.
+ */
+void
+smgr_start_unlogged_build(SMgrRelation reln)
+{
+	if (smgrsw[reln->smgr_which].smgr_start_unlogged_build)
+		smgrsw[reln->smgr_which].smgr_start_unlogged_build(reln);
+}
+
+void
+smgr_finish_unlogged_build_phase_1(SMgrRelation reln)
+{
+	if (smgrsw[reln->smgr_which].smgr_finish_unlogged_build_phase_1)
+		smgrsw[reln->smgr_which].smgr_finish_unlogged_build_phase_1(reln);
+}
+
+void
+smgr_end_unlogged_build(SMgrRelation reln)
+{
+	if (smgrsw[reln->smgr_which].smgr_end_unlogged_build)
+		smgrsw[reln->smgr_which].smgr_end_unlogged_build(reln);
 }
 
 /*
