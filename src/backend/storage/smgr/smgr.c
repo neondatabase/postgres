@@ -74,33 +74,34 @@
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 
-static const f_smgr smgrsw[] = {
-	/* magnetic disk */
-	{
-		.smgr_init = mdinit,
-		.smgr_shutdown = NULL,
-		.smgr_open = mdopen,
-		.smgr_close = mdclose,
-		.smgr_create = mdcreate,
-		.smgr_exists = mdexists,
-		.smgr_unlink = mdunlink,
-		.smgr_extend = mdextend,
-		.smgr_zeroextend = mdzeroextend,
-		.smgr_prefetch = mdprefetch,
-		.smgr_maxcombine = mdmaxcombine,
-		.smgr_readv = mdreadv,
-		.smgr_startreadv = mdstartreadv,
-		.smgr_writev = mdwritev,
-		.smgr_writeback = mdwriteback,
-		.smgr_nblocks = mdnblocks,
-		.smgr_truncate = mdtruncate,
-		.smgr_immedsync = mdimmedsync,
-		.smgr_registersync = mdregistersync,
-		.smgr_fd = mdfd,
-	}
+static const f_smgr smgr_md = {
+	.smgr_name = "md",
+	.smgr_init = mdinit,
+	.smgr_shutdown = NULL,
+	.smgr_open = mdopen,
+	.smgr_close = mdclose,
+	.smgr_create = mdcreate,
+	.smgr_exists = mdexists,
+	.smgr_unlink = mdunlink,
+	.smgr_extend = mdextend,
+	.smgr_zeroextend = mdzeroextend,
+	.smgr_prefetch = mdprefetch,
+	.smgr_maxcombine = mdmaxcombine,
+	.smgr_readv = mdreadv,
+	.smgr_startreadv = mdstartreadv,
+	.smgr_writev = mdwritev,
+	.smgr_writeback = mdwriteback,
+	.smgr_nblocks = mdnblocks,
+	.smgr_truncate = mdtruncate,
+	.smgr_immedsync = mdimmedsync,
+	.smgr_registersync = mdregistersync,
+	.smgr_fd = mdfd,
+	.smgr_owns = mdowns,
 };
 
-static const int NSmgr = lengthof(smgrsw);
+static const f_smgr *smgrsw = &smgr_md;
+
+static int NSmgr = 1;
 
 /*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
@@ -124,6 +125,39 @@ const PgAioTargetInfo aio_smgr_target_info = {
 	.describe_identity = smgr_aio_describe_identity,
 };
 
+SmgrId
+smgrregister(const f_smgr *smgr)
+{
+	f_smgr *new_smgrsw;
+
+	for (int i = 0; i < NSmgr; i++)
+	{
+		/* different name */
+		if (strcmp(smgr->smgr_name, smgrsw[i].smgr_name) != 0)
+			continue;
+		/* exactly the same struct, return the previously-returned ID */
+		if (memcmp(smgr, &smgrsw[i], sizeof(f_smgr)))
+			return i;
+
+		/* different contents on same name, error out*/
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+				 errmsg("smgr \"%s\" already defined with ID %d",
+						smgr->smgr_name, i)));
+	}
+
+	if (NSmgr == 1)
+	{
+		new_smgrsw = malloc(sizeof(f_smgr) * 2);
+		memcpy(new_smgrsw, smgrsw, sizeof(f_smgr));
+	}
+	else
+		new_smgrsw = realloc((f_smgr *) smgrsw, sizeof(f_smgr) * (NSmgr + 1));
+
+	new_smgrsw[NSmgr] = *smgr;
+	smgrsw = new_smgrsw;
+	return NSmgr++;
+}
 
 /*
  * smgrinit(), smgrshutdown() -- Initialize or shut down storage
@@ -218,11 +252,23 @@ smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 	/* Initialize it if not present before */
 	if (!found)
 	{
+		SmgrId smgrid = 0;
 		/* hash_search already filled in the lookup key */
 		reln->smgr_targblock = InvalidBlockNumber;
 		for (int i = 0; i <= MAX_FORKNUM; ++i)
 			reln->smgr_cached_nblocks[i] = InvalidBlockNumber;
-		reln->smgr_which = 0;	/* we only have md.c at present */
+
+		/* most recently registered SMgr wins, so we iterate backwards */
+		for (int i = NSmgr; i > 0; i--)
+		{
+			smgrid = i - 1;
+
+			if (smgrsw[smgrid].smgr_owns(rlocator, backend, relpersistence))
+				break;
+		}
+
+		Assert(smgrid >= 0);
+		reln->smgr_which = smgrid;
 
 		/* it is not pinned yet */
 		reln->pincount = 0;
@@ -237,10 +283,20 @@ smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 	else if (reln->smgr_relpersistence == 0 && relpersistence != 0)
 	{
 		/*
-		 * fix the persistence of the SMgrRelation now that we know the correct
-		 * value
+		 * Fix the persistence of the SMgrRelation if we didn't know it already.
+		 *
+		 * If we knew the persistence already, make sure that it hasn't changed.
 		 */
-		reln->smgr_relpersistence = relpersistence;
+		if (reln->smgr_relpersistence == 0)
+		{
+			reln->smgr_relpersistence = relpersistence;
+		}
+		else if (reln->smgr_relpersistence != 0 && relpersistence != 0 &&
+				 reln->smgr_relpersistence != relpersistence)
+		{
+			elog(ERROR, "relpersistence mismatch: smgropen %c vs SmgrRelation %c",
+				 relpersistence, reln->smgr_relpersistence);
+		}
 	}
 
 	RESUME_INTERRUPTS();
