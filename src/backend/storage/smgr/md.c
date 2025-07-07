@@ -1481,6 +1481,13 @@ mdfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
 	return FileGetRawDesc(v->mdfd_vfd);
 }
 
+/* md can always serve the smgr operations of all relfilenodes */
+bool
+mdowns(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
+{
+	return true;
+}
+
 /*
  * register_dirty_segment() -- Mark a relation segment as needing fsync
  *

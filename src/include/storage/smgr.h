@@ -20,6 +20,10 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+typedef int SmgrId;
+
+#define SMGRID_MD ((SmgrId) 0)
+
 /*
  * smgr.c maintains a table of SMgrRelation objects, which are essentially
  * cached file handles.  An SMgrRelation is created (if not already present)
@@ -53,7 +57,7 @@ typedef struct SMgrRelationData
 	 * Fields below here are intended to be private to smgr.c and its
 	 * submodules.  Do not touch them from elsewhere.
 	 */
-	int			smgr_which;		/* storage manager selector */
+	SmgrId		smgr_which;		/* storage manager selector */
 
 	/*
 	 * for md.c; per-fork arrays of the number of open segments
@@ -92,6 +96,7 @@ typedef SMgrRelationData *SMgrRelation;
  */
 typedef struct f_smgr
 {
+	const char	*smgr_name;
 	void		(*smgr_init) (void);	/* may be NULL */
 	void		(*smgr_shutdown) (void);	/* may be NULL */
 	void		(*smgr_open) (SMgrRelation reln);
@@ -128,9 +133,15 @@ typedef struct f_smgr
 	void		(*smgr_immedsync) (SMgrRelation reln, ForkNumber forknum);
 	void		(*smgr_registersync) (SMgrRelation reln, ForkNumber forknum);
 	int			(*smgr_fd) (SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off);
+
+	/* NEON: test if this smgr is responsible for this relation */
+	bool		(*smgr_owns) (RelFileLocator rlocator, ProcNumber backend,
+							  char relpersistence);
 } f_smgr;
 
 extern PGDLLIMPORT const PgAioTargetInfo aio_smgr_target_info;
+
+extern SmgrId smgrregister(const f_smgr *smgr);
 
 extern void smgrinit(void);
 extern SMgrRelation smgropen(RelFileLocator rlocator, ProcNumber backend,
