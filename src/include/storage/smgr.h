@@ -137,6 +137,11 @@ typedef struct f_smgr
 	/* NEON: test if this smgr is responsible for this relation */
 	bool		(*smgr_owns) (RelFileLocator rlocator, ProcNumber backend,
 							  char relpersistence);
+
+	/* NEON: Hooks to smgr for unlogged build phases */
+	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
+	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
+	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
 } f_smgr;
 
 extern PGDLLIMPORT const PgAioTargetInfo aio_smgr_target_info;
@@ -187,6 +192,11 @@ extern void smgrimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void smgrregistersync(SMgrRelation reln, ForkNumber forknum);
 extern void AtEOXact_SMgr(void);
 extern bool ProcessBarrierSmgrRelease(void);
+
+/* Neon: Change relpersistence for unlogged index builds */
+extern void smgr_start_unlogged_build(SMgrRelation reln);
+extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
+extern void smgr_end_unlogged_build(SMgrRelation reln);
 
 static inline void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
