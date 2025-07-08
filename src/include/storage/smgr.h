@@ -142,6 +142,7 @@ typedef struct f_smgr
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
+	int			(*smgr_read_slru_segment) (const char *path, int segno, void* buffer);
 } f_smgr;
 
 extern PGDLLIMPORT const PgAioTargetInfo aio_smgr_target_info;
@@ -197,6 +198,9 @@ extern bool ProcessBarrierSmgrRelease(void);
 extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
+
+/* Neon: Allow on-demand download of SLRU segment data */
+extern int  smgr_read_slru_segment(const char *path, int segno, void* buffer);
 
 static inline void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,

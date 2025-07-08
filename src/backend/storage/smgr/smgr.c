@@ -1036,6 +1036,33 @@ smgr_end_unlogged_build(SMgrRelation reln)
 }
 
 /*
+ * NEON: we do not want to include large pg_xact/multixact files in basebackup and prefer
+ * to download them on demand to reduce startup time.
+ * If SLRU segment is not found, we try to download it from page server
+ *
+ * This function returns number of blocks in segment. Usually it should be SLRU_PAGES_PER_SEGMENT but in case
+ * of partial segment, it can be smaller. Zero value means that segment doesn't exist.
+ * From Postgres point of view empty segment is the same as absent segment.
+ *
+ * This should really be a separate hook, not something that's in the smgr API, but
+ * oh well.
+ */
+int
+smgr_read_slru_segment(const char* path, int segno, void* buffer)
+{
+	for (int i = NSmgr; i > 0; i--)
+	{
+		SmgrId	smgr = (i - 1);
+		if (smgrsw[smgr].smgr_read_slru_segment)
+		{
+			return smgrsw[smgr].smgr_read_slru_segment(path, segno, buffer);
+		}
+	}
+
+	return 0;
+}
+
+/*
  * AtEOXact_SMgr
  *
  * This routine is called during transaction commit or abort (it doesn't
