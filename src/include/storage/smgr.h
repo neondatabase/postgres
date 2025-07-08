@@ -20,6 +20,12 @@
 #include "storage/block.h"
 #include "storage/relfilelocator.h"
 
+/*
+ * Neon: extended SMGR API.
+ * This define can be used by extensions to determine that them are built for Neon.
+ */
+#define NEON_SMGR 1
+
 typedef int SmgrId;
 
 #define SMGRID_MD ((SmgrId) 0)
