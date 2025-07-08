@@ -52,6 +52,8 @@ static const char *const DispatchOptionNames[] =
 	[DISPATCH_FORKCHILD] = "forkchild",
 	[DISPATCH_DESCRIBE_CONFIG] = "describe-config",
 	[DISPATCH_SINGLE] = "single",
+	[DISPATCH_NEON_WALREDO] = "wal-redo",
+	[DISPATCH_NEON_SYNCWAL] = "sync-safekeepers",
 	/* DISPATCH_POSTMASTER has no name */
 };
 
@@ -63,6 +65,41 @@ static void init_locale(const char *categoryname, int category, const char *loca
 static void help(const char *progname);
 static void check_root(const char *progname);
 
+typedef int (*MainFunc) (int argc, char *argv[]);
+
+static int
+CallExtMain(char *library_name, char *main_func_name, int argc, char *argv[], bool load_config)
+{
+	MainFunc main_func;
+
+	/*
+	 * Perform just enough initialization that we can load external libraries
+	 */
+	InitStandaloneProcess(argv[0]);
+
+	SetProcessingMode(InitProcessing);
+
+	/*
+	 * Set default values for command-line options.
+	 */
+	InitializeGUCOptions();
+
+	/* Acquire configuration parameters */
+	if (load_config && !SelectConfigFiles(NULL, progname))
+		exit(1);
+
+	/*
+	 * Imitate we are early in bootstrap loading shared_preload_libraries;
+	 * neon extension sets PGC_POSTMASTER gucs requiring this.
+	 */
+	process_shared_preload_libraries_in_progress = true;
+
+	main_func = load_external_function(library_name, main_func_name, true, NULL);
+
+	process_shared_preload_libraries_in_progress = false;
+
+	return main_func(argc, argv);
+}
 
 /*
  * Any Postgres server process begins execution here.
@@ -222,6 +259,12 @@ main(int argc, char *argv[])
 		case DISPATCH_SINGLE:
 			PostgresSingleUserMain(argc, argv,
 								   strdup(get_user_name_or_exit(progname)));
+			break;
+		case DISPATCH_NEON_WALREDO:
+			CallExtMain("neon_walredo", "WalRedoMain", argc, argv, false);
+			break;
+		case DISPATCH_NEON_SYNCWAL:
+			CallExtMain("neon", "WalProposerSync", argc, argv, true);
 			break;
 		case DISPATCH_POSTMASTER:
 			PostmasterMain(argc, argv);
