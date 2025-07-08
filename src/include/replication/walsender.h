@@ -71,6 +71,9 @@ extern void ProcessStandbyHSFeedback(TimestampTz   replyTime,
 									 TransactionId feedbackCatalogXmin,
 									 uint32		feedbackCatalogEpoch);
 
+/* exposed for WALSender */
+extern XLogRecPtr WalSndWaitForWal(XLogRecPtr loc);
+
 /*
  * Remember that we want to wakeup walsenders later
  *
