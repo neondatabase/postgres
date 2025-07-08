@@ -151,6 +151,10 @@ typedef struct f_smgr
 	int			(*smgr_read_slru_segment) (const char *path, int segno, void* buffer);
 } f_smgr;
 
+/* NEON: Alternative implementation of calculate_database_size(), to make it O(1) */
+typedef int64 (*dbsize_hook_type) (Oid dbOid);
+extern PGDLLIMPORT dbsize_hook_type dbsize_hook;
+
 extern PGDLLIMPORT const PgAioTargetInfo aio_smgr_target_info;
 
 extern SmgrId smgrregister(const f_smgr *smgr);
