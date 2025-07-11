@@ -25,7 +25,7 @@
 #include "utils/memutils.h"
 #include "utils/resowner_private.h"
 
-/* ZENITH: prevent eviction of the buffer of target page */
+/* NEON: prevent eviction of the buffer of target page */
 extern Buffer wal_redo_buffer;
 
 /*#define LBDEBUG*/
@@ -187,7 +187,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		{
 			if (-b - 1 == wal_redo_buffer)
 			{
-				/* ZENITH: Prevent eviction of the buffer with target wal redo page */
+				/* NEON: Prevent eviction of the buffer with target wal redo page */
 				continue;
 			}
 

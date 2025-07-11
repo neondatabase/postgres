@@ -72,7 +72,7 @@ smgrinit(void)
 	(*smgr_init_hook)();
 
 	/*
-	 * ZENITH XXX
+	 * NEON XXX
 	 * This doesn't work with inmem_smgr, so temporarily disable.
 	 * Anyway, we don't have any real smgrshutdown function.
 	 */
@@ -80,7 +80,7 @@ smgrinit(void)
 	// on_proc_exit(smgrshutdown, 0);
 }
 
-//ZENITH XXX See comment above. Silence compiler warning.
+//NEON XXX See comment above. Silence compiler warning.
 // /*
 //  * on_proc_exit hook for smgr cleanup during backend shutdown
 //  */
@@ -717,7 +717,7 @@ smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 }
 
 /*
- * Zenith-added functions to mark the phases of an unlogged index build.
+ * Neon-added functions to mark the phases of an unlogged index build.
  */
 void
 smgr_start_unlogged_build(SMgrRelation reln)

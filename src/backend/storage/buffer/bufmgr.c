@@ -159,7 +159,7 @@ int			bgwriter_flush_after = 0;
 int			backend_flush_after = 0;
 
 /* Evict unpinned pages (for better test coverage) */
-bool		zenith_test_evict = false;
+bool		neon_test_evict = false;
 
 /* local state for StartBufferIO and related functions */
 static BufferDesc *InProgressBuf = NULL;
@@ -934,7 +934,7 @@ ReadBuffer_common(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		bufBlock = isLocalBuf ? LocalBufHdrGetBlock(bufHdr) : BufHdrGetBlock(bufHdr);
 		if (!PageIsNew((Page) bufBlock))
 		{
-			 // XXX-ZENITH
+			 // XXX-NEON
 			 MemSet((char *) bufBlock, 0, BLCKSZ);
 			 ereport(DEBUG1,
 					(errmsg("unexpected data beyond EOF in block %u of relation %s",
@@ -1573,7 +1573,7 @@ retry:
 }
 
 /*
- * NEON: Backported this from v16, to support zenith_test_evict mode. Not
+ * NEON: Backported this from v16, to support neon_test_evict mode. Not
  * used in production.
  *
  * Needs to be called on a buffer with a valid tag, pinned, but without the
@@ -2008,7 +2008,7 @@ UnpinBuffer(BufferDesc *buf, bool fixOwner)
 		}
 		ForgetPrivateRefCountEntry(ref);
 
-		if (zenith_test_evict && !InRecovery)
+		if (neon_test_evict && !InRecovery)
 		{
 			buf_state = LockBufHdr(buf);
 			if ((buf_state & BM_VALID) && BUF_STATE_GET_REFCOUNT(buf_state) == 0)

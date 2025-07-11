@@ -432,7 +432,7 @@ extern restore_running_xacts_callback_t restore_running_xacts_callback;
 #define TABLESPACE_MAP			"tablespace_map"
 #define TABLESPACE_MAP_OLD		"tablespace_map.old"
 
-#define ZENITH_SIGNAL_FILE		"zenith.signal"
+#define NEON_SIGNAL_FILE		"neon.signal"
 
 /* files to signal promotion to primary */
 #define PROMOTE_SIGNAL_FILE		"promote"
