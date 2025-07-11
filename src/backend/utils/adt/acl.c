@@ -117,17 +117,25 @@ static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
 static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue);
 
+char *privileged_role_name;
+
 bool
-is_neon_superuser(void)
+is_privileged_role(void)
 {
-	return is_neon_superuser_arg(GetUserId());
+	return is_privileged_role_arg(GetUserId());
 }
 
 bool
-is_neon_superuser_arg(Oid roleid)
+is_privileged_role_arg(Oid roleid)
 {
-	Oid neon_superuser_oid = get_role_oid("neon_superuser", true /*missing_ok*/);
-	return neon_superuser_oid != InvalidOid && has_privs_of_role(roleid, neon_superuser_oid);
+	Oid privileged_role_oid;
+
+	if (privileged_role_name == NULL)
+		return false;
+
+	privileged_role_oid = get_role_oid(privileged_role_name, true /* missing_ok */);
+
+	return privileged_role_oid != InvalidOid && has_privs_of_role(roleid, privileged_role_oid);
 }
 
 /*

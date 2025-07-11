@@ -541,7 +541,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	if (opts.create_slot)
 		PreventInTransactionBlock(isTopLevel, "CREATE SUBSCRIPTION ... WITH (create_slot = true)");
 
-	if (!superuser() && !is_neon_superuser())
+	if (!superuser() && !is_privileged_role())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be superuser to create subscriptions")));
@@ -1676,7 +1676,7 @@ AlterSubscriptionOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 					   NameStr(form->subname));
 
 	/* New owner must be a superuser */
-	if (!superuser_arg(newOwnerId) && !is_neon_superuser_arg(newOwnerId))
+	if (!superuser_arg(newOwnerId) && !is_privileged_role_arg(newOwnerId))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to change owner of subscription \"%s\"",
