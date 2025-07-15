@@ -117,7 +117,11 @@ static AclResult pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode);
 
 static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue);
 
-char *privileged_role_name;
+/*
+ * Name of the user-accessible privileged role in this system.
+ * Generally neon_superuser on neon.com
+ */
+char *privileged_role_name = NULL;
 
 bool
 is_privileged_role(void)
