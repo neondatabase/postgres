@@ -34,4 +34,8 @@ typedef char *(*auth_password_hook_typ) (char *input);
 /* Default LDAP password mutator hook, can be overridden by a shared library */
 extern PGDLLIMPORT auth_password_hook_typ ldap_password_hook;
 
+/* Hook for databricks authentication */
+typedef int (*DatabricksAuthentication_hook_type) (Port *, char *);
+extern PGDLLIMPORT DatabricksAuthentication_hook_type DatabricksAuthentication_hook;
+
 #endif							/* AUTH_H */

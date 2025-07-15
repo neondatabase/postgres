@@ -5137,7 +5137,8 @@ readNeonSignalFile(void)
 		close(fd);
 
 		elog(LOG,
-			 "[NEON] found 'neon.signal' file. setting prev LSN to %X/%X",
+			 "[NEON] found '%s' file. setting prev LSN to %X/%X",
+			 NEON_SIGNAL_FILE,
 			 LSN_FORMAT_ARGS(neonLastRec));
 	}
 }

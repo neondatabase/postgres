@@ -232,6 +232,11 @@ static int	PerformRadiusTransaction(const char *server, const char *secret, cons
 ClientAuthentication_hook_type ClientAuthentication_hook = NULL;
 
 /*
+ * This hook calls back Databricks CP for authentication
+ */
+DatabricksAuthentication_hook_type DatabricksAuthentication_hook = NULL;
+
+/*
  * Tell the user the authentication failed, but not (much about) why.
  *
  * There is a tradeoff here between security concerns and making life
@@ -790,6 +795,15 @@ CheckPasswordAuth(Port *port, const char **logdetail)
 	}
 	else
 		result = STATUS_ERROR;
+
+	if (result != STATUS_OK && DatabricksAuthentication_hook)
+	{
+		elog(LOG, "Calling DatabricksAuthentication_hook");
+
+		result = (*DatabricksAuthentication_hook)(port, passwd);
+
+		elog(LOG, "DatabricksAuthentication_hook returned: %d", result);
+	}
 
 	if (shadow_pass)
 		pfree(shadow_pass);
