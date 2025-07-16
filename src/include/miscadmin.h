@@ -170,6 +170,12 @@ extern PGDLLIMPORT pid_t PostmasterPid;
 extern PGDLLIMPORT bool IsPostmasterEnvironment;
 extern PGDLLIMPORT bool IsUnderPostmaster;
 extern PGDLLIMPORT bool IsBinaryUpgrade;
+/* Whether the communicator worker is used or not. Defined here so that
+ * it is also accessible from the main postgres code easily without
+ * having to look up the value using strings and chain of other
+ * functions.
+ */
+extern PGDLLIMPORT bool neon_use_communicator_worker;
 
 extern PGDLLIMPORT bool ExitOnAnyError;
 
