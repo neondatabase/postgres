@@ -644,7 +644,12 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 	}
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
-	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
+	if (neon_use_communicator_worker) {
+		buffer = NULL;
+	} else {
+		buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
+	}
+
 	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, path, segno, buffer);
 	if (n_blocks > 0)
 	{
@@ -656,22 +661,25 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 			pfree(buffer);
 			return -1;
 		}
-		errno = 0;
-		pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
-		if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
-		{
-			pgstat_report_wait_end();
-			/* if write didn't set errno, assume problem is no disk space */
-			if (errno == 0)
-				errno = ENOSPC;
-			slru_errcause = SLRU_WRITE_FAILED;
-			slru_errno = errno;
 
-			CloseTransientFile(fd);
-			pfree(buffer);
-			return -1;
+		if (!neon_use_communicator_worker) {
+			errno = 0;
+			pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
+			if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
+			{
+				pgstat_report_wait_end();
+				/* if write didn't set errno, assume problem is no disk space */
+				if (errno == 0)
+					errno = ENOSPC;
+				slru_errcause = SLRU_WRITE_FAILED;
+				slru_errno = errno;
+
+				CloseTransientFile(fd);
+				pfree(buffer);
+				return -1;
+			}
+			pgstat_report_wait_end();
 		}
-		pgstat_report_wait_end();
 	}
 	pfree(buffer);
 	return fd;
