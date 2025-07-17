@@ -33,9 +33,9 @@ typedef struct
 
 static List *label_provider_list = NIL;
 
-/* BEGIN_PG_HADRON */
+/* BEGIN_PG_NEON */
 OnlineTableSecurityLabel_hook_type OnlineTableSecurityLabel_hook = NULL;
-/* END_PG_HADRON */
+/* END_PG_NEON */
 
 static bool
 SecLabelSupportsObjectType(ObjectType objtype)
@@ -172,15 +172,18 @@ ExecSecLabelStmt(SecLabelStmt *stmt)
 	address = get_object_address(stmt->objtype, stmt->object,
 								 &relation, ShareUpdateExclusiveLock, false);
 
-	/* BEGIN_PG_HADRON */
-	if (OnlineTableSecurityLabel_hook != NULL) {
+	/* BEGIN_PG_NEON */
+	if (OnlineTableSecurityLabel_hook != NULL)
+	{
 		OnlineTableSecurityLabel_hook(stmt, &address, relation);
-	} else {
+	}
+	else
+	{
 		/* Require ownership of the target object. */
 		check_object_ownership(GetUserId(), stmt->objtype, address,
 							   stmt->object, relation);
 	}
-	/* END_PG_HADRON */
+	/* END_PG_NEON */
 
 	/* Perform other integrity checks as needed. */
 	switch (stmt->objtype)
