@@ -645,9 +645,12 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 	}
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
-	if (neon_use_communicator_worker) {
+	if (neon_use_communicator_worker)
+	{
 		buffer = NULL;
-	} else {
+	}
+	else
+	{
 		buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
 	}
 
@@ -659,11 +662,15 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 		{
 			slru_errcause = SLRU_OPEN_FAILED;
 			slru_errno = errno;
-			pfree(buffer);
+
+			if (buffer)
+				pfree(buffer);
+
 			return -1;
 		}
 
-		if (!neon_use_communicator_worker) {
+		if (!neon_use_communicator_worker)
+		{
 			errno = 0;
 			pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
 			if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
@@ -682,7 +689,10 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 			pgstat_report_wait_end();
 		}
 	}
-	pfree(buffer);
+
+	if (buffer)
+		pfree(buffer);
+
 	return fd;
 }
 
