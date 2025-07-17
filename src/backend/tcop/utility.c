@@ -75,10 +75,11 @@
 
 /* Hook for plugins to get control in ProcessUtility() */
 ProcessUtility_hook_type ProcessUtility_hook = NULL;
-/* BEGIN_PG_HADRON */
+
+/* BEGIN_PG_NEON */
 PreOnlineTableOp_hook_type PreOnlineTableOp_hook = NULL;
 PostOnlineTableOp_hook_type PostOnlineTableOp_hook = NULL;
-/* END_PG_HADRON */
+/* END_PG_NEON */
 
 /* local function declarations */
 static int	ClassifyUtilityCommandAsReadOnly(Node *parsetree);
@@ -1123,11 +1124,12 @@ ProcessUtilitySlow(ParseState *pstate,
 		if (isCompleteQuery)
 			EventTriggerDDLCommandStart(parsetree);
 
-		/* BEGIN_PG_HADRON */
-		if (PreOnlineTableOp_hook != NULL) {
+		/* BEGIN_PG_NEON */
+		if (PreOnlineTableOp_hook != NULL)
+		{
 			PreOnlineTableOp_hook(parsetree);
 		}
-		/* END_PG_HADRON */
+		/* END_PG_NEON */
 
 		switch (nodeTag(parsetree))
 		{
@@ -1935,11 +1937,13 @@ ProcessUtilitySlow(ParseState *pstate,
 	}
 	PG_FINALLY();
 	{
-		/* BEGIN_PG_HADRON */
-		if (PostOnlineTableOp_hook != NULL) {
+		/* BEGIN_PG_NEON */
+		if (PostOnlineTableOp_hook != NULL)
+		{
 			PostOnlineTableOp_hook(parsetree);
 		}
-		/* END_PG_HADRON */
+		/* END_PG_NEON */
+
 		if (needCleanup)
 			EventTriggerEndCompleteQuery();
 	}
