@@ -84,6 +84,10 @@ extern PGDLLIMPORT ExecutorEnd_hook_type ExecutorEnd_hook;
 typedef bool (*ExecutorCheckPerms_hook_type) (List *, bool);
 extern PGDLLIMPORT ExecutorCheckPerms_hook_type ExecutorCheckPerms_hook;
 
+/* Backup hook to check for Unity Catalog permissions after native permissions check fails */
+typedef bool (*ExecutorUnityCatalogCheckPerms_hook_type) (RTEPermissionInfo *perminfo);
+extern PGDLLIMPORT ExecutorUnityCatalogCheckPerms_hook_type ExecutorUnityCatalogCheckPerms_hook;
+
 
 /*
  * prototypes from functions in execAmi.c
