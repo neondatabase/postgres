@@ -77,6 +77,29 @@ typedef void (*ProcessUtility_hook_type) (PlannedStmt *pstmt,
 										  DestReceiver *dest, QueryCompletion *qc);
 extern PGDLLIMPORT ProcessUtility_hook_type ProcessUtility_hook;
 
+/* BEGIN_PG_NEON */
+
+/*
+ * The Pre/Post hooks are used to allow roles that do not own an online table
+ * to still perform a few DDLs on the table, e.g., CREATE INDEX.
+ *
+ * - Pre hook will check the DDL type and whether the referenced relation is
+ *   an online table. If the conditions are met, it will set the session user
+ *   as the table owner.
+ *
+ *   Postgres code then (typically) executes as the session user, which is now
+ *   SET to the table owner.
+ *
+ * - Post hook will restore the current user to the session user.
+ */
+typedef void (*PreOnlineTableOp_hook_type) (Node *parsetree);
+extern PGDLLIMPORT PreOnlineTableOp_hook_type PreOnlineTableOp_hook;
+
+typedef void (*PostOnlineTableOp_hook_type) (Node *parsetree);
+extern PGDLLIMPORT PostOnlineTableOp_hook_type PostOnlineTableOp_hook;
+
+/* END_PG_NEON */
+
 extern void ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 						   bool readOnlyTree,
 						   ProcessUtilityContext context, ParamListInfo params,

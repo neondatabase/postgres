@@ -31,4 +31,20 @@ typedef void (*check_object_relabel_type) (const ObjectAddress *object,
 extern void register_label_provider(const char *provider,
 									check_object_relabel_type hook);
 
+/* BEGIN_PG_NEON */
+
+/*
+ * OnlineTableSecurityLabel_hook is used to allow customers to perform DDL on
+ * an online table. By default, only databricks_superuser can.
+ * OnlineTableSecurityLabel_hook checks if the session user is one of the
+ * roles attached to the online table. If it is, it allows updating the label
+ * to add/remove roles. Otherwise, a permission error is thrown.
+ */
+typedef void (*OnlineTableSecurityLabel_hook_type) (SecLabelStmt *stmt,
+													const ObjectAddress *object,
+													Relation relation);
+
+extern PGDLLIMPORT OnlineTableSecurityLabel_hook_type OnlineTableSecurityLabel_hook;
+/* END_PG_NEON */
+
 #endif							/* SECLABEL_H */
