@@ -96,9 +96,9 @@ ErrorContextCallback *error_context_stack = NULL;
 
 sigjmp_buf *PG_exception_stack = NULL;
 
-/* BEGIN_HADRON */
+/* BEGIN_NEON */
 SqlErrorCode_hook_type SqlErrorCode_hook = NULL;
-/* END_HADRON */
+/* END_NEON */
 
 extern bool redirection_done;
 
@@ -861,11 +861,11 @@ matches_backtrace_functions(const char *funcname)
 int
 errcode(int sqlerrcode)
 {
-/* BEGIN_HADRON */
+/* BEGIN_NEON */
 	if (SqlErrorCode_hook != NULL) {
 		SqlErrorCode_hook(sqlerrcode);
 	}
-/* END_HADRON */
+/* END_NEON */
 	ErrorData  *edata = &errordata[errordata_stack_depth];
 
 	/* we don't bother incrementing recursion_depth */
