@@ -1,0 +1,33 @@
+  push:
+    branches:
+    - REL_14_STABLE_neon
+    - REL_14_STABLE_neon
+    - REL_15_STABLE_neon
+    - REL_17_STABLE_neon
+  pull_request:
+    branches:
+    - REL_14_STABLE_neon
+    - REL_15_STABLE_neon
+    - REL_16_STABLE_neon
+    - REL_17_STABLE_neon
+
+jobs:
+  build_postgres:
+    name: Build Postgres
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          apt-get install build-essential coreutils libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev libssl-dev libxml2-utils xsltproc
+      - name: Configure
+        run: |
+          ./configure --prefix=/usr/local
+      - name: Build
+        run: |
+          make -j $(nproc)
+      - name: Check
+        run: |
+          make -j $(nproc) check
