@@ -145,6 +145,9 @@ void
 pgstat_prepare_report_checksum_failure(Oid dboid)
 {
 	Assert(!CritSectionCount);
+	/* any checksum failures will have to happen out-of-line */
+	if (am_wal_redo_postgres)
+		return;
 
 	/*
 	 * Just need to ensure this backend has an entry ref for the database.

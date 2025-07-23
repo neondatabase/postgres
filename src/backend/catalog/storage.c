@@ -64,6 +64,7 @@ typedef struct PendingRelDelete
 	RelFileLocator rlocator;	/* relation that may need to be deleted */
 	ProcNumber	procNumber;		/* INVALID_PROC_NUMBER if not a temp rel */
 	bool		atCommit;		/* T=delete at commit; F=delete at abort */
+	char		relpersistence;	/* relation's relpersistence, for smgr ops */
 	int			nestLevel;		/* xact nesting level of request */
 	struct PendingRelDelete *next;	/* linked-list link */
 } PendingRelDelete;
@@ -166,6 +167,7 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 		pending->rlocator = rlocator;
 		pending->procNumber = procNumber;
 		pending->atCommit = false;	/* delete if abort */
+		pending->relpersistence = relpersistence;
 		pending->nestLevel = GetCurrentTransactionNestLevel();
 		pending->next = pendingDeletes;
 		pendingDeletes = pending;
@@ -202,6 +204,23 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 		set_lwlsn_relation_hook(lsn, *rlocator, forkNum);
 }
 
+void
+RelationAdjustPendingDelete(RelFileLocator rlocator, ProcNumber procNumber,
+							char relpersistence)
+{
+	PendingRelDelete *pending = pendingDeletes;
+	while (pending != NULL)
+	{
+		if (RelFileLocatorEquals(pending->rlocator, rlocator) &&
+			pending->procNumber == procNumber)
+		{
+			pending->relpersistence = relpersistence;
+		}
+
+		pending = pending->next;
+	}
+}
+
 /*
  * RelationDropStorage
  *		Schedule unlinking of physical storage at transaction commit.
@@ -217,6 +236,7 @@ RelationDropStorage(Relation rel)
 	pending->rlocator = rel->rd_locator;
 	pending->procNumber = rel->rd_backend;
 	pending->atCommit = true;	/* delete if commit */
+	pending->relpersistence = rel->rd_rel->relpersistence;	/* delete if commit */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
 	pending->next = pendingDeletes;
 	pendingDeletes = pending;
@@ -704,7 +724,8 @@ smgrDoPendingDeletes(bool isCommit)
 			{
 				SMgrRelation srel;
 
-				srel = smgropen(pending->rlocator, pending->procNumber, 0);
+				srel = smgropen(pending->rlocator, pending->procNumber,
+								pending->relpersistence);
 				/* allocate the initial array, or extend it, if needed */
 				if (maxrels == 0)
 				{
@@ -784,7 +805,9 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
 		uint64		total_blocks = 0;
 		SMgrRelation srel;
 
-		srel = smgropen(pendingsync->rlocator, INVALID_PROC_NUMBER, 0);
+		/* We only have pending syncs for permanent relations */
+		srel = smgropen(pendingsync->rlocator, INVALID_PROC_NUMBER,
+						RELPERSISTENCE_PERMANENT);
 
 		/*
 		 * We emit newpage WAL records for smaller relations.

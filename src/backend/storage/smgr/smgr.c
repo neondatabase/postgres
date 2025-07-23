@@ -97,14 +97,16 @@ static const f_smgr smgr_md = {
 	.smgr_registersync = mdregistersync,
 	.smgr_fd = mdfd,
 	.smgr_owns = mdowns,
-	.smgr_start_unlogged_build = NULL,
-	.smgr_finish_unlogged_build_phase_1 = NULL,
-	.smgr_end_unlogged_build = NULL,
 };
 
 static const f_smgr *smgrsw = &smgr_md;
 
 static int NSmgr = 1;
+
+start_unlogged_build_hook_type start_unlogged_build_hook;
+finish_unlogged_build_phase_1_hook_type finish_unlogged_build_phase_1_hook;
+end_unlogged_build_hook_type end_unlogged_build_hook;
+read_slru_segment_hook_type read_slru_segment_hook;
 
 /*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
@@ -132,12 +134,15 @@ SmgrId
 smgrregister(const f_smgr *smgr)
 {
 	f_smgr *new_smgrsw;
+	Assert(smgr != NULL);
+	Assert(smgr->smgr_name != NULL);
 
 	for (int i = 0; i < NSmgr; i++)
 	{
 		/* different name */
 		if (strcmp(smgr->smgr_name, smgrsw[i].smgr_name) != 0)
 			continue;
+
 		/* exactly the same struct, return the previously-returned ID */
 		if (memcmp(smgr, &smgrsw[i], sizeof(f_smgr)))
 			return i;
@@ -230,6 +235,7 @@ smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 	bool		found;
 
 	Assert(RelFileNumberIsValid(rlocator.relNumber));
+	Assert(backend == INVALID_PROC_NUMBER || relpersistence == RELPERSISTENCE_TEMP);
 
 	HOLD_INTERRUPTS();
 
@@ -285,20 +291,67 @@ smgropen(RelFileLocator rlocator, ProcNumber backend, char relpersistence)
 	}
 	else
 	{
+		/* if no relpersistence was given, default to that of the existing smgrrel */
+		if (relpersistence == 0)
+			relpersistence = reln->smgr_relpersistence;
+
 		/*
-		 * Fix the persistence of the SMgrRelation if we didn't know it already.
+		 * Update the persistence of the smgr.
 		 *
-		 * If we knew the persistence already, make sure that it hasn't changed.
+		 * If we need to change the owning smgr, we do that now, too.
 		 */
-		if (reln->smgr_relpersistence == 0)
+		if (reln->smgr_relpersistence == 0
+			|| reln->smgr_relpersistence != relpersistence)
 		{
+			SmgrId id = NSmgr;
+
+			for (; id > 0; id--)
+			{
+				if (smgrsw[id - 1].smgr_owns(reln->smgr_rlocator.locator,
+											 reln->smgr_rlocator.backend,
+											 relpersistence))
+					break;
+			}
+
+			/* must have at least one SMGR which owns this reln */
+			Assert(id > 0);
+			id--;
+
+			if (id != reln->smgr_which)
+			{
+				for (int i = 0; i < MAX_FORKNUM; i++)
+					smgrsw[reln->smgr_which].smgr_close(reln, i);
+
+				/*
+				 *	ereport(LOG, (errmsg_internal(
+				 *			"Changed relpersistence to '%c' from '%c', smgr to '%s' from '%s'  (reln %u/%u/%u, %d pins)",
+				 *			relpersistence, reln->smgr_relpersistence,
+				 *			smgrsw[id].smgr_name,
+				 *			smgrsw[reln->smgr_which].smgr_name,
+				 *			reln->smgr_rlocator.locator.spcOid,
+				 *			reln->smgr_rlocator.locator.dbOid,
+				 *			reln->smgr_rlocator.locator.relNumber,
+				 *			reln->pincount
+				 *	), errbacktrace()));
+				 */
+
+				reln->smgr_which = id;
+				smgrsw[id].smgr_open(reln);
+			}
+			else
+			{
+				/*
+				 *	ereport(LOG, (errmsg_internal(
+				 *			"Changed relpersistence to '%c' from '%c' (reln %u/%u/%u, %d pins)",
+				 *			relpersistence, reln->smgr_relpersistence,
+				 *			reln->smgr_rlocator.locator.spcOid,
+				 *			reln->smgr_rlocator.locator.dbOid,
+				 *			reln->smgr_rlocator.locator.relNumber,
+				 *			reln->pincount
+				 *	), errbacktrace()));
+				 */
+			}
 			reln->smgr_relpersistence = relpersistence;
-		}
-		else if (reln->smgr_relpersistence != 0 && relpersistence != 0 &&
-				 reln->smgr_relpersistence != relpersistence)
-		{
-			elog(ERROR, "relpersistence mismatch: smgropen %c vs SmgrRelation %c",
-				 relpersistence, reln->smgr_relpersistence);
 		}
 	}
 
@@ -1017,22 +1070,22 @@ smgrfd(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum, uint32 *off)
 void
 smgr_start_unlogged_build(SMgrRelation reln)
 {
-	if (smgrsw[reln->smgr_which].smgr_start_unlogged_build)
-		smgrsw[reln->smgr_which].smgr_start_unlogged_build(reln);
+	if (start_unlogged_build_hook)
+		start_unlogged_build_hook(reln);
 }
 
 void
 smgr_finish_unlogged_build_phase_1(SMgrRelation reln)
 {
-	if (smgrsw[reln->smgr_which].smgr_finish_unlogged_build_phase_1)
-		smgrsw[reln->smgr_which].smgr_finish_unlogged_build_phase_1(reln);
+	if (finish_unlogged_build_phase_1_hook)
+		finish_unlogged_build_phase_1_hook(reln);
 }
 
 void
 smgr_end_unlogged_build(SMgrRelation reln)
 {
-	if (smgrsw[reln->smgr_which].smgr_end_unlogged_build)
-		smgrsw[reln->smgr_which].smgr_end_unlogged_build(reln);
+	if (end_unlogged_build_hook)
+		end_unlogged_build_hook(reln);
 }
 
 /*
@@ -1048,17 +1101,10 @@ smgr_end_unlogged_build(SMgrRelation reln)
  * oh well.
  */
 int
-smgr_read_slru_segment(const char* path, int segno, void* buffer)
+read_slru_segment(const char* path, int segno, void* buffer)
 {
-	for (int i = NSmgr; i > 0; i--)
-	{
-		SmgrId	smgr = (i - 1);
-		if (smgrsw[smgr].smgr_read_slru_segment)
-		{
-			return smgrsw[smgr].smgr_read_slru_segment(path, segno, buffer);
-		}
-	}
-
+	if (read_slru_segment_hook)
+		return read_slru_segment_hook(path, segno, buffer);
 	return 0;
 }
 

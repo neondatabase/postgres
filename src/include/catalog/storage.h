@@ -36,6 +36,10 @@ extern Size EstimatePendingSyncsSpace(void);
 extern void SerializePendingSyncs(Size maxSize, char *startAddress);
 extern void RestorePendingSyncs(char *startAddress);
 
+extern void RelationAdjustPendingDelete(RelFileLocator rlocator,
+										ProcNumber procNumber,
+										char relpersistence);
+
 /*
  * These functions used to be in storage/smgr/smgr.c, which explains the
  * naming

@@ -745,7 +745,7 @@ SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
 	buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
-	n_blocks = smgr_read_slru_segment(path, segno, buffer);
+	n_blocks = read_slru_segment(path, segno, buffer);
 	if (n_blocks > 0)
 	{
 		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);

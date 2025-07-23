@@ -19,6 +19,7 @@
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
+#include "miscadmin.h"
 #include "storage/freespace.h"
 #include "storage/standby.h"
 
@@ -157,7 +158,7 @@ heap_xlog_prune_freeze(XLogReaderState *record)
 	{
 		if (xlrec.flags & (XLHP_HAS_REDIRECTIONS |
 						   XLHP_HAS_DEAD_ITEMS |
-						   XLHP_HAS_NOW_UNUSED_ITEMS))
+						   XLHP_HAS_NOW_UNUSED_ITEMS) && !am_wal_redo_postgres)
 		{
 			Size		freespace = PageGetHeapFreeSpace(BufferGetPage(buffer));
 
@@ -273,7 +274,7 @@ heap_xlog_visible(XLogReaderState *record)
 		 * Do this regardless of a full-page image being applied, since the
 		 * FSM data is not in the page anyway.
 		 */
-		if (xlrec->flags & VISIBILITYMAP_VALID_BITS)
+		if (xlrec->flags & VISIBILITYMAP_VALID_BITS && !am_wal_redo_postgres)
 			XLogRecordPageWithFreeSpace(rlocator, blkno, space);
 	}
 
@@ -369,7 +370,7 @@ heap_xlog_delete(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_DELETE_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & XLH_DELETE_ALL_VISIBLE_CLEARED && !am_wal_redo_postgres)
 	{
 		Relation	reln = CreateFakeRelcacheEntry(target_locator);
 		Buffer		vmbuffer = InvalidBuffer;
@@ -456,7 +457,7 @@ heap_xlog_insert(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED && !am_wal_redo_postgres)
 	{
 		Relation	reln = CreateFakeRelcacheEntry(target_locator);
 		Buffer		vmbuffer = InvalidBuffer;
@@ -536,7 +537,8 @@ heap_xlog_insert(XLogReaderState *record)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
+	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5
+		&& !am_wal_redo_postgres)
 		XLogRecordPageWithFreeSpace(target_locator, blkno, freespace);
 }
 
@@ -580,7 +582,7 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & XLH_INSERT_ALL_VISIBLE_CLEARED && !am_wal_redo_postgres)
 	{
 		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
@@ -683,7 +685,8 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
+	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5
+		&& !am_wal_redo_postgres)
 		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
 }
 
@@ -739,7 +742,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & XLH_UPDATE_OLD_ALL_VISIBLE_CLEARED && !am_wal_redo_postgres)
 	{
 		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
@@ -823,7 +826,7 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED)
+	if (xlrec->flags & XLH_UPDATE_NEW_ALL_VISIBLE_CLEARED && !am_wal_redo_postgres)
 	{
 		Relation	reln = CreateFakeRelcacheEntry(rlocator);
 		Buffer		vmbuffer = InvalidBuffer;
@@ -958,7 +961,8 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 * don't bother to update the FSM in that case, it doesn't need to be
 	 * totally accurate anyway.
 	 */
-	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5)
+	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5
+		&& !am_wal_redo_postgres)
 		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
 }
 
@@ -1019,7 +1023,7 @@ heap_xlog_lock(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED)
+	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED && !am_wal_redo_postgres)
 	{
 		RelFileLocator rlocator;
 		Buffer		vmbuffer = InvalidBuffer;
@@ -1095,7 +1099,7 @@ heap_xlog_lock_updated(XLogReaderState *record)
 	 * The visibility map may need to be fixed even if the heap page is
 	 * already up-to-date.
 	 */
-	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED)
+	if (xlrec->flags & XLH_LOCK_ALL_FROZEN_CLEARED && !am_wal_redo_postgres)
 	{
 		RelFileLocator rlocator;
 		Buffer		vmbuffer = InvalidBuffer;
