@@ -1,0 +1,59 @@
+name: Build Postgres
+
+on:
+  push:
+    branches:
+    - REL_15_STABLE_neon
+  pull_request:
+    branches:
+    - REL_15_STABLE_neon
+
+jobs:
+  build_postgres:
+    name: Build Postgres
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Postgres Build Dependencies
+        run: |
+          sudo apt-get install build-essential coreutils libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev libssl-dev libxml2-utils xsltproc git
+
+      - name: Install Neon Build Dependencies
+        run: |
+          sudo apt install libtool libseccomp-dev clang pkg-config cmake postgresql-client protobuf-compiler libprotobuf-dev libcurl4-openssl-dev openssl libicu-dev
+
+      - name: Checkout Neon main branch
+        run: |
+          git clone https://github.com/neondatabase/neon ./neon
+
+      - name: Checkout postgres repository
+        uses: actions/checkout@v4
+        with:
+          path: './neon/vendor/postgres-v15'
+
+      - name: Build PostgreSQL and Neon Extension
+        run: |
+          make -s -j`nproc` -C ./neon -s neon-pg-ext-v15
+
+      - name: Run PostgreSQL Test Suite
+        run: |
+          make -s -j`nproc` -C ./neon/build/v15 check
+
+      - name: Append Postgres binaries to the PATH
+        run: |
+          echo "./neon/pg_install/v15/bin" >> "$GITHUB_PATH"
+
+      - name: Start Postgres
+        run: |
+          pg_ctl init  --pgdata ./data
+          pg_ctl start --pgdata ./data -o '-c shared_preload_libraries=neon'
+
+      - name: Create Extension Neon
+        env:
+          PGHOST: /tmp
+          PGDATABASE: postgres
+        run: |
+          psql --echo-queries --command 'create extension neon;'
+
+      - name: Stop Postgres
+        run: |
+          pg_ctl stop --pgdata ./data
