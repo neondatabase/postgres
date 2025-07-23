@@ -548,6 +548,6 @@ extern void RestoreClientConnectionInfo(char *conninfo);
 extern size_t get_hash_memory_limit(void);
 
 /* in storage/buffer/buf_init.c */
-extern bool am_wal_redo_postgres;
+extern PGDLLIMPORT bool am_wal_redo_postgres;
 
 #endif							/* MISCADMIN_H */

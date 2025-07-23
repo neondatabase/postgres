@@ -37,7 +37,10 @@
 #include "replication/slotsync.h"
 #include "replication/walreceiver.h"
 #include "replication/walsender.h"
+#if PG_MAJORVERSION_NUM >= 18
 #include "storage/aio_subsys.h"
+#include "storage/aio.h"
+#endif
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/dsm_registry.h"

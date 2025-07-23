@@ -826,7 +826,8 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * Read the buffer, and update pgstat counters to reflect a cache hit or
 	 * miss.
 	 */
-	buf = ReadBuffer_common(reln, RelationGetSmgr(reln), 0,
+	buf = ReadBuffer_common(reln, RelationGetSmgr(reln),
+							RelationGetSmgr(reln)->smgr_relpersistence,
 							forkNum, blockNum, mode, strategy);
 
 	return buf;
@@ -908,7 +909,7 @@ ExtendBufferedRelBy(BufferManagerRelation bmr,
 	if (bmr.smgr == NULL)
 	{
 		bmr.smgr = RelationGetSmgr(bmr.rel);
-		bmr.relpersistence = bmr.rel->rd_rel->relpersistence;
+		bmr.relpersistence = bmr.smgr->smgr_relpersistence;
 	}
 
 	return ExtendBufferedRelCommon(bmr, fork, strategy, flags,
@@ -944,7 +945,7 @@ ExtendBufferedRelTo(BufferManagerRelation bmr,
 	if (bmr.smgr == NULL)
 	{
 		bmr.smgr = RelationGetSmgr(bmr.rel);
-		bmr.relpersistence = bmr.rel->rd_rel->relpersistence;
+		bmr.relpersistence = bmr.smgr->smgr_relpersistence;
 	}
 
 	/*
@@ -1234,7 +1235,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 	}
 
 	if (rel)
-		persistence = rel->rd_rel->relpersistence;
+		persistence = smgr_persistence;
 	else
 		persistence = smgr_persistence;
 
@@ -1916,6 +1917,14 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 	else
 	{
 		instr_time	io_start;
+
+		if (operation->smgr->smgr_relpersistence != operation->persistence)
+		{
+			SMgrRelation reln = operation->smgr;
+			operation->smgr = smgropen(reln->smgr_rlocator.locator,
+									   reln->smgr_rlocator.backend,
+									   operation->persistence);
+		}
 
 		/* We found a buffer that we need to read in. */
 		Assert(io_buffers[0] == buffers[nblocks_done]);
@@ -4348,10 +4357,24 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
+	{
+		char		relpersistence;
+
+		if (io_object == IOOBJECT_TEMP_RELATION)
+			relpersistence = RELPERSISTENCE_TEMP;
+		else
+		{
+			Assert(io_object == IOOBJECT_RELATION);
+			if (pg_atomic_read_u32(&buf->state) & BM_PERMANENT)
+				relpersistence = RELPERSISTENCE_PERMANENT;
+			else
+				relpersistence = RELPERSISTENCE_UNLOGGED;
+		}
+
 		reln = smgropen(BufTagGetRelFileLocator(&buf->tag), INVALID_PROC_NUMBER,
-						io_object == IOOBJECT_RELATION ?
-						RELPERSISTENCE_PERMANENT :
-						RELPERSISTENCE_UNLOGGED);
+						relpersistence);
+		Assert(reln->smgr_relpersistence == relpersistence);
+	}
 
 	TRACE_POSTGRESQL_BUFFER_FLUSH_START(BufTagGetForkNum(&buf->tag),
 										buf->tag.blockNum,
@@ -7228,13 +7251,16 @@ buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
 	uint64	   *io_data;
 	uint8		handle_data_len;
 
-	if (is_temp)
+	if (!am_wal_redo_postgres)
 	{
-		Assert(td->smgr.relpersistence == RELPERSISTENCE_TEMP);
-		Assert(pgaio_io_get_owner(ioh) == MyProcNumber);
+		if (is_temp)
+		{
+			Assert(td->smgr.relpersistence == RELPERSISTENCE_TEMP);
+			Assert(pgaio_io_get_owner(ioh) == MyProcNumber);
+		}
+		else
+			Assert(td->smgr.relpersistence != RELPERSISTENCE_TEMP);
 	}
-	else
-		Assert(td->smgr.relpersistence != RELPERSISTENCE_TEMP);
 
 	/*
 	 * Iterate over all the buffers affected by this IO and call the
