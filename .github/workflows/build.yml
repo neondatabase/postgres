@@ -50,8 +50,9 @@ jobs:
       - name: Create Extension Neon
         env:
           PGHOST: /tmp
+          PGDATABASE: postgres
         run: |
-          psql -c 'create extension neon;'
+          psql --echo-queries --command 'create extension neon;'
 
       - name: Stop Postgres
         run: |
