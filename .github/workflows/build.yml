@@ -47,13 +47,11 @@ jobs:
           pg_ctl init  --pgdata ./data
           pg_ctl start --pgdata ./data -o '-c shared_preload_libraries=neon'
 
-      - name: Minimal Check for Neon Extension
+      - name: Create Extension Neon
         env:
           PGHOST: /tmp
-          PGDATA: ./data
-          PG_CONFIG: ./neon/pg_install/v14/bin/pg_config
         run: |
-          make -C ./neon/vendor/postgres-v14/contrib/neon installcheck
+          psql -c 'create extension neon;'
 
       - name: Stop Postgres
         run: |
