@@ -60,6 +60,7 @@
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/varlena.h"
+#include "catalog/objectaccess.h"
 
 
 /*
@@ -3406,8 +3407,23 @@ LookupExplicitNamespace(const char *nspname, bool missing_ok)
 
 	aclresult = object_aclcheck(NamespaceRelationId, namespaceId, GetUserId(), ACL_USAGE);
 	if (aclresult != ACLCHECK_OK)
-		aclcheck_error(aclresult, OBJECT_SCHEMA,
-					   nspname);
+	{
+		/* BEGIN HADRON
+		 * If we don't have the necessary native Postgres permission, check if
+		 * our Databricks OAuth token grants us permission.
+		 */
+		if (NamespaceUnityCatalogAccess_hook != NULL
+			&& (*NamespaceUnityCatalogAccess_hook) (namespaceId, nspname, ACL_USAGE))
+		{
+			aclresult = ACLCHECK_OK;
+		}
+		/* END HADRON */
+
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_SCHEMA,
+						   nspname);
+	}
+
 	/* Schema search hook for this lookup */
 	InvokeNamespaceSearchHook(namespaceId, true);
 
