@@ -10,6 +10,8 @@
 #ifndef OBJECTACCESS_H
 #define OBJECTACCESS_H
 
+#include "nodes/parsenodes.h"
+
 /*
  * Object access hooks are intended to be called just before or just after
  * performing certain actions on a SQL object.  This is intended as
@@ -141,6 +143,10 @@ extern void RunObjectPostAlterHook(Oid classId, Oid objectId, int subId,
 								   Oid auxiliaryId, bool is_internal);
 extern bool RunNamespaceSearchHook(Oid objectId, bool ereport_on_violation);
 extern void RunFunctionExecuteHook(Oid objectId);
+
+/* Backup hook to check for Unity Catalog namespace access after native permissions check fails */
+typedef bool (*NamespaceUnityCatalogAccess_hook_type) (Oid namespaceId, const char *nspname, AclMode requiredPerms);
+extern PGDLLIMPORT NamespaceUnityCatalogAccess_hook_type NamespaceUnityCatalogAccess_hook;
 
 /*
  * The following macros are wrappers around the functions above; these should
