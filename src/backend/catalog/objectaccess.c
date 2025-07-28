@@ -22,6 +22,9 @@
 object_access_hook_type object_access_hook = NULL;
 object_access_hook_type_str object_access_hook_str = NULL;
 
+/* Backup hook to check for Unity Catalog namespace access after native permissions check fails */
+NamespaceUnityCatalogAccess_hook_type NamespaceUnityCatalogAccess_hook = NULL;
+
 
 /*
  * RunObjectPostCreateHook
