@@ -167,6 +167,8 @@ int			recovery_init_sync_method = RECOVERY_INIT_SYNC_METHOD_FSYNC;
 /* Which kinds of files should be opened with PG_O_DIRECT. */
 int			io_direct_flags;
 
+CheckTempFileSize_hook_type CheckTempFileSize_hook = NULL;
+
 /* Debugging.... */
 
 #ifdef FDDEBUG
@@ -1964,6 +1966,10 @@ FileClose(File file)
 	{
 		/* Subtract its size from current usage (do first in case of error) */
 		temporary_files_size -= vfdP->fileSize;
+		if (CheckTempFileSize_hook != NULL)
+		{
+			CheckTempFileSize_hook(vfdP->fileSize, PG_TEMP_FILES_SIZE_DEC);
+		}
 		vfdP->fileSize = 0;
 	}
 
@@ -2184,6 +2190,10 @@ FileWrite(File file, const void *buffer, size_t amount, off_t offset,
 						(errcode(ERRCODE_CONFIGURATION_LIMIT_EXCEEDED),
 						 errmsg("temporary file size exceeds temp_file_limit (%dkB)",
 								temp_file_limit)));
+			if (CheckTempFileSize_hook != NULL)
+			{
+				CheckTempFileSize_hook(past_write - vfdP->fileSize, PG_TEMP_FILES_SIZE_CHECK);
+			}
 		}
 	}
 
@@ -2209,6 +2219,10 @@ retry:
 			if (past_write > vfdP->fileSize)
 			{
 				temporary_files_size += past_write - vfdP->fileSize;
+				if (CheckTempFileSize_hook != NULL)
+				{
+					CheckTempFileSize_hook(past_write - vfdP->fileSize, PG_TEMP_FILES_SIZE_INC);
+				}
 				vfdP->fileSize = past_write;
 			}
 		}
@@ -2392,6 +2406,10 @@ FileTruncate(File file, off_t offset, uint32 wait_event_info)
 		/* adjust our state for truncation of a temp file */
 		Assert(VfdCache[file].fdstate & FD_TEMP_FILE_LIMIT);
 		temporary_files_size -= VfdCache[file].fileSize - offset;
+		if (CheckTempFileSize_hook != NULL)
+		{
+			CheckTempFileSize_hook(VfdCache[file].fileSize - offset, PG_TEMP_FILES_SIZE_DEC);
+		}
 		VfdCache[file].fileSize = offset;
 	}
 
@@ -3131,6 +3149,11 @@ BeforeShmemExit_Files(int code, Datum arg)
 #ifdef USE_ASSERT_CHECKING
 	temporary_files_allowed = false;
 #endif
+
+	if (CheckTempFileSize_hook != NULL)
+	{
+		CheckTempFileSize_hook(temporary_files_size, PG_TEMP_FILES_SIZE_DEC);
+	}
 }
 
 /*

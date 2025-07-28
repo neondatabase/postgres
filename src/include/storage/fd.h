@@ -195,6 +195,14 @@ extern int	durable_unlink(const char *fname, int elevel);
 extern void SyncDataDirectory(void);
 extern int	data_sync_elevel(int elevel);
 
+/* BEGIN_HADRON */
+#define PG_TEMP_FILES_SIZE_INC 0
+#define PG_TEMP_FILES_SIZE_DEC 1
+#define PG_TEMP_FILES_SIZE_CHECK 2
+typedef void (*CheckTempFileSize_hook_type) (off_t size, int action);
+extern PGDLLIMPORT CheckTempFileSize_hook_type CheckTempFileSize_hook;
+/* END_HADRON */
+
 /* Filename components */
 #define PG_TEMP_FILES_DIR "pgsql_tmp"
 #define PG_TEMP_FILE_PREFIX "pgsql_tmp"
