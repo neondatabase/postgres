@@ -549,7 +549,8 @@ BaseInit(void)
 	/* Do local initialization of file, storage and buffer managers */
 	InitFileAccess();
 	InitSync();
-	smgrinit();
+	/* NEON: This is done later, in InitProcess() */
+	/* smgrinit(); */
 	InitBufferPoolAccess();
 }
 

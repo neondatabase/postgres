@@ -470,6 +470,16 @@ InitProcess(void)
 	 */
 	InitLWLockAccess();
 	InitDeadLockChecking();
+
+	/*
+	 * NEON: Initialize the neon storage manager. In vanilla Postgres, this is
+	 * called from BaseInit(), which runs earlier. But we want to have MyProc
+	 * available, so we run it here instead.
+	 *
+	 * In later Postgres versions, smgrinit() is called later, and this change
+	 * is no longer required.
+	 */
+	smgrinit();
 }
 
 /*
@@ -624,6 +634,9 @@ InitAuxiliaryProcess(void)
 	 * Arrange to clean up at process exit.
 	 */
 	on_shmem_exit(AuxiliaryProcKill, Int32GetDatum(proctype));
+
+	/* NEON: see InitProcess */
+	smgrinit();
 }
 
 /*
