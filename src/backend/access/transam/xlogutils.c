@@ -862,9 +862,6 @@ int
 read_local_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr,
 					 int reqLen, XLogRecPtr targetRecPtr, char *cur_page)
 {
-	elog(LOG, "Reading local xlog page=%X/%08X len=%d recptr=%X/%08X",
-		 LSN_FORMAT_ARGS(targetPagePtr), reqLen,
-		 LSN_FORMAT_ARGS(targetRecPtr));
 	return read_local_xlog_page_guts(state, targetPagePtr, reqLen,
 									 targetRecPtr, cur_page, true);
 }
