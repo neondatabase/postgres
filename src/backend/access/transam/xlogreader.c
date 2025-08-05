@@ -1593,10 +1593,10 @@ WALRead(XLogReaderState *state,
 	nbytes = count;
 
 #ifndef FRONTEND
-	if ((startptr & wal_segment_size - 1) < XLOG_BLCKSZ && (recptr & wal_segment_size - 1) > SizeOfXLogLongPHD)
+	if ((startptr & (wal_segment_size - 1)) < XLOG_BLCKSZ && (recptr & (wal_segment_size - 1)) > SizeOfXLogLongPHD)
 	{
 		XLogLongPageHeaderData lphdr;
-		int baseoff = startptr & wal_segment_size - 1;
+		int baseoff = startptr & (wal_segment_size - 1);
 
 		memcpy(&lphdr, &p[-baseoff], SizeOfXLogLongPHD);
 		Assert(lphdr.std.xlp_info & XLP_LONG_HEADER);
@@ -1678,10 +1678,10 @@ WALRead(XLogReaderState *state,
 	}
 
 #ifndef FRONTEND
-	if ((recptr & wal_segment_size - 1) <= XLOG_BLCKSZ && (recptr & wal_segment_size - 1) > SizeOfXLogLongPHD)
+	if ((recptr & (wal_segment_size - 1)) <= XLOG_BLCKSZ && (recptr & (wal_segment_size - 1)) > SizeOfXLogLongPHD)
 	{
 		XLogLongPageHeaderData lphdr;
-		int baseoff = recptr & wal_segment_size - 1;
+		int baseoff = recptr & (wal_segment_size - 1);
 
 		memcpy(&lphdr, &p[-baseoff], SizeOfXLogLongPHD);
 		Assert(lphdr.std.xlp_info & XLP_LONG_HEADER);
