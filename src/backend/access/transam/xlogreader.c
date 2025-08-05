@@ -80,11 +80,6 @@ report_invalid_record(XLogReaderState *state, const char *fmt,...)
 	va_end(args);
 
 	state->errormsg_deferred = true;
-
-#ifndef FRONTEND
-	ereport(PANIC, (errmsg_internal("%s", state->errormsg_buf),
-					errbacktrace()));
-#endif
 }
 
 /*
@@ -1369,11 +1364,10 @@ XLogReaderValidatePageHeader(XLogReaderState *state, XLogRecPtr recptr,
 
 		/* hmm, first page of file doesn't have a long header? */
 		report_invalid_record(state,
-							  "invalid info bits %04X in WAL segment %s, LSN %X/%X, page addr %X/%X, offset %u",
+							  "invalid info bits %04X in WAL segment %s, LSN %X/%X, offset %u",
 							  hdr->xlp_info,
 							  fname,
 							  LSN_FORMAT_ARGS(recptr),
-							  LSN_FORMAT_ARGS(hdr->xlp_pageaddr),
 							  offset);
 		return false;
 	}
@@ -1584,25 +1578,9 @@ WALRead(XLogReaderState *state,
 	instr_time	io_start;
 #endif
 
-#ifndef FRONTEND
-	elog(LOG, "WALRead xlog startptr=%X/%08X count=%d",
-		 LSN_FORMAT_ARGS(startptr), (int) count);
-#endif
 	p = buf;
 	recptr = startptr;
 	nbytes = count;
-
-#ifndef FRONTEND
-	if ((startptr & (wal_segment_size - 1)) < XLOG_BLCKSZ && (recptr & (wal_segment_size - 1)) > SizeOfXLogLongPHD)
-	{
-		XLogLongPageHeaderData lphdr;
-		int baseoff = startptr & (wal_segment_size - 1);
-
-		memcpy(&lphdr, &p[-baseoff], SizeOfXLogLongPHD);
-		Assert(lphdr.std.xlp_info & XLP_LONG_HEADER);
-		Assert(lphdr.std.xlp_info & XLP_FIRST_IS_CONTRECORD || lphdr.std.xlp_rem_len == 0);
-	}
-#endif
 
 	while (nbytes > 0)
 	{
@@ -1677,17 +1655,6 @@ WALRead(XLogReaderState *state,
 		p += readbytes;
 	}
 
-#ifndef FRONTEND
-	if ((recptr & (wal_segment_size - 1)) <= XLOG_BLCKSZ && (recptr & (wal_segment_size - 1)) > SizeOfXLogLongPHD)
-	{
-		XLogLongPageHeaderData lphdr;
-		int baseoff = recptr & (wal_segment_size - 1);
-
-		memcpy(&lphdr, &p[-baseoff], SizeOfXLogLongPHD);
-		Assert(lphdr.std.xlp_info & XLP_LONG_HEADER);
-		Assert(lphdr.std.xlp_info & XLP_FIRST_IS_CONTRECORD || lphdr.std.xlp_rem_len == 0);
-	}
-#endif
 	return true;
 }
 

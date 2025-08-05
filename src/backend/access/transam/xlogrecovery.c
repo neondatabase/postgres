@@ -1717,6 +1717,17 @@ FinishWalRecovery(void)
 			 */
 			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
 			xlogPageHdr->xlp_info = (xlogPageHdr->xlp_rem_len > 0) ? XLP_FIRST_IS_CONTRECORD : 0;
+
+			/* Populate the long header correctly, if  */
+			if ((pageBeginPtr & (wal_segment_size - 1)) == 0)
+			{
+				XLogLongPageHeader longHdr = (XLogLongPageHeader) xlogPageHdr;
+				xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+				longHdr->xlp_seg_size = wal_segment_size;
+				longHdr->xlp_sysid = GetSystemIdentifier();
+				longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+			}
+
 			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
 
 			result->lastPageBeginPtr = pageBeginPtr;
