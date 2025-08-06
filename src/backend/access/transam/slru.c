@@ -619,70 +619,28 @@ SimpleLruWritePage(SlruCtl ctl, int slotno)
 
 
 /*
- * NEON: we do not want to include large pg_xact/multixact files in basebackup and prefer
- * to download them on demand to reduce startup time.
- * If SLRU segment is not found, we try to download it from page server
+ * NEON: we do not want to include large pg_xact/multixact files in the
+ * basebackup and prefer to download them on demand to reduce startup time.
+ *
+ * If SLRU segment is not found, we try to download it from the pageserver.
+ *
+ * Returns:
+ *   true if the file was successfully downloaded
+ *   false if the file was not found in pageserver
+ *   ereports if some other error happened
  */
-static int
-SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const* path)
+static bool
+SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const *path)
 {
-	int segno;
-	int fd = -1;
-	int n_blocks;
-	char* buffer;
-
-	static SMgrRelationData dummy_smgr_rel = {0};
+	int			segno;
 
 	/* If page is greater than latest written page, then do not try to download segment from server */
 	if (ctl->PagePrecedes(ctl->shared->latest_page_number, pageno))
-		return -1;
+		return false;
 
-	if (!dummy_smgr_rel.smgr)
-	{
-		RelFileNode rnode = {0};
-		dummy_smgr_rel.smgr = smgr(InvalidBackendId, rnode);
-	}
 	segno = pageno / SLRU_PAGES_PER_SEGMENT;
 
-	if (neon_use_communicator_worker) {
-		buffer = NULL;
-	} else {
-		buffer = palloc(BLCKSZ * SLRU_PAGES_PER_SEGMENT);
-	}
-
-	n_blocks = smgr_read_slru_segment(&dummy_smgr_rel, path, segno, buffer);
-	if (n_blocks > 0)
-	{
-		fd = OpenTransientFile(path, O_RDWR | O_CREAT | PG_BINARY);
-		if (fd < 0)
-		{
-			slru_errcause = SLRU_OPEN_FAILED;
-			slru_errno = errno;
-			pfree(buffer);
-			return -1;
-		}
-
-		if (!neon_use_communicator_worker) {
-			errno = 0;
-			pgstat_report_wait_start(WAIT_EVENT_SLRU_WRITE);
-			if (pg_pwrite(fd, buffer, n_blocks*BLCKSZ, 0) != n_blocks*BLCKSZ)
-			{
-				pgstat_report_wait_end();
-				/* if write didn't set errno, assume problem is no disk space */
-				if (errno == 0)
-					errno = ENOSPC;
-				slru_errcause = SLRU_WRITE_FAILED;
-				slru_errno = errno;
-
-				CloseTransientFile(fd);
-				pfree(buffer);
-				return -1;
-			}
-			pgstat_report_wait_end();
-		}
-	}
-	pfree(buffer);
-	return fd;
+	return smgr_read_slru_segment(path, segno);
 }
 
 /*
@@ -701,29 +659,34 @@ SimpleLruDoesPhysicalPageExist(SlruCtl ctl, int pageno)
 	int			fd;
 	bool		result;
 	off_t		endpos;
+	bool		attempted_download = false;
 
 	/* update the stats counter of checked pages */
 	pgstat_count_slru_page_exists(ctl->shared->slru_stats_idx);
 
 	SlruFileName(ctl, path, segno);
 
+ retry_after_download:
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
+		if (errno == ENOENT && !attempted_download)
+		{
+			/* Try to download the file from the pageserver */
+			attempted_download = true;
+			if (SimpleLruDownloadSegment(ctl, pageno, path))
+				goto retry_after_download;
+			errno = ENOENT;
+		}
+
 		/* expected: file doesn't exist */
 		if (errno == ENOENT)
-		{
-			fd = SimpleLruDownloadSegment(ctl, pageno, path);
-			if (fd < 0)
-				return false;
-		}
-		else
-		{
-			/* report error normally */
-			slru_errcause = SLRU_OPEN_FAILED;
-			slru_errno = errno;
-			SlruReportIOError(ctl, pageno, 0);
-		}
+			return false;
+
+		/* report error normally */
+		slru_errcause = SLRU_OPEN_FAILED;
+		slru_errno = errno;
+		SlruReportIOError(ctl, pageno, 0);
 	}
 
 	if ((endpos = lseek(fd, 0, SEEK_END)) < 0)
@@ -764,6 +727,7 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	off_t		offset = rpageno * BLCKSZ;
 	char		path[MAXPGPATH];
 	int			fd;
+	bool		attempted_download = false;
 
 	SlruFileName(ctl, path, segno);
 
@@ -774,33 +738,31 @@ SlruPhysicalReadPage(SlruCtl ctl, int pageno, int slotno)
 	 * SlruPhysicalWritePage).  Hence, if we are InRecovery, allow the case
 	 * where the file doesn't exist, and return zeroes instead.
 	 */
+ retry_after_download:
 	fd = OpenTransientFile(path, O_RDONLY | PG_BINARY);
 	if (fd < 0)
 	{
-		if (errno != ENOENT)
+		if (errno == ENOENT && !attempted_download)
+		{
+			/* Try to download the file from the pageserver */
+			attempted_download = true;
+			if (SimpleLruDownloadSegment(ctl, pageno, path))
+				goto retry_after_download;
+			errno = ENOENT;
+		}
+
+		if (errno != ENOENT || !InRecovery)
 		{
 			slru_errcause = SLRU_OPEN_FAILED;
 			slru_errno = errno;
 			return false;
 		}
-		fd = SimpleLruDownloadSegment(ctl, pageno, path);
-		if (fd < 0)
-		{
-			if (!InRecovery)
-			{
-				slru_errcause = SLRU_OPEN_FAILED;
-				slru_errno = errno;
-				return false;
-			}
-			else
-			{
-				ereport(LOG,
-						(errmsg("file \"%s\" doesn't exist, reading as zeroes",
-								path)));
-				MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
-				return true;
-			}
-		}
+
+		ereport(LOG,
+				(errmsg("file \"%s\" doesn't exist, reading as zeroes",
+						path)));
+		MemSet(shared->page_buffer[slotno], 0, BLCKSZ);
+		return true;
 	}
 
 	errno = 0;

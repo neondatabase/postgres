@@ -47,6 +47,13 @@ static const f_smgr smgr_md = {
 };
 
 /*
+ * SLRU download isn't really part of the smgr API, as SLRUs are not
+ * relations. But we define this here anyway, to keep it close to the smgr
+ * hooks in Neon.
+ */
+read_slru_segment_hook_type read_slru_segment_hook;
+
+/*
  * Each backend has a hashtable that stores all extant SMgrRelation objects.
  * In addition, "unowned" SMgrRelation objects are chained together in a list.
  */
@@ -538,22 +545,6 @@ smgrwrite(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 										buffer, skipFsync);
 }
 
-/*
- * NEON: we do not want to include large pg_xact/multixact files in basebackup and prefer
- * to download them on demand to reduce startup time.
- * If SLRU segment is not found, we try to download it from page server
- *
- * This function returns number of blocks in segment. Usually it should be SLRU_PAGES_PER_SEGMENT but in case
- * of partial segment, it can be smaller. Zero value means that segment doesn't exist.
- * From Postgres point of view empty segment is the same as absent segment.
- */
-int
-smgr_read_slru_segment(SMgrRelation reln, const char* path, int segno, void* buffer)
-{
-	return (*reln->smgr).smgr_read_slru_segment ? (*reln->smgr).smgr_read_slru_segment(reln, path, segno, buffer) : 0;
-}
-
-
 
 /*
  *	smgrwriteback() -- Trigger kernel writeback for the supplied range of
@@ -738,6 +729,25 @@ smgr_end_unlogged_build(SMgrRelation reln)
 {
 	if ((*reln->smgr).smgr_end_unlogged_build)
 		(*reln->smgr).smgr_end_unlogged_build(reln);
+}
+
+/*
+ * NEON: Attempt to download an SLRU file from remote storage.
+ *
+ * To reduce startup time, we don't want to include large pg_xact/multixact
+ * files in the basebackup. Instead, we have this hook to download them on
+ * demand. If an SLRU segment is not found, the code in slru.c calls this to
+ * check if it can be downloaded from the pageserver.
+ *
+ * If the segment is found in remote storage, the hook writes it to the local
+ * file and returns 'true'. If the file is not found, returns 'false'.
+ */
+bool
+smgr_read_slru_segment(const char *path, int segno)
+{
+	if (read_slru_segment_hook)
+		return read_slru_segment_hook(path, segno);
+	return false;
 }
 
 /*

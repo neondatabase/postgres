@@ -128,8 +128,6 @@ typedef struct f_smgr
 	void		(*smgr_start_unlogged_build) (SMgrRelation reln);
 	void		(*smgr_finish_unlogged_build_phase_1) (SMgrRelation reln);
 	void		(*smgr_end_unlogged_build) (SMgrRelation reln);
-
-	int  		(*smgr_read_slru_segment) (SMgrRelation reln, const char *path, int segno, void* buffer);
 } f_smgr;
 
 typedef void (*smgr_init_hook_type) (void);
@@ -138,6 +136,10 @@ extern PGDLLIMPORT smgr_init_hook_type smgr_init_hook;
 extern PGDLLIMPORT smgr_shutdown_hook_type smgr_shutdown_hook;
 extern void smgr_init_standard(void);
 extern void smgr_shutdown_standard(void);
+
+/* NEON: Hook for reading an SLRU segment from e.g. remote storage */
+typedef bool (*read_slru_segment_hook_type) (const char *path, int segno);
+extern read_slru_segment_hook_type read_slru_segment_hook;
 
 // Alternative implementation of calculate_database_size()
 typedef int64 (*dbsize_hook_type) (Oid dbOid);
@@ -184,6 +186,6 @@ extern void smgr_start_unlogged_build(SMgrRelation reln);
 extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
 
-extern int  smgr_read_slru_segment(SMgrRelation reln, const char *path, int segno, void* buffer);
+extern bool smgr_read_slru_segment(const char *path, int segno);
 
 #endif							/* SMGR_H */
