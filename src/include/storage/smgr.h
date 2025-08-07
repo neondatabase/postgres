@@ -155,7 +155,7 @@ extern finish_unlogged_build_phase_1_hook_type finish_unlogged_build_phase_1_hoo
 extern end_unlogged_build_hook_type end_unlogged_build_hook;
 
 /* NEON: Hook for reading an SLRU segment from e.g. remote storage */
-typedef int		(*read_slru_segment_hook_type) (const char *path, int segno, void* buffer);
+typedef bool		(*read_slru_segment_hook_type) (const char *path, int segno, void* buffer);
 extern read_slru_segment_hook_type read_slru_segment_hook;
 
 /* NEON: Alternative implementation of calculate_database_size(), to make it O(1) */
