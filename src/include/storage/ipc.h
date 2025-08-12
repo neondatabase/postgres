@@ -21,6 +21,10 @@
 typedef void (*pg_on_exit_callback) (int code, Datum arg);
 typedef void (*shmem_startup_hook_type) (void);
 
+/* NEON: The hook is called when a backend is about to be signaled. */
+typedef void (*pg_signal_backend_hook_type) ();
+extern PGDLLIMPORT pg_signal_backend_hook_type pg_signal_backend_hook;
+
 /*----------
  * API for handling cleanup that must occur during either ereport(ERROR)
  * or ereport(FATAL) exits from a block of code.  (Typical examples are
