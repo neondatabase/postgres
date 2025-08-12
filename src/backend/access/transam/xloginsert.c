@@ -638,6 +638,8 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 
 		if ((regbuf->flags & REGBUF_WILL_INIT) == REGBUF_WILL_INIT)
 			bkpb.fork_flags |= BKPBLOCK_WILL_INIT;
+		if (regbuf->flags & REGBUF_OPAQUE)
+			bkpb.fork_flags |= BKPBLOCK_OPAQUE;
 
 		/*
 		 * If needs_backup is true or WAL checking is enabled for current
@@ -1186,16 +1188,13 @@ log_newpage(RelFileLocator *rlocator, ForkNumber forknum, BlockNumber blkno,
  */
 void
 log_newpages(RelFileLocator *rlocator, ForkNumber forknum, int num_pages,
-			 BlockNumber *blknos, Page *pages, bool page_std)
+			 BlockNumber *blknos, Page *pages, int flags)
 {
-	int			flags;
 	XLogRecPtr	recptr;
 	int			i;
 	int			j;
 
-	flags = REGBUF_FORCE_IMAGE;
-	if (page_std)
-		flags |= REGBUF_STANDARD;
+	flags |= REGBUF_FORCE_IMAGE;
 
 	/*
 	 * Iterate over all the pages. They are collected into batches of
@@ -1228,7 +1227,7 @@ log_newpages(RelFileLocator *rlocator, ForkNumber forknum, int num_pages,
 			 * The page may be uninitialized. If so, we can't set the LSN
 			 * because that would corrupt the page.
 			 */
-			if (!PageIsNew(pages[j]))
+			if (!(flags & REGBUF_OPAQUE) && !PageIsNew(pages[j]))
 			{
 				PageSetLSN(pages[j], recptr);
 			}
