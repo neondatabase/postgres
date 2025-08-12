@@ -20,12 +20,15 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "postmaster/syslogger.h"
+#include "storage/ipc.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 
+
+pg_signal_backend_hook_type pg_signal_backend_hook = NULL;
 
 /*
  * Send a signal to another backend.
@@ -49,6 +52,9 @@ static int
 pg_signal_backend(int pid, int sig)
 {
 	PGPROC	   *proc = BackendPidGetProc(pid);
+
+	if (pg_signal_backend_hook)
+		pg_signal_backend_hook();
 
 	/*
 	 * BackendPidGetProc returns NULL if the pid isn't valid; but by the time
