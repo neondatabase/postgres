@@ -155,7 +155,7 @@ extern finish_unlogged_build_phase_1_hook_type finish_unlogged_build_phase_1_hoo
 extern end_unlogged_build_hook_type end_unlogged_build_hook;
 
 /* NEON: Hook for reading an SLRU segment from e.g. remote storage */
-typedef int		(*read_slru_segment_hook_type) (const char *path, int segno, void* buffer);
+typedef bool (*read_slru_segment_hook_type) (const char *path, int segno);
 extern read_slru_segment_hook_type read_slru_segment_hook;
 
 /* NEON: Alternative implementation of calculate_database_size(), to make it O(1) */
@@ -217,7 +217,7 @@ extern void	smgr_finish_unlogged_build_phase_1(SMgrRelation reln);
 extern void smgr_end_unlogged_build(SMgrRelation reln);
 
 /* Neon: Allow on-demand download of SLRU segment data */
-extern int  read_slru_segment(const char *path, int segno, void* buffer);
+extern bool smgr_read_slru_segment(const char *path, int segno);
 
 static inline void
 smgrread(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,

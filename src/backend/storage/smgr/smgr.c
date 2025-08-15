@@ -106,6 +106,12 @@ static int NSmgr = 1;
 start_unlogged_build_hook_type start_unlogged_build_hook;
 finish_unlogged_build_phase_1_hook_type finish_unlogged_build_phase_1_hook;
 end_unlogged_build_hook_type end_unlogged_build_hook;
+
+/*
+ * SLRU download isn't really part of the smgr API, as SLRUs are not
+ * relations. But we define this here anyway, to keep it close to the smgr
+ * hooks in Neon.
+ */
 read_slru_segment_hook_type read_slru_segment_hook;
 
 /*
@@ -1089,23 +1095,22 @@ smgr_end_unlogged_build(SMgrRelation reln)
 }
 
 /*
- * NEON: we do not want to include large pg_xact/multixact files in basebackup and prefer
- * to download them on demand to reduce startup time.
- * If SLRU segment is not found, we try to download it from page server
+ * NEON: Attempt to download an SLRU file from remote storage.
  *
- * This function returns number of blocks in segment. Usually it should be SLRU_PAGES_PER_SEGMENT but in case
- * of partial segment, it can be smaller. Zero value means that segment doesn't exist.
- * From Postgres point of view empty segment is the same as absent segment.
+ * To reduce startup time, we don't want to include large pg_xact/multixact
+ * files in the basebackup. Instead, we have this hook to download them on
+ * demand. If an SLRU segment is not found, the code in slru.c calls this to
+ * check if it can be downloaded from the pageserver.
  *
- * This should really be a separate hook, not something that's in the smgr API, but
- * oh well.
+ * If the segment is found in remote storage, the hook writes it to the local
+ * file and returns 'true'. If the file is not found, returns 'false'.
  */
-int
-read_slru_segment(const char* path, int segno, void* buffer)
+bool
+smgr_read_slru_segment(const char *path, int segno)
 {
 	if (read_slru_segment_hook)
-		return read_slru_segment_hook(path, segno, buffer);
-	return 0;
+		return read_slru_segment_hook(path, segno);
+	return false;
 }
 
 /*
