@@ -1681,14 +1681,6 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlotInvalidationCause cause,
 
 		SpinLockRelease(&s->mutex);
 
-		/*
-		 * The logical replication slots shouldn't be invalidated as GUC
-		 * max_slot_wal_keep_size is set to -1 during the binary upgrade. See
-		 * check_old_cluster_for_valid_slots() where we ensure that no
-		 * invalidated before the upgrade.
-		 */
-		Assert(!(*invalidated && SlotIsLogical(s) && IsBinaryUpgrade));
-
 		if (active_pid != 0)
 		{
 			/*
@@ -1813,6 +1805,10 @@ restart:
 		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
 
 		if (!s->in_use)
+			continue;
+
+		/* Prevent invalidation of logical slots during binary upgrade. */
+		if (SlotIsLogical(s) && IsBinaryUpgrade)
 			continue;
 
 		if (InvalidatePossiblyObsoleteSlot(cause, s, oldestLSN, dboid,
