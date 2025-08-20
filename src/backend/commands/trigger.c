@@ -2348,6 +2348,8 @@ FindTriggerIncompatibleWithInheritance(TriggerDesc *trigdesc)
 		{
 			Trigger    *trigger = &trigdesc->triggers[i];
 
+			if (!TRIGGER_FOR_ROW(trigger->tgtype))
+				continue;
 			if (trigger->tgoldtable != NULL || trigger->tgnewtable != NULL)
 				return trigger->tgname;
 		}
@@ -2606,6 +2608,15 @@ ExecARInsertTriggers(EState *estate, ResultRelInfo *relinfo,
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
 
+	if (relinfo->ri_FdwRoutine && transition_capture &&
+		transition_capture->tcs_insert_new_table)
+	{
+		Assert(relinfo->ri_RootResultRelInfo);
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot collect transition tuples from child foreign tables")));
+	}
+
 	if ((trigdesc && trigdesc->trig_insert_after_row) ||
 		(transition_capture && transition_capture->tcs_insert_new_table))
 		AfterTriggerSaveEvent(estate, relinfo, NULL, NULL,
@@ -2863,6 +2874,15 @@ ExecARDeleteTriggers(EState *estate,
 					 bool is_crosspart_update)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
+
+	if (relinfo->ri_FdwRoutine && transition_capture &&
+		transition_capture->tcs_delete_old_table)
+	{
+		Assert(relinfo->ri_RootResultRelInfo);
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot collect transition tuples from child foreign tables")));
+	}
 
 	if ((trigdesc && trigdesc->trig_delete_after_row) ||
 		(transition_capture && transition_capture->tcs_delete_old_table))
@@ -3205,6 +3225,16 @@ ExecARUpdateTriggers(EState *estate, ResultRelInfo *relinfo,
 					 bool is_crosspart_update)
 {
 	TriggerDesc *trigdesc = relinfo->ri_TrigDesc;
+
+	if (relinfo->ri_FdwRoutine && transition_capture &&
+		(transition_capture->tcs_update_old_table ||
+		 transition_capture->tcs_update_new_table))
+	{
+		Assert(relinfo->ri_RootResultRelInfo);
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot collect transition tuples from child foreign tables")));
+	}
 
 	if ((trigdesc && trigdesc->trig_update_after_row) ||
 		(transition_capture &&
