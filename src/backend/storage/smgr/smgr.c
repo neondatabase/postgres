@@ -1106,7 +1106,7 @@ smgr_end_unlogged_build(SMgrRelation reln)
  * file and returns 'true'. If the file is not found, returns 'false'.
  */
 bool
-smgr_read_slru_segment(const char *path, int segno)
+smgr_read_slru_segment(const char *path, int64 segno)
 {
 	if (read_slru_segment_hook)
 		return read_slru_segment_hook(path, segno);

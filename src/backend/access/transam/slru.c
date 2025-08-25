@@ -737,10 +737,10 @@ SlruInternalWritePage(SlruCtl ctl, int slotno, SlruWriteAll fdata)
  *   ereports if some other error happened
  */
 static bool
-SimpleLruDownloadSegment(SlruCtl ctl, int pageno, char const *path)
+SimpleLruDownloadSegment(SlruCtl ctl, int64 pageno, char const *path)
 {
 	SlruShared	shared = ctl->shared;
-	int			segno;
+	int64		segno;
 
 	/* If page is greater than latest written page, then do not try to download segment from server */
 	if (ctl->PagePrecedes(pg_atomic_read_u64(&shared->latest_page_number), pageno))
