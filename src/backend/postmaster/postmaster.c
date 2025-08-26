@@ -3475,6 +3475,34 @@ signal_child(PMChild *pmchild, int signal)
 #endif
 }
 
+static void
+adjust_bkendtype_if_needed(PMChild *bp, BackendTypeMask targetMask)
+{
+	/*
+	 * If we need to distinguish between B_BACKEND and B_WAL_SENDER, check
+	 * if any B_BACKEND backends have recently announced that they are
+	 * actually WAL senders.
+	 */
+	if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BACKEND) &&
+		bp->bkend_type == B_BACKEND)
+	{
+		if (IsPostmasterChildWalSender(bp->child_slot))
+			bp->bkend_type = B_WAL_SENDER;
+	}
+
+	/*
+	 * If we need to distinguish between B_BG_WORKER and B_WAL_SENDER,
+	 * check if any B_BG_WORKER backends have recently announced that
+	 * they are actually WAL senders.
+	 */
+	if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BG_WORKER) &&
+		bp->bkend_type == B_BG_WORKER)
+	{
+		if (IsPostmasterChildWalSender(bp->child_slot))
+			bp->bkend_type = B_WAL_SENDER;
+	}
+}
+
 /*
  * Send a signal to the targeted children.
  */
@@ -3488,29 +3516,7 @@ SignalChildren(int signal, BackendTypeMask targetMask)
 	{
 		PMChild    *bp = dlist_container(PMChild, elem, iter.cur);
 
-		/*
-		 * If we need to distinguish between B_BACKEND and B_WAL_SENDER, check
-		 * if any B_BACKEND backends have recently announced that they are
-		 * actually WAL senders.
-		 */
-		if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BACKEND) &&
-			bp->bkend_type == B_BACKEND)
-		{
-			if (IsPostmasterChildWalSender(bp->child_slot))
-				bp->bkend_type = B_WAL_SENDER;
-		}
-
-		/*
-		 * If we need to distinguish between B_BG_WORKER and B_WAL_SENDER,
-		 * check if any B_BG_WORKER backends have recently announced that
-		 * they are actually WAL senders.
-		 */
-		if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BG_WORKER) &&
-			bp->bkend_type  == B_BG_WORKER)
-		{
-			if (IsPostmasterChildWalSender(bp->child_slot))
-				bp->bkend_type = B_WAL_SENDER;
-		}
+		adjust_bkendtype_if_needed(bp, targetMask);
 
 		if (!btmask_contains(targetMask, bp->bkend_type))
 			continue;
@@ -3934,29 +3940,7 @@ CountChildren(BackendTypeMask targetMask)
 	{
 		PMChild    *bp = dlist_container(PMChild, elem, iter.cur);
 
-		/*
-		 * If we need to distinguish between B_BACKEND and B_WAL_SENDER, check
-		 * if any B_BACKEND backends have recently announced that they are
-		 * actually WAL senders.
-		 */
-		if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BACKEND) &&
-			bp->bkend_type == B_BACKEND)
-		{
-			if (IsPostmasterChildWalSender(bp->child_slot))
-				bp->bkend_type = B_WAL_SENDER;
-		}
-
-		/*
-		 * If we need to distinguish between B_BG_WORKER and B_WAL_SENDER,
-		 * check if any B_BG_WORKER backends have recently announced that
-		 * they are actually WAL senders.
-		 */
-		if (btmask_contains(targetMask, B_WAL_SENDER) != btmask_contains(targetMask, B_BG_WORKER) &&
-			bp->bkend_type == B_BG_WORKER)
-		{
-			if (IsPostmasterChildWalSender(bp->child_slot))
-				bp->bkend_type = B_WAL_SENDER;
-		}
+		adjust_bkendtype_if_needed(bp, targetMask);
 
 		if (!btmask_contains(targetMask, bp->bkend_type))
 			continue;
