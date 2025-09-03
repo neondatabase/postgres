@@ -1659,29 +1659,33 @@ FinishWalRecovery(void)
 			char	   *page = palloc0(offs);
 			XLogPageHeader xlogPageHdr = (XLogPageHeader) page;
 
-			xlogPageHdr->xlp_pageaddr = pageBeginPtr;
-			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
-			xlogPageHdr->xlp_tli = recoveryTargetTLI;
-			xlogPageHdr->xlp_info = 0;
-			/*
-			 * If we start writing with offset from page beginning, pretend in
-			 * page header there is a record ending where actual data will
-			 * start.
-			 */
-			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
-			if (xlogPageHdr->xlp_rem_len > 0)
-				xlogPageHdr->xlp_info |= XLP_FIRST_IS_CONTRECORD;
-			readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
-
-			if (isLongHeader)
+			memcpy(page, xlogreader->readBuf, offs);
+			if (xlogPageHdr->xlp_magic != XLOG_PAGE_MAGIC)
 			{
-				XLogLongPageHeader longHdr = (XLogLongPageHeader) page;
+				xlogPageHdr->xlp_pageaddr = pageBeginPtr;
+				xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+				xlogPageHdr->xlp_tli = recoveryTargetTLI;
+				xlogPageHdr->xlp_info = 0;
+				/*
+				 * If we start writing with offset from page beginning, pretend in
+				 * page header there is a record ending where actual data will
+				 * start.
+				 */
+				xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+				if (xlogPageHdr->xlp_rem_len > 0)
+					xlogPageHdr->xlp_info |= XLP_FIRST_IS_CONTRECORD;
+				readOff = XLogSegmentOffset(pageBeginPtr, wal_segment_size);
 
-				longHdr->xlp_sysid = GetSystemIdentifier();
-				longHdr->xlp_seg_size = wal_segment_size;
-				longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+				if (isLongHeader)
+				{
+					XLogLongPageHeader longHdr = (XLogLongPageHeader) page;
 
-				xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+					longHdr->xlp_sysid = GetSystemIdentifier();
+					longHdr->xlp_seg_size = wal_segment_size;
+					longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+
+					xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+				}
 			}
 			result->lastPageBeginPtr = pageBeginPtr;
 			result->lastPage = page;

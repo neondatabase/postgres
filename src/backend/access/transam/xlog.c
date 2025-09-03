@@ -5539,7 +5539,7 @@ StartupXLOG(void)
 	 * In a normal crash recovery, we can just extend the timeline we were in.
 	 */
 	newTLI = endOfRecoveryInfo->lastRecTLI;
-	if (ArchiveRecoveryRequested)
+	if (ArchiveRecoveryRequested && !NeonRecoveryRequested)
 	{
 		newTLI = findNewestTimeLine(recoveryTargetTLI) + 1;
 		ereport(LOG,
