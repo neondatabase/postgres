@@ -8037,31 +8037,34 @@ StartupXLOG(void)
 			char	   *page = XLogCtl->pages + idx * XLOG_BLCKSZ;
 			XLogPageHeader xlogPageHdr = (XLogPageHeader) page;
 
-			xlogPageHdr->xlp_pageaddr = lastPage;
-			xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
-			xlogPageHdr->xlp_tli = ThisTimeLineID;
-			xlogPageHdr->xlp_info = 0;
-			/*
-			 * If we start writing with offset from page beginning, pretend in
-			 * page header there is a record ending where actual data will
-			 * start.
-			 */
-			xlogPageHdr->xlp_rem_len = offs - lastPageSize;
-			if (xlogPageHdr->xlp_rem_len > 0)
-				xlogPageHdr->xlp_info |= XLP_FIRST_IS_CONTRECORD;
-			readOff = XLogSegmentOffset(lastPage, wal_segment_size);
-
-			if (isLongHeader)
+			memcpy(page, xlogreader->readBuf, offs);
+			if (xlogPageHdr->xlp_magic != XLOG_PAGE_MAGIC)
 			{
-				XLogLongPageHeader longHdr = (XLogLongPageHeader) page;
+				xlogPageHdr->xlp_pageaddr = lastPage;
+				xlogPageHdr->xlp_magic = XLOG_PAGE_MAGIC;
+				xlogPageHdr->xlp_tli = ThisTimeLineID;
+				xlogPageHdr->xlp_info = 0;
+				/*
+				 * If we start writing with offset from page beginning, pretend in
+				 * page header there is a record ending where actual data will
+				 * start.
+				 */
+				xlogPageHdr->xlp_rem_len = offs - lastPageSize;
+				if (xlogPageHdr->xlp_rem_len > 0)
+					xlogPageHdr->xlp_info |= XLP_FIRST_IS_CONTRECORD;
+				readOff = XLogSegmentOffset(lastPage, wal_segment_size);
 
-				longHdr->xlp_sysid = GetSystemIdentifier();
-				longHdr->xlp_seg_size = wal_segment_size;
-				longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+				if (isLongHeader)
+				{
+					XLogLongPageHeader longHdr = (XLogLongPageHeader) page;
 
-				xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+					longHdr->xlp_sysid = GetSystemIdentifier();
+					longHdr->xlp_seg_size = wal_segment_size;
+					longHdr->xlp_xlog_blcksz = XLOG_BLCKSZ;
+
+					xlogPageHdr->xlp_info |= XLP_LONG_HEADER;
+				}
 			}
-
 			elog(LOG, "Continue writing WAL at %X/%X", LSN_FORMAT_ARGS(EndRecPtr));
 
 			// FIXME: should we unlink neon.signal?
@@ -8151,7 +8154,7 @@ StartupXLOG(void)
 	 * In a normal crash recovery, we can just extend the timeline we were in.
 	 */
 	PrevTimeLineID = ThisTimeLineID;
-	if (ArchiveRecoveryRequested)
+	if (ArchiveRecoveryRequested && !NeonRecoveryRequested)
 	{
 		char		reason[200];
 		char		recoveryPath[MAXPGPATH];
