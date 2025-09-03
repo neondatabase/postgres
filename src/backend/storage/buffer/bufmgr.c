@@ -4362,6 +4362,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 
 		if (io_object == IOOBJECT_TEMP_RELATION)
 			relpersistence = RELPERSISTENCE_TEMP;
+		else if (buf->tag.forkNum == INIT_FORKNUM)
+			relpersistence = RELPERSISTENCE_UNLOGGED;
 		else
 		{
 			Assert(io_object == IOOBJECT_RELATION);
