@@ -258,8 +258,8 @@ ReleasePostmasterChildSlot(PMChild *pmchild)
 			 * WalSender, so make sure we release the child back to the right
 			 * pool.
 			 */
-			if (pmchild->pid < pool->first_slotno &&
-				pmchild->pid >= pool->first_slotno + pool->size)
+			if (pmchild->child_slot >= pmchild_pools[B_BG_WORKER].first_slotno &&
+				pmchild->child_slot < pmchild_pools[B_BG_WORKER].first_slotno + pmchild_pools[B_BG_WORKER].size)
 			{
 				pool = &pmchild_pools[B_BG_WORKER];
 			}
