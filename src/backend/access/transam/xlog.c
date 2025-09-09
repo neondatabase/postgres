@@ -150,9 +150,6 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
 restore_running_xacts_callback_t restore_running_xacts_callback = NULL;
 
 /* NEON: Hooks to facilitate the last written LSN cache */
-set_lwlsn_block_hook_type set_lwlsn_block_hook = NULL;
-set_lwlsn_block_range_hook_type set_lwlsn_block_range_hook = NULL;
-set_lwlsn_block_v_hook_type set_lwlsn_block_v_hook = NULL;
 set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
 set_max_lwlsn_hook_type set_max_lwlsn_hook = NULL;

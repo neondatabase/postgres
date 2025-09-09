@@ -456,17 +456,6 @@ gist_indexsortbuild(GISTBuildState *state)
 	memcpy(rootbuf, levelstate->pages[0], BLCKSZ);
 	smgr_bulk_write(state->bulkstate, GIST_ROOT_BLKNO, rootbuf, true);
 
-	if (RelationNeedsWAL(state->indexrel))
-	{
-		XLogRecPtr lsn = GetRedoRecPtr();
-
-		if (set_lwlsn_block_hook)
-			set_lwlsn_block_hook(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator,
-									MAIN_FORKNUM, GIST_ROOT_BLKNO);
-		if (set_lwlsn_relation_hook)
-			set_lwlsn_relation_hook(lsn, state->indexrel->rd_smgr->smgr_rlocator.locator, MAIN_FORKNUM);
-	}
-
 	pfree(levelstate);
 
 	smgr_bulk_finish(state->bulkstate);
