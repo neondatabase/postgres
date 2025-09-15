@@ -1856,7 +1856,22 @@ PerformWalRecovery(void)
 	 * checkpoint record itself, if it's a shutdown checkpoint).
 	 */
 	SpinLockAcquire(&XLogRecoveryCtl->info_lck);
-	if (RedoStartLSN < CheckPointLoc)
+	if (NeonRecoveryRequested)
+	{
+		/*
+		 * In Neon recovery mode, we can start from any record, not only at a
+		 * checkpoint. The Neon signal file includes an explicit "PREV LSN"
+		 * field, which is the LSN of the previous record, before the point at
+		 * which we start up. Initialize lastReplayedRecPtr from that, as if
+		 * we had just replayed that record.
+		 */
+		Assert(xlogreader->ReadRecPtr == InvalidXLogRecPtr);
+		Assert(xlogreader->EndRecPtr == RedoStartLSN);
+		XLogRecoveryCtl->lastReplayedEndRecPtr = RedoStartLSN;
+		XLogRecoveryCtl->lastReplayedReadRecPtr = neonLastRec;
+		XLogRecoveryCtl->lastReplayedTLI = CheckPointTLI;
+	}
+	else if (RedoStartLSN < CheckPointLoc)
 	{
 		XLogRecoveryCtl->lastReplayedReadRecPtr = InvalidXLogRecPtr;
 		XLogRecoveryCtl->lastReplayedEndRecPtr = RedoStartLSN;
