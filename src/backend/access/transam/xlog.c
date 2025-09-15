@@ -10156,8 +10156,16 @@ CreateRestartPoint(int flags)
 			ControlFile->time = (pg_time_t) time(NULL);
 			UpdateControlFile();
 			LWLockRelease(ControlFileLock);
+			// Flush dirty buffers.
+			CheckPointBuffers(flags);
 		}
 		return false;
+	}
+
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	{
+		// Flush dirty buffers.
+		CheckPointBuffers(flags);
 	}
 
 	/*
