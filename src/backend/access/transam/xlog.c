@@ -7843,8 +7843,15 @@ CreateRestartPoint(int flags)
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 			UpdateControlFile();
 			LWLockRelease(ControlFileLock);
+			// Flush dirty buffers.
+			CheckPointBuffers(flags);			
 		}
 		return false;
+	}
+	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	{
+		// Flush dirty buffers.
+		CheckPointBuffers(flags);
 	}
 
 	/*
