@@ -153,6 +153,7 @@ restore_running_xacts_callback_t restore_running_xacts_callback;
 set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
 set_max_lwlsn_hook_type set_max_lwlsn_hook = NULL;
+flush_dirty_buffers_hook_type flush_dirty_buffers_hook = NULL;
 
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
@@ -7222,16 +7223,17 @@ CreateRestartPoint(int flags)
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 			UpdateControlFile();
 			LWLockRelease(ControlFileLock);
-			// Flush dirty buffers.
-			CheckPointBuffers(flags);			
+			if (flush_dirty_buffers_hook)
+			{
+				flush_dirty_buffers_hook(flags);
+			}
 		}
 		return false;
 	}
 
-	if (flags & CHECKPOINT_IS_SHUTDOWN)
+	if (flush_dirty_buffers_hook)
 	{
-		// Flush dirty buffers.
-		CheckPointBuffers(flags);
+		flush_dirty_buffers_hook(flags);
 	}
 
 	/*
