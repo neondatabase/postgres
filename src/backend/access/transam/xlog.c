@@ -7386,9 +7386,15 @@ CreateRestartPoint(int flags)
 			ControlFile->state = DB_SHUTDOWNED_IN_RECOVERY;
 			UpdateControlFile();
 			LWLockRelease(ControlFileLock);
+			// CheckPointBuffers(flags);
 		}
 		return false;
 	}
+
+	// if (flags & CHECKPOINT_IS_SHUTDOWN)
+	// {
+	// 	CheckPointBuffers(flags);
+	// }
 
 	/*
 	 * Update the shared RedoRecPtr so that the startup process can calculate
