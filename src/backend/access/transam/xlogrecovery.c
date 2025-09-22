@@ -1623,7 +1623,7 @@ FinishWalRecovery(void)
 	 * We cannot start generating new WAL if we don't have a valid prev-LSN
 	 * to use for the first new WAL record. (Shouldn't happen.)
 	 */
-	if (NeonRecoveryRequested &&!neonWriteOk)
+	if (NeonRecoveryRequested && !neonWriteOk)
 		ereport(ERROR,
 				(errmsg("cannot start in read-write mode from this base backup")));
 
