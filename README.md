@@ -2,6 +2,7 @@ This repository holds Neon-specific changes to PostgreSQL
 sources. This main branch is a dummy and only contains this
 README. The active branches are:
 
+- [REL_18_STABLE_neon](https://github.com/neondatabase/postgres/tree/REL_18_STABLE_neon)
 - [REL_17_STABLE_neon](https://github.com/neondatabase/postgres/tree/REL_17_STABLE_neon)
 - [REL_16_STABLE_neon](https://github.com/neondatabase/postgres/tree/REL_16_STABLE_neon)
 - [REL_15_STABLE_neon](https://github.com/neondatabase/postgres/tree/REL_15_STABLE_neon)
