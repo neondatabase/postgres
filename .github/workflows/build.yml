@@ -15,6 +15,7 @@ jobs:
     steps:
       - name: Install Postgres Build Dependencies
         run: |
+          sudo apt-get update
           sudo apt-get install build-essential coreutils libreadline-dev zlib1g-dev flex bison libxml2-dev libxslt-dev libssl-dev libxml2-utils xsltproc git
 
       - name: Checkout postgres repository
