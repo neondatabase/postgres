@@ -145,6 +145,18 @@ struct ReadStream
 };
 
 /*
+ * NEON: We don't benefit from the OS readahead that callers with
+ * READ_STREAM_SEQUENTIAL expect, so we disable that flag.
+ */
+#ifndef KERNEL_READ_AHEAD_SUPPORT
+#ifdef NEON_SMGR
+#define KERNEL_READ_AHEAD_SUPPORT 0
+#else
+#define KERNEL_READ_AHEAD_SUPPORT 1
+#endif
+#endif
+
+/*
  * Return a pointer to the per-buffer data by index.
  */
 static inline void *
@@ -658,6 +670,10 @@ read_stream_begin_impl(int flags,
 	stream->sync_mode = io_method == IOMETHOD_SYNC;
 	stream->batch_mode = flags & READ_STREAM_USE_BATCHING;
 
+	#if !KERNEL_READAHEAD_SUPPORT
+	flags &= ~READ_STREAM_SEQUENTIAL;
+	#endif
+
 #ifdef USE_PREFETCH
 
 	/*
@@ -936,9 +952,11 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		 * issuing advice for, cancel that until the next jump.  The kernel
 		 * will see the sequential preadv() pattern starting here.
 		 */
+		#if KERNEL_READAHEAD_SUPPORT
 		if (stream->advice_enabled &&
 			stream->ios[io_index].op.blocknum == stream->seq_until_processed)
 			stream->seq_until_processed = InvalidBlockNumber;
+		#endif
 	}
 
 	/*
