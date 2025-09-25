@@ -115,6 +115,8 @@ static SimpleOidList schema_include_oids = {NULL, NULL};
 static SimpleStringList schema_exclude_patterns = {NULL, NULL};
 static SimpleOidList schema_exclude_oids = {NULL, NULL};
 
+static SimpleStringList schema_include_no_create_patterns = {NULL, NULL};
+
 static SimpleStringList table_include_patterns = {NULL, NULL};
 static SimpleOidList table_include_oids = {NULL, NULL};
 static SimpleStringList table_exclude_patterns = {NULL, NULL};
@@ -415,6 +417,7 @@ main(int argc, char **argv)
 		{"on-conflict-do-nothing", no_argument, &dopt.do_nothing, 1},
 		{"rows-per-insert", required_argument, NULL, 10},
 		{"include-foreign-data", required_argument, NULL, 11},
+		{"schema-no-create", required_argument, NULL, 12},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -623,6 +626,16 @@ main(int argc, char **argv)
 			case 11:			/* include foreign data */
 				simple_string_list_append(&foreign_servers_include_patterns,
 										  optarg);
+				break;
+
+			case 12:			/* schema-no-create */
+				simple_string_list_append(&schema_include_no_create_patterns,
+											optarg);
+				/*
+				 * Also include the schema in the regular include list,
+				 * because we need to dump the data.
+				 */
+				simple_string_list_append(&schema_include_patterns, optarg);
 				break;
 
 			default:
@@ -1049,6 +1062,7 @@ help(const char *progname)
 	printf(_("  --on-conflict-do-nothing     add ON CONFLICT DO NOTHING to INSERT commands\n"));
 	printf(_("  --quote-all-identifiers      quote all identifiers, even if not key words\n"));
 	printf(_("  --rows-per-insert=NROWS      number of rows per INSERT; implies --inserts\n"));
+	printf(_("  --schema-no-create=SCHEMA    do not create the specified schema(s)\n"));
 	printf(_("  --section=SECTION            dump named section (pre-data, data, or post-data)\n"));
 	printf(_("  --serializable-deferrable    wait until the dump can run without anomalies\n"));
 	printf(_("  --snapshot=SNAPSHOT          use given snapshot for the dump\n"));
@@ -1633,6 +1647,8 @@ selectDumpableNamespace(NamespaceInfo *nsinfo, Archive *fout)
 	 * DUMP_COMPONENT_DEFINITION, this value is irrelevant.)
 	 */
 	nsinfo->create = true;
+	if (simple_string_list_member(&schema_include_no_create_patterns, nsinfo->dobj.name))
+		nsinfo->create = false;
 
 	/*
 	 * If specific tables are being dumped, do not dump any complete
