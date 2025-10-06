@@ -2277,6 +2277,11 @@ pg_stat_user_tables| SELECT relid,
     total_autoanalyze_time
    FROM pg_stat_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
+pg_stat_wait_event| SELECT type,
+    name,
+    counts,
+    stats_reset
+   FROM pg_stat_get_wait_event() s(type, name, counts, stats_reset);
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,

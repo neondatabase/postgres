@@ -456,6 +456,12 @@ typedef struct PgStatShared_Backend
 	PgStat_Backend stats;
 } PgStatShared_Backend;
 
+typedef struct PgStatShared_WaitEvent
+{
+	PgStatShared_Common header;
+	PgStat_WaitEvent stats;
+} PgStatShared_WaitEvent;
+
 /*
  * Central shared memory entry for the cumulative stats system.
  *
@@ -784,6 +790,15 @@ extern PGDLLIMPORT bool pgstat_report_fixed;
 
 /* Backend-local stats state */
 extern PGDLLIMPORT PgStat_LocalState pgStatLocal;
+
+/*
+ * Functions in pgstat_waitevent.c
+ */
+
+extern bool pgstat_wait_event_flush_cb(bool nowait);
+extern void pgstat_wait_event_reset_timestamp_cb(PgStatShared_Common *header,
+												 TimestampTz ts);
+extern bool pgstat_wait_event_have_pending_cb(void);
 
 /*
  * Implementation of inline functions declared above.

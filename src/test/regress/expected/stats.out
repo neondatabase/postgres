@@ -237,6 +237,54 @@ FROM prevstats AS pr;
 
 COMMIT;
 ----
+-- Basic tests for wait events statistics
+---
+-- ensure there is no wait events missing in pg_stat_wait_event
+select count(1) > 0 from pg_stat_wait_event
+  where name not in (select name from pg_wait_events
+                     where type <> 'InjectionPoint' or type <> 'Extension')
+  and  type <> 'Extension';
+ ?column? 
+----------
+ f
+(1 row)
+
+-- Test that reset_shared with wait_event specified as the stats type works
+SELECT count(1) AS counts_wait_event FROM pg_stat_wait_event WHERE counts > 0 \gset
+SELECT :counts_wait_event > 0;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT pg_stat_reset_shared('wait_event');
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT count(1) < :counts_wait_event FROM pg_stat_wait_event WHERE counts > 0;
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Test wait event counters are incremented
+CREATE TABLE wait_event_stats_test(id serial);
+INSERT INTO wait_event_stats_test DEFAULT VALUES;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT counts > 0 FROM pg_stat_wait_event WHERE name = 'WalWrite' and type = 'IO';
+ ?column? 
+----------
+ t
+(1 row)
+
+----
 -- Basic tests for track_functions
 ---
 CREATE FUNCTION stats_test_func1() RETURNS VOID LANGUAGE plpgsql AS $$BEGIN END;$$;

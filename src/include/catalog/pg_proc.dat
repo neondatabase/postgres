@@ -6041,6 +6041,15 @@
   proargnames => '{name,blks_zeroed,blks_hit,blks_read,blks_written,blks_exists,flushes,truncates,stats_reset}',
   prosrc => 'pg_stat_get_slru' },
 
+{ oid => '8962', descr => 'statistics: information about wait events',
+  proname => 'pg_stat_get_wait_event', prorows => '300', proisstrict => 'f',
+  proretset => 't', provolatile => 's', proparallel => 'r',
+  prorettype => 'record', proargtypes => '',
+  proallargtypes => '{text,text,int8,timestamptz}',
+  proargmodes => '{o,o,o,o}',
+  proargnames => '{type,name,counts,stats_reset}',
+  prosrc => 'pg_stat_get_wait_event' },
+
 { oid => '2978', descr => 'statistics: number of function calls',
   proname => 'pg_stat_get_function_calls', provolatile => 's',
   proparallel => 'r', prorettype => 'int8', proargtypes => 'oid',
