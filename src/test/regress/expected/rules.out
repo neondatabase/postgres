@@ -2280,8 +2280,9 @@ pg_stat_user_tables| SELECT relid,
 pg_stat_wait_event| SELECT type,
     name,
     counts,
+    total_time,
     stats_reset
-   FROM pg_stat_get_wait_event() s(type, name, counts, stats_reset);
+   FROM pg_stat_get_wait_event() s(type, name, counts, total_time, stats_reset);
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,

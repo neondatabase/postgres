@@ -20,6 +20,8 @@
 #include "utils/pgstat_internal.h"
 
 bool		have_wait_event_stats = false;
+instr_time pgstat_wait_start_time;
+bool track_wait_event_timing = true;
 
 static PgStat_PendingWaitevent PendingWaitEventStats;
 
@@ -69,10 +71,12 @@ waitEventGetCounter(int64 *waitEventStats, int classId, int eventId)
  * Increment a wait event stat counter.
  */
 inline void
-waitEventIncrementCounter(uint32 wait_event_info)
+waitEventIncrementCounter(uint32 wait_event_info, instr_time start_time)
 {
+	instr_time	wait_time;
 	DecodedWaitInfo waitInfo;
 	PgStat_Counter *counter;
+	PgStat_Counter *total_time;
 	uint32		classId;
 	uint16		eventId;
 
@@ -100,6 +104,16 @@ waitEventIncrementCounter(uint32 wait_event_info)
 								  waitInfo.eventId);
 
 	(*counter)++;
+
+	
+	if (unlikely(track_wait_event_timing))
+	{
+		total_time = waitEventGetCounter(PendingWaitEventStats.total_time, waitInfo.classId,
+								  	     waitInfo.eventId);
+		INSTR_TIME_SET_CURRENT(wait_time);
+		INSTR_TIME_SUBTRACT(wait_time, start_time);
+		(*total_time) += INSTR_TIME_GET_MICROSEC(wait_time);
+	}
 
 	have_wait_event_stats = true;
 }
@@ -167,6 +181,9 @@ pgstat_wait_event_flush_cb(bool nowait)
 			PgStatShared_WaitEvent *shwaiteventent;
 			PgStat_Counter *shstat;
 			PgStat_Counter pending_counter;
+
+			PgStat_Counter *shstat_time;
+			PgStat_Counter pending_time;			
 			uint32		wait_event_info;
 
 			name = get_wait_event_name_from_index(classOffset + eventId);
@@ -191,6 +208,10 @@ pgstat_wait_event_flush_cb(bool nowait)
 			pending_counter = PendingWaitEventStats.counts[classOffset + eventId];
 
 			*shstat += pending_counter;
+
+			shstat_time = &shwaiteventent->stats.total_time;
+			pending_time = PendingWaitEventStats.total_time[classOffset + eventId];
+			*shstat_time += pending_time;
 
 			pgstat_unlock_entry(entry_ref);
 		}

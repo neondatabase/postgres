@@ -512,6 +512,7 @@ typedef struct PgStat_WaitEvent
 {
 	TimestampTz stat_reset_timestamp;
 	PgStat_Counter counts;
+	PgStat_Counter total_time;
 } PgStat_WaitEvent;
 
 /* ---------
@@ -521,6 +522,7 @@ typedef struct PgStat_WaitEvent
 typedef struct PgStat_PendingWaitEvent
 {
 	PgStat_Counter counts[NB_WAITCLASSTABLE_SIZE];
+	PgStat_Counter total_time[NB_WAITCLASSTABLE_SIZE];
 } PgStat_PendingWaitevent;
 
 /*

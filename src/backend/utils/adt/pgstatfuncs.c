@@ -1749,7 +1749,7 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_wait_event(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_WAIT_EVENTS_COLS	4
+#define PG_STAT_GET_WAIT_EVENTS_COLS	5
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	int			i,
 				j;
@@ -1783,7 +1783,8 @@ pg_stat_get_wait_event(PG_FUNCTION_ARGS)
 			values[0] = PointerGetDatum(cstring_to_text(class->className));
 			values[1] = PointerGetDatum(cstring_to_text(name));
 			values[2] = Int64GetDatum(stats->counts);
-			values[3] = TimestampTzGetDatum(stats->stat_reset_timestamp);
+			values[3] = Int64GetDatum(stats->total_time);
+			values[4] = TimestampTzGetDatum(stats->stat_reset_timestamp);
 
 			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 		}

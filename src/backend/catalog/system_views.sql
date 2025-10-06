@@ -947,6 +947,7 @@ CREATE VIEW pg_stat_wait_event AS
             s.type,
             s.name,
             s.counts,
+            s.total_time,
             s.stats_reset
     FROM pg_stat_get_wait_event() s;
 
