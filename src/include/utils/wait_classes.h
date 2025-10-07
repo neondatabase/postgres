@@ -25,5 +25,6 @@
 #define PG_WAIT_TIMEOUT				0x09000000U
 #define PG_WAIT_IO					0x0A000000U
 #define PG_WAIT_INJECTIONPOINT		0x0B000000U
+#define PG_WAIT_NEON		        0x0C000000U
 
 #endif							/* WAIT_CLASSES_H */
