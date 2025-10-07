@@ -22,6 +22,7 @@
 bool		have_wait_event_stats = false;
 instr_time pgstat_wait_start_time;
 bool track_wait_event_timing = true;
+int  track_wait_event_pid = -1;
 
 static PgStat_PendingWaitevent PendingWaitEventStats;
 
