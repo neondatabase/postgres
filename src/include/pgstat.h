@@ -816,6 +816,11 @@ extern PgStat_WaitEvent *pgstat_fetch_stat_wait_event(uint32 wait_event_info);
 extern void pgstat_report_wal(bool force);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 
+/*
+ * Functions in pgstatfuncs.c
+ */
+
+// extern Datum pg_stat_get_wait_event(PG_FUNCTION_ARGS);
 
 /*
  * Variables in pgstat.c

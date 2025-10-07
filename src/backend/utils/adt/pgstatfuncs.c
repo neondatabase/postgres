@@ -1743,56 +1743,6 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
-/*
- * Returns statistics of wait events.
- */
-Datum
-pg_stat_get_wait_event(PG_FUNCTION_ARGS)
-{
-#define PG_STAT_GET_WAIT_EVENTS_COLS	5
-	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	int			i,
-				j;
-	PgStat_WaitEvent *stats;
-
-	InitMaterializedSRF(fcinfo, 0);
-
-	for (i = 0; i < NB_WAITCLASSTABLE_ENTRIES; i++)
-	{
-		/* for each row */
-		Datum		values[PG_STAT_GET_WAIT_EVENTS_COLS] = {0};
-		bool		nulls[PG_STAT_GET_WAIT_EVENTS_COLS] = {0};
-		WaitClassTableEntry *class = &WaitClassTable[i];
-		int			numWaitEvents;
-
-		numWaitEvents = class->numberOfEvents;
-
-		for (j = 0; j < numWaitEvents; j++)
-		{
-			const char *name;
-			uint32		wait_event_info;
-
-			name = get_wait_event_name_from_index(class->offSet + j);
-
-			if (!name)
-				continue;
-
-			wait_event_info = ENCODE_WAIT_EVENT_INFO(i, j);
-			stats = pgstat_fetch_stat_wait_event(wait_event_info);
-
-			values[0] = PointerGetDatum(cstring_to_text(class->className));
-			values[1] = PointerGetDatum(cstring_to_text(name));
-			values[2] = Int64GetDatum(stats->counts);
-			values[3] = Int64GetDatum(stats->total_time);
-			values[4] = TimestampTzGetDatum(stats->stat_reset_timestamp);
-
-			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
-		}
-	}
-
-	return (Datum) 0;
-}
-
 #define PG_STAT_GET_XACT_RELENTRY_INT64(stat)			\
 Datum													\
 CppConcat(pg_stat_get_xact_,stat)(PG_FUNCTION_ARGS)		\
