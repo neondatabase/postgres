@@ -20,20 +20,31 @@
 typedef struct HIPHashHeader HIPHashHeader;
 typedef int32 HIPEntryIndex;
 
-Size HIPGetSize(int nelements);
-void HIPInit(HIPHashHeader *header, int nelements, int locktranche);
+#define HIPNotPresent (-1)
+#define HIPTryWithLocks (-2)
 
-/* Get this element from the table. No locks involved. */
-HIPEntryIndex HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash);
+Size HIPGetSize(int nelements);
+void HIPInit(HIPHashHeader *header, int nelements, int locktranche,
+			 void *refarray, Size refstride, Size refcmpsz);
+
 /*
- * Find this exact element in the provided elemsarray with element size
- * of stride and compare prefix of cmpsize, offset by HIPEntryIndex.
+ * Get this element from the table, without locking.
  *
- * Requires lock. Returns NULL when not found.
+ * Returns HIPNotPresent when the element is definitely not present.
+ * Can return HIPTryWithLocks if the bucket isn't empty, but absence
+ * of the hashed element could not be guaranteed due to e.g. potential
+ * recent changes to the bucket.
  */
-void * HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
-							void *searchelem, void *elemsarray,
-							Size stride, Size cmpsize);
+HIPEntryIndex HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
+									 void *searchelem);
+
+/*
+ * Find this exact element, with locking.
+ *
+ * Returns HIPNotPresent when the element is not found.
+ */
+HIPEntryIndex HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
+								   void *searchelem);
 
 /*
  * Insert this entry into the HIP hash table.

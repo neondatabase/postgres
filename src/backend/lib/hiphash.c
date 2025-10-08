@@ -42,7 +42,7 @@ typedef struct HIPHashElement {
 
 StaticAssertDecl(HIP_CACHE_LINE_SIZE == HIPElementsPerCacheLine *
 				 sizeof(HIPHashElement),
-				 "Make sure we can properly fit this on cache lines");
+				 "HIPElement should be sized to prevent false cache line sharing");
 
 typedef struct HIPPartition {
 	LWLock bucketlock;
@@ -56,16 +56,16 @@ struct HIPHashHeader {
 	union {
 		struct {
 			int			nelements;
-			void	   *elemsarray;
-			Size		stride;
-			Size		cmpsize;
+			void	   *refarray;
+			Size		refstride;
+			Size		refcmpsz;
 		};
-		char pad[HIP_CACHE_LINE_SIZE];
+		char _pad[HIP_CACHE_LINE_SIZE];
 	};
 
 	union {
 		HIPPartition p;
-		char pad[HIP_CACHE_LINE_SIZE];
+		char _pad[HIP_CACHE_LINE_SIZE];
 	} partitions[NUM_HIP_PARTITIONS];
 
 	HIPHashElement elements[FLEXIBLE_ARRAY_MEMBER];
@@ -94,9 +94,13 @@ HIPGetSize(int32 nelements)
  * Initialize this HIP hash table.
  */
 void
-HIPInit(HIPHashHeader *header, int32 nelements, int locktranche)
+HIPInit(HIPHashHeader *header, int32 nelements, int locktranche,
+		void *refarray, Size refstride, Size refcmpsz)
 {
 	header->nelements = nelements;
+	header->refarray = refarray;
+	header->refstride = refstride;
+	header->refcmpsz = refcmpsz;
 
 	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
 	{
@@ -136,3 +140,5 @@ HIPAppendFreeListEntry(HIPHashHeader *header, HIPHashElement *element, int32 slo
 	pg_atomic_write_membarrier_u32(&lastflelem->free.next, -slotno);
 	SpinLockRelease(&part->fllock);
 }
+
+
