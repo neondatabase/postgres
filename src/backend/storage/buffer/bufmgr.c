@@ -36,6 +36,7 @@
 
 #include <sys/file.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "access/tableam.h"
 #include "access/xloginsert.h"
@@ -254,6 +255,24 @@ const ResourceOwnerDesc buffer_pin_resowner_desc =
 	.ReleaseResource = ResOwnerReleaseBufferPin,
 	.DebugPrint = ResOwnerPrintBufferPin
 };
+
+#define TRACE_POSTGRESQL_BUFFER_READ_START(procNumber, lxid, forkNum, blockNum, spcOid, dbOid, relNumber, backend) trace_buffer_read(procNumber, lxid, forkNum, blockNum, spcOid, dbOid, relNumber, backend)
+
+static void
+trace_buffer_read(ProcNumber procNumber, LocalTransactionId lxid,
+				  ForkNumber forkNum, BlockNumber blockNum,
+				  Oid spcOid, Oid dbOid,
+				  RelNumber relNumber, ProcNumber backend)
+{
+	struct timespec tp;
+	uint64_t uts; // microseconds since unix epoch
+
+	clock_gettime(CLOCK_REALTIME, &tp);
+	uts = (uint64_t)(tp.tv_sec * 1000000) + (uint64_t)(tp.tv_nsec / 1000);
+
+	if (HackathonLogFileFD > 0)
+		fprintf(HackathonLogFileFD, "{\"ts\":%llu,\"type\":\"fetch\",\"tid\":\"%d/%u\",\"page\":\"%d/%u/%u/%u/%u\"}\n", uts, procNumber, lxid, forkNum, blockNum, spcOid, dbOid, relNumber);
+}
 
 /*
  * Ensure that the PrivateRefCountArray has sufficient space to store one more

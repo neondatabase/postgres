@@ -10,6 +10,8 @@ use strict;
 use warnings FATAL => 'all';
 
 m/^\s*probe / || next;
+m/^\s*probe (?!transaction__(start|commit|abort))/ || next;
+m/^\s*probe (?!buffer__read__(start|done))/ || next;
 s/^\s*probe ([^(]*)(.*);/$1$2/;
 s/__/_/g;
 y/abcdefghijklmnopqrstuvwxyz/ABCDEFGHIJKLMNOPQRSTUVWXYZ/;

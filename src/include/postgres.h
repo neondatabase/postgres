@@ -51,6 +51,8 @@
 
 /* IWYU pragma: end_exports */
 
+int HackathonLogFileFD;
+
 /* ----------------------------------------------------------------
  *				Section 1:	Datum type + support functions
  * ----------------------------------------------------------------

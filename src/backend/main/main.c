@@ -21,6 +21,7 @@
 #include "postgres.h"
 
 #include <unistd.h>
+#include <fcntl.h>
 
 #if defined(WIN32)
 #include <crtdbg.h>
@@ -111,6 +112,8 @@ main(int argc, char *argv[])
 	DispatchOption dispatch_option = DISPATCH_POSTMASTER;
 
 	reached_main = true;
+
+	HackathonLogFileFD = open("/var/db/postgres/compute/hacklog.jsonl", O_WRONLY|O_CREAT|O_APPEND);
 
 	/*
 	 * If supported on the current platform, set up a handler to be called if

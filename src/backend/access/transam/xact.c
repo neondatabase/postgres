@@ -371,6 +371,40 @@ static void ShowTransactionStateRec(const char *str, TransactionState s);
 static const char *BlockStateAsString(TBlockState blockState);
 static const char *TransStateAsString(TransState state);
 
+#define TRACE_POSTGRESQL_TRANSACTION_START(procNumber, lxid) trace_transaction_start(procNumber, lxid)
+#define TRACE_POSTGRESQL_TRANSACTION_ABORT(procNumber, lxid) trace_transaction_abort(procNumber, lxid)
+#define TRACE_POSTGRESQL_TRANSACTION_COMMIT(procNumber, lxid) trace_transaction_commit(procNumber, lxid)
+
+static void
+trace_transaction_generic(char *kind, ProcNumber procNumber, LocalTransactionId lxid)
+{
+	struct timespec tp;
+	uint64_t uts; // microseconds since unix epoch
+
+	clock_gettime(CLOCK_REALTIME, &tp);
+	uts = (uint64_t)(tp.tv_sec * 1000000) + (uint64_t)(tp.tv_nsec / 1000);
+
+	if (HackathonLogFileFD > 0)
+		fprintf(HackathonLogFileFD, "{\"ts\":%llu,\"type\":\"%s\",\"tid\":\"%d/%u\"}\n", uts, kind, procNumber, lxid);
+}
+
+static void
+trace_transaction_start(ProcNumber procNumber, LocalTransactionId lxid)
+{
+	trace_transaction_generic("start", procNumber, lxid);
+}
+
+static void
+trace_transaction_abort(ProcNumber procNumber, LocalTransactionId lxid)
+{
+	trace_transaction_generic("end", procNumber, lxid);
+}
+
+static void
+trace_transaction_commit(ProcNumber procNumber, LocalTransactionId lxid)
+{
+	trace_transaction_generic("end", procNumber, lxid);
+}
 
 /* ----------------------------------------------------------------
  *	transaction state accessors
