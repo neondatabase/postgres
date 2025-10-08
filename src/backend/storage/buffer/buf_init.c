@@ -24,8 +24,7 @@ char	   *BufferBlocks;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
-
-static HIPHashHeader *BufHashHeader;
+HIPHashHeader *BufHashHeader;
 
 
 /*

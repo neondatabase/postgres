@@ -486,7 +486,7 @@ StrategyInitialize(bool init)
 	 * happening in each partition concurrently, so we could need as many as
 	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
 	 */
-	// InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
+	InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
 	HIPInit(BufHashHeader, NBuffers + NUM_BUFFER_PARTITIONS, 
 			LWTRANCHE_BUFFER_MAPPING, BufferDescriptors, 
 			sizeof(BufferDescPadded), sizeof(BufferTag));

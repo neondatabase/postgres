@@ -581,9 +581,8 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(newPartitionLock, LW_SHARED);
-	// buf_id = BufTableLookup(&newTag, newHash);
-	// TODO: Need to add search elem
-	buf_id = HIPGetElementUnchecked(BufHashHeader, newHash, NULL);
+	buf_id = BufTableLookup(&newTag, newHash);
+	Assert(buf_id == HIPGetElementUnchecked(BufHashHeader, newHash, &newTag));
 	LWLockRelease(newPartitionLock);
 
 	/* If not in buffers, initiate prefetch */
@@ -2026,9 +2025,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(newPartitionLock, LW_SHARED);
-	// existing_buf_id = BufTableLookup(&newTag, newHash);
-	// TODO: Need to add search elem
-	existing_buf_id = HIPGetElementUnchecked(BufHashHeader, newHash, NULL);
+	existing_buf_id = BufTableLookup(&newTag, newHash);
+	Assert(existing_buf_id == HIPGetElementUnchecked(BufHashHeader, newHash, &newTag));
 	if (existing_buf_id >= 0)
 	{
 		BufferDesc *buf;
@@ -2081,8 +2079,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * victim buffer we acquired and use the already inserted one.
 	 */
 	LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-	// existing_buf_id = BufTableInsert(&newTag, newHash, victim_buf_hdr->buf_id);
-	existing_buf_id = HIPInsertElement(BufHashHeader, newHash, victim_buf_hdr->buf_id);
+	existing_buf_id = BufTableInsert(&newTag, newHash, victim_buf_hdr->buf_id);
+	Assert(existing_buf_id == HIPInsertElement(BufHashHeader, newHash, victim_buf_hdr->buf_id));
 	if (existing_buf_id >= 0)
 	{
 		BufferDesc *existing_buf_hdr;
@@ -4859,9 +4857,8 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 
 		/* Check that it is in the buffer pool. If not, do nothing. */
 		LWLockAcquire(bufPartitionLock, LW_SHARED);
-		// buf_id = BufTableLookup(&bufTag, bufHash);
-		// TODO: Need to add search elem
-		buf_id = HIPGetElementUnchecked(BufHashHeader, bufHash, NULL);
+		buf_id = BufTableLookup(&bufTag, bufHash);
+		Assert(buf_id == HIPGetElementUnchecked(BufHashHeader, bufHash, &bufTag));
 		LWLockRelease(bufPartitionLock);
 
 		if (buf_id < 0)
