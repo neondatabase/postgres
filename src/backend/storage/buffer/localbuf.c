@@ -187,6 +187,7 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 {
 	instr_time	io_start;
 	Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
 
 	Assert(LocalRefCount[-BufferDescriptorGetBuffer(bufHdr) - 1] > 0);
 
@@ -199,17 +200,17 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag),
+		reln = smgropen(BufTagGetRelFileLocator(tag),
 						MyProcNumber);
 
-	PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
+	PageSetChecksumInplace(localpage, tag->blockNum);
 
 	io_start = pgstat_prepare_io_time(track_io_timing);
 
 	/* And write... */
 	smgrwrite(reln,
-			  BufTagGetForkNum(&bufHdr->tag),
-			  bufHdr->tag.blockNum,
+			  BufTagGetForkNum(tag),
+			  tag->blockNum,
 			  localpage,
 			  false);
 
@@ -229,7 +230,6 @@ GetLocalVictimBuffer(void)
 	int			victim_bufid;
 	int			trycounter;
 	BufferDesc *bufHdr;
-	BufferTag  *bufTag;
 
 	ResourceOwnerEnlarge(CurrentResourceOwner);
 
@@ -246,7 +246,6 @@ GetLocalVictimBuffer(void)
 			nextFreeLocalBufId = 0;
 
 		bufHdr = GetLocalBufferDescriptor(victim_bufid);
-		bufTag = GetLocalBufferTag(victim_bufid);
 
 		if (LocalRefCount[victim_bufid] == 0)
 		{
@@ -611,6 +610,7 @@ void
 InvalidateLocalBuffer(BufferDesc *bufHdr, bool check_unreferenced)
 {
 	Buffer		buffer = BufferDescriptorGetBuffer(bufHdr);
+	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
 	int			bufid = -buffer - 1;
 	uint32		buf_state;
 	LocalBufferLookupEnt *hresult;
@@ -638,19 +638,19 @@ InvalidateLocalBuffer(BufferDesc *bufHdr, bool check_unreferenced)
 	if (check_unreferenced &&
 		(LocalRefCount[bufid] != 0 || BUF_STATE_GET_REFCOUNT(buf_state) != 0))
 		elog(ERROR, "block %u of %s is still referenced (local %d)",
-			 bufHdr->tag.blockNum,
-			 relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
+			 tag->blockNum,
+			 relpathbackend(BufTagGetRelFileLocator(tag),
 							MyProcNumber,
-							BufTagGetForkNum(&bufHdr->tag)).str,
+							BufTagGetForkNum(tag)).str,
 			 LocalRefCount[bufid]);
 
 	/* Remove entry from hashtable */
 	hresult = (LocalBufferLookupEnt *)
-		hash_search(LocalBufHash, &bufHdr->tag, HASH_REMOVE, NULL);
+		hash_search(LocalBufHash, tag, HASH_REMOVE, NULL);
 	if (!hresult)				/* shouldn't happen */
 		elog(ERROR, "local buffer hash table corrupted");
 	/* Mark buffer invalid */
-	ClearBufferTag(&bufHdr->tag);
+	ClearBufferTag(tag);
 	buf_state &= ~BUF_FLAG_MASK;
 	buf_state &= ~BUF_USAGECOUNT_MASK;
 	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
