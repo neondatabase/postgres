@@ -72,6 +72,6 @@ HIPEntryIndex HIPInsertElement(HIPHashHeader *header, uint32 hash,
  * Caller is responsible for locking.
  */
 void HIPRemoveElement(HIPHashHeader *header, uint32 hash,
-					  HIPEntryIndex entry);
+					  HIPEntryIndex entry, void *searchelem);
 
 #endif /* HIPHASH_H */
