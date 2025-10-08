@@ -16,6 +16,7 @@ OBJS = \
 	bipartite_match.o \
 	bloomfilter.o \
 	dshash.o \
+	hiphash.o \
 	hyperloglog.o \
 	ilist.o \
 	integerset.o \

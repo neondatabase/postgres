@@ -13,12 +13,15 @@
 
 #ifndef HIPHASH_H
 #define HIPHASH_H
+#include "storage/lwlock.h"
+
+#define NUM_HIP_PARTITIONS NUM_BUFFER_PARTITIONS
 
 typedef struct HIPHashHeader HIPHashHeader;
 typedef int32 HIPEntryIndex;
 
 Size HIPGetSize(int nelements);
-void HIPInit(HIPHashHeader *header, int nelements);
+void HIPInit(HIPHashHeader *header, int nelements, int locktranche);
 
 /* Get this element from the table. No locks involved. */
 HIPEntryIndex HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash);

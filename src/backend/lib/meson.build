@@ -4,6 +4,7 @@ backend_sources += files(
   'bipartite_match.c',
   'bloomfilter.c',
   'dshash.c',
+  'hiphash.c',
   'hyperloglog.c',
   'ilist.c',
   'integerset.c',
