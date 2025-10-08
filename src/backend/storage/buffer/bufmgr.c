@@ -1151,7 +1151,8 @@ PinBufferForBlock(Relation rel,
 		io_object = IOOBJECT_RELATION;
 	}
 
-	TRACE_POSTGRESQL_BUFFER_READ_START(forkNum, blockNum,
+	TRACE_POSTGRESQL_BUFFER_READ_START(MyProc->vxid.procNumber, MyProc->vxid.lxid,
+									   forkNum, blockNum,
 									   smgr->smgr_rlocator.locator.spcOid,
 									   smgr->smgr_rlocator.locator.dbOid,
 									   smgr->smgr_rlocator.locator.relNumber,

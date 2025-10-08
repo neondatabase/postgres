@@ -14,6 +14,7 @@
  * NOTE: Do not use system-provided typedefs (e.g. uintptr_t, uint32_t, etc)
  * in probe definitions, as they cause compilation errors on macOS.
  */
+#define ProcNumber int
 #define LocalTransactionId unsigned int
 #define LWLockMode int
 #define LOCKMODE int
@@ -24,10 +25,9 @@
 
 provider postgresql {
 
-	probe transaction__start(LocalTransactionId);
-	probe transaction__commit(LocalTransactionId);
-	probe transaction__abort(LocalTransactionId);
-
+	probe transaction__start(ProcNumber, LocalTransactionId);
+	probe transaction__commit(ProcNumber, LocalTransactionId);
+	probe transaction__abort(ProcNumber, LocalTransactionId);
 	probe lwlock__acquire(const char *, LWLockMode);
 	probe lwlock__release(const char *);
 	probe lwlock__wait__start(const char *, LWLockMode);
@@ -55,7 +55,7 @@ provider postgresql {
 	probe sort__start(int, bool, int, int, bool, int);
 	probe sort__done(bool, long);
 
-	probe buffer__read__start(ForkNumber, BlockNumber, Oid, Oid, Oid, int);
+	probe buffer__read__start(ProcNumber, LocalTransactionId, ForkNumber, BlockNumber, Oid, Oid, Oid, int);
 	probe buffer__read__done(ForkNumber, BlockNumber, Oid, Oid, Oid, int, bool);
 	probe buffer__flush__start(ForkNumber, BlockNumber, Oid, Oid, Oid);
 	probe buffer__flush__done(ForkNumber, BlockNumber, Oid, Oid, Oid);

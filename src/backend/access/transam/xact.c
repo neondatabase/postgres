@@ -2174,7 +2174,7 @@ StartTransaction(void)
 	Assert(MyProc->vxid.procNumber == vxid.procNumber);
 	MyProc->vxid.lxid = vxid.localTransactionId;
 
-	TRACE_POSTGRESQL_TRANSACTION_START(vxid.localTransactionId);
+	TRACE_POSTGRESQL_TRANSACTION_START(vxid.procNumber, vxid.localTransactionId);
 
 	/*
 	 * set transaction_timestamp() (a/k/a now()).  Normally, we want this to
@@ -2379,7 +2379,7 @@ CommitTransaction(void)
 		ParallelWorkerReportLastRecEnd(XactLastRecEnd);
 	}
 
-	TRACE_POSTGRESQL_TRANSACTION_COMMIT(MyProc->vxid.lxid);
+	TRACE_POSTGRESQL_TRANSACTION_COMMIT(MyProc->vxid.procNumber, MyProc->vxid.lxid);
 
 	/*
 	 * Let others know about no transaction in progress by me. Note that this
@@ -2943,7 +2943,7 @@ AbortTransaction(void)
 		XLogSetAsyncXactLSN(XactLastRecEnd);
 	}
 
-	TRACE_POSTGRESQL_TRANSACTION_ABORT(MyProc->vxid.lxid);
+	TRACE_POSTGRESQL_TRANSACTION_ABORT(MyProc->vxid.procNumber, MyProc->vxid.lxid);
 
 	/*
 	 * Let others know about no transaction in progress by me. Note that this
