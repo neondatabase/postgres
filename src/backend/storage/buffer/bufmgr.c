@@ -47,6 +47,7 @@
 #include "catalog/storage_xlog.h"
 #include "executor/instrument.h"
 #include "lib/binaryheap.h"
+#include "lib/hiphash.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
@@ -566,7 +567,7 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
 	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
-	int			buf_id;
+	HIPEntryIndex			buf_id;
 
 	Assert(BlockNumberIsValid(blockNum));
 
@@ -580,7 +581,9 @@ PrefetchSharedBuffer(SMgrRelation smgr_reln,
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(newPartitionLock, LW_SHARED);
-	buf_id = BufTableLookup(&newTag, newHash);
+	// buf_id = BufTableLookup(&newTag, newHash);
+	// TODO: Need to add search elem and elemsarray
+	buf_id = HIPGetElementUnchecked(newHash,,,sizeof(BufferLookupEnt), sizeof(BufferLookupEnt));
 	LWLockRelease(newPartitionLock);
 
 	/* If not in buffers, initiate prefetch */
@@ -2005,7 +2008,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	BufferTag	newTag;			/* identity of requested block */
 	uint32		newHash;		/* hash value for newTag */
 	LWLock	   *newPartitionLock;	/* buffer partition lock for it */
-	int			existing_buf_id;
+	HIPEntryIndex			existing_buf_id;
 	Buffer		victim_buffer;
 	BufferDesc *victim_buf_hdr;
 	uint32		victim_buf_state;
@@ -2023,7 +2026,9 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 	/* see if the block is in the buffer pool already */
 	LWLockAcquire(newPartitionLock, LW_SHARED);
-	existing_buf_id = BufTableLookup(&newTag, newHash);
+	// existing_buf_id = BufTableLookup(&newTag, newHash);
+	// TODO: Need to add search elem and elemsarray
+	existing_buf_id = HIPGetElementUnchecked(newHash,,,sizeof(BufferLookupEnt), sizeof(BufferLookupEnt));
 	if (existing_buf_id >= 0)
 	{
 		BufferDesc *buf;
@@ -2076,7 +2081,8 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * victim buffer we acquired and use the already inserted one.
 	 */
 	LWLockAcquire(newPartitionLock, LW_EXCLUSIVE);
-	existing_buf_id = BufTableInsert(&newTag, newHash, victim_buf_hdr->buf_id);
+	// existing_buf_id = BufTableInsert(&newTag, newHash, victim_buf_hdr->buf_id);
+	existing_buf_id = HipInsertElement(newHash, victim_buf_hdr->buf_id);
 	if (existing_buf_id >= 0)
 	{
 		BufferDesc *existing_buf_hdr;
@@ -2182,6 +2188,7 @@ InvalidateBuffer(BufferDesc *buf)
 	LWLock	   *oldPartitionLock;	/* buffer partition lock for it */
 	uint32		oldFlags;
 	uint32		buf_state;
+	HIPEntryIndex			old_buf_id;
 
 	/* Save the original buffer tag before dropping the spinlock */
 	oldTag = buf->tag;
@@ -2251,7 +2258,8 @@ retry:
 	 * Remove the buffer from the lookup hashtable, if it was in there.
 	 */
 	if (oldFlags & BM_TAG_VALID)
-		BufTableDelete(&oldTag, oldHash);
+		//BufTableDelete(&oldTag, oldHash);
+		HIPRemoveElement(&hiphash_header, oldHash, old_buf_id);
 
 	/*
 	 * Done with mapping lock.
@@ -2280,6 +2288,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	uint32		hash;
 	LWLock	   *partition_lock;
 	BufferTag	tag;
+	HIPEntryIndex			buf_id;
 
 	Assert(GetPrivateRefCount(BufferDescriptorGetBuffer(buf_hdr)) == 1);
 
@@ -2330,7 +2339,8 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
 
 	/* finally delete buffer from the buffer mapping table */
-	BufTableDelete(&tag, hash);
+	//BufTableDelete(&tag, hash);
+	HIPRemoveElement(&hiphash_header, hash, buf_id);
 
 	LWLockRelease(partition_lock);
 
@@ -2729,7 +2739,8 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 
 		LWLockAcquire(partition_lock, LW_EXCLUSIVE);
 
-		existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
+		// existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
+		existing_id = HipInsertElement(&hiphash_header, hash, victim_buf_hdr->buf_id);
 
 		/*
 		 * We get here only in the corner case where we are trying to extend
@@ -4835,7 +4846,7 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 		uint32		bufHash;	/* hash value for tag */
 		BufferTag	bufTag;		/* identity of requested block */
 		LWLock	   *bufPartitionLock;	/* buffer partition lock for it */
-		int			buf_id;
+		HIPEntryIndex			buf_id;
 		BufferDesc *bufHdr;
 		uint32		buf_state;
 
@@ -4848,7 +4859,9 @@ FindAndDropRelationBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 
 		/* Check that it is in the buffer pool. If not, do nothing. */
 		LWLockAcquire(bufPartitionLock, LW_SHARED);
-		buf_id = BufTableLookup(&bufTag, bufHash);
+		// buf_id = BufTableLookup(&bufTag, bufHash);
+		// TODO: Need to add search elem and elemsarray
+		buf_id = HIPGetElementUnchecked(bufHash,,,sizeof(BufferLookupEnt), sizeof(BufferLookupEnt));
 		LWLockRelease(bufPartitionLock);
 
 		if (buf_id < 0)
