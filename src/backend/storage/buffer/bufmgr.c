@@ -6845,6 +6845,9 @@ buffer_stage_common(PgAioHandle *ioh, bool is_write, bool is_temp)
 		BufferDesc *buf_hdr = is_temp ?
 			GetLocalBufferDescriptor(-buffer - 1)
 			: GetBufferDescriptor(buffer - 1);
+		BufferTag *tag = is_temp ?
+			GetLocalBufferTag(-buffer - 1)
+			: GetBufferTag(buffer - 1);
 		uint32		buf_state;
 
 		/*
@@ -6855,7 +6858,7 @@ buffer_stage_common(PgAioHandle *ioh, bool is_write, bool is_temp)
 		 * it worth doing extra-paranoid checks.
 		 */
 		if (i == 0)
-			first = buf_hdr->tag;
+			first = *tag;
 		else
 		{
 			Assert(buf_hdr->tag.relNumber == first.relNumber);
@@ -7083,7 +7086,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
 	BufferDesc *buf_hdr = is_temp ?
 		GetLocalBufferDescriptor(-buffer - 1)
 		: GetBufferDescriptor(buffer - 1);
-	BufferTag	tag = buf_hdr->tag;
+	BufferTag	*tag = is_temp ? GetLocalBufferTag(-buffer - 1) : GetBufferTag(buffer - 1);
 	char	   *bufdata = BufferGetBlock(buffer);
 	uint32		set_flag_bits;
 	int			piv_flags;
@@ -7134,7 +7137,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
 			VALGRIND_MAKE_MEM_DEFINED(bufdata, BLCKSZ);
 #endif
 
-		if (!PageIsVerified((Page) bufdata, tag.blockNum, piv_flags,
+		if (!PageIsVerified((Page) bufdata, tag->blockNum, piv_flags,
 							failed_checksum))
 		{
 			if (flags & READ_BUFFERS_ZERO_ON_ERROR)
