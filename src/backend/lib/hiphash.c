@@ -55,7 +55,7 @@ typedef struct HIPPartition {
 struct HIPHashHeader {
 	union {
 		struct {
-			int			nelements;
+			uint32		nelements;
 			void	   *refarray;
 			Size		refstride;
 			Size		refcmpsz;
@@ -73,6 +73,8 @@ struct HIPHashHeader {
 
 #define HIPSlotToFreeList(num) ((num / HIPElementsPerCacheLine) % NUM_HIP_PARTITIONS)
 #define HIPElementIsFree(elem) ((((int32) pg_atomic_read_u32(&elem->tag)) < 0)
+
+static inline int32 HIPHashToBucket(HIPHashHeader *hdr, uint32 hash);
 
 static HIPHashElement * HIPPopFreeListEntry(HIPHashHeader *header,
 											HIPHashElement *element,
@@ -97,10 +99,15 @@ void
 HIPInit(HIPHashHeader *header, int32 nelements, int locktranche,
 		void *refarray, Size refstride, Size refcmpsz)
 {
+	uint64	reciprocal;
+
 	header->nelements = nelements;
 	header->refarray = refarray;
 	header->refstride = refstride;
 	header->refcmpsz = refcmpsz;
+
+	reciprocal = ((uint64) 1 << 32) / nelements;
+	header->reciprocal = reciprocal;
 
 	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
 	{
@@ -141,4 +148,22 @@ HIPAppendFreeListEntry(HIPHashHeader *header, HIPHashElement *element, int32 slo
 	SpinLockRelease(&part->fllock);
 }
 
+static inline int32
+HIPHashToBucket(HIPHashHeader *hdr, uint32 hash)
+{
+	return hash % hdr->nelements;
+}
+
+HIPEntryIndex
+HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
+					   void *searchelem)
+{
+	int32		bucketidx = HIPHashToBucket(header, hash);
+	HIPHashElement *elem = &header->elements[bucketidx];
+	uint32		nextptr = pg_atomic_read_u32(&elem->bucket);
+	while (nextptr != InvalidSlotPtr)
+	{
+		if ()
+	}
+}
 
