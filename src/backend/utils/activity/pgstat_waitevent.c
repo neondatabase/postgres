@@ -220,6 +220,7 @@ pgstat_wait_event_flush_cb(bool nowait)
 
 	/* done, clear the pending entry */
 	MemSet(PendingWaitEventStats.counts, 0, sizeof(PendingWaitEventStats.counts));
+	MemSet(PendingWaitEventStats.total_time, 0, sizeof(PendingWaitEventStats.total_time));
 
 	if (!could_not_be_flushed)
 		have_wait_event_stats = false;
