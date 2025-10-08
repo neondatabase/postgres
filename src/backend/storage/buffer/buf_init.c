@@ -20,6 +20,7 @@
 #include "storage/bufmgr.h"
 
 BufferDescPadded *BufferDescriptors;
+BufferTag *BufferTags;
 char	   *BufferBlocks;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
@@ -70,6 +71,7 @@ void
 BufferManagerShmemInit(void)
 {
 	bool		foundBufs,
+				foundTags,
 				foundDescs,
 				foundIOCV,
 				foundBufCkpt,
@@ -80,6 +82,10 @@ BufferManagerShmemInit(void)
 		ShmemInitStruct("Buffer Descriptors",
 						NBuffers * sizeof(BufferDescPadded),
 						&foundDescs);
+	BufferTags = (BufferTag *)
+		ShmemInitStruct("Buffer Tags",
+						NBuffers * sizeof(BufferTag),
+						&foundTags);
 
 	/* Align buffer pool on IO page size boundary. */
 	BufferBlocks = (char *)
@@ -108,10 +114,10 @@ BufferManagerShmemInit(void)
 		ShmemInitStruct("Checkpoint BufferIds",
 						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
-	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt || foundBufHash)
+	if (foundDescs || foundTags || foundBufs || foundIOCV || foundBufCkpt || foundBufHash)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt && foundBufHash);
+		Assert(foundDescs && foundTags && foundBufs && foundIOCV && foundBufCkpt && foundBufHash);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
@@ -124,8 +130,9 @@ BufferManagerShmemInit(void)
 		for (i = 0; i < NBuffers; i++)
 		{
 			BufferDesc *buf = GetBufferDescriptor(i);
+			BufferTag  *tag = GetBufferTag(i);
 
-			ClearBufferTag(&buf->tag);
+			ClearBufferTag(tag);
 
 			pg_atomic_init_u32(&buf->state, 0);
 			buf->wait_backend_pgprocno = INVALID_PROC_NUMBER;

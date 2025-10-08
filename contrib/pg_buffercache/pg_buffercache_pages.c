@@ -192,20 +192,22 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		for (i = 0; i < NBuffers; i++)
 		{
 			BufferDesc *bufHdr;
+			BufferTag  *bufTag;
 			uint32		buf_state;
 
 			CHECK_FOR_INTERRUPTS();
 
 			bufHdr = GetBufferDescriptor(i);
+			bufTag = GetBufferTag(i);
 			/* Lock each buffer header before inspecting. */
 			buf_state = LockBufHdr(bufHdr);
 
 			fctx->record[i].bufferid = BufferDescriptorGetBuffer(bufHdr);
-			fctx->record[i].relfilenumber = BufTagGetRelNumber(&bufHdr->tag);
-			fctx->record[i].reltablespace = bufHdr->tag.spcOid;
-			fctx->record[i].reldatabase = bufHdr->tag.dbOid;
-			fctx->record[i].forknum = BufTagGetForkNum(&bufHdr->tag);
-			fctx->record[i].blocknum = bufHdr->tag.blockNum;
+			fctx->record[i].relfilenumber = BufTagGetRelNumber(bufTag);
+			fctx->record[i].reltablespace = bufTag->spcOid;
+			fctx->record[i].reldatabase = bufTag->dbOid;
+			fctx->record[i].forknum = BufTagGetForkNum(bufTag);
+			fctx->record[i].blocknum = bufTag->blockNum;
 			fctx->record[i].usagecount = BUF_STATE_GET_USAGECOUNT(buf_state);
 			fctx->record[i].pinning_backends = BUF_STATE_GET_REFCOUNT(buf_state);
 

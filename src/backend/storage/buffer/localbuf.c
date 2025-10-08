@@ -44,6 +44,7 @@ typedef struct
 int			NLocBuffer = 0;		/* until buffers are initialized */
 
 BufferDesc *LocalBufferDescriptors = NULL;
+BufferTag  *LocalBufferTags = NULL;
 Block	   *LocalBufferBlockPointers = NULL;
 int32	   *LocalRefCount = NULL;
 
@@ -121,6 +122,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	BufferTag	newTag;			/* identity of requested block */
 	LocalBufferLookupEnt *hresult;
 	BufferDesc *bufHdr;
+	BufferTag  *bufTag;
 	Buffer		victim_buffer;
 	int			bufid;
 	bool		found;
@@ -141,7 +143,8 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 	{
 		bufid = hresult->id;
 		bufHdr = GetLocalBufferDescriptor(bufid);
-		Assert(BufferTagsEqual(&bufHdr->tag, &newTag));
+		bufTag = GetLocalBufferTag(bufid);
+		Assert(BufferTagsEqual(bufTag, &newTag));
 
 		*foundPtr = PinLocalBuffer(bufHdr, true);
 	}
@@ -152,6 +155,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		victim_buffer = GetLocalVictimBuffer();
 		bufid = -victim_buffer - 1;
 		bufHdr = GetLocalBufferDescriptor(bufid);
+		bufTag = GetLocalBufferTag(bufid);
 
 		hresult = (LocalBufferLookupEnt *)
 			hash_search(LocalBufHash, &newTag, HASH_ENTER, &found);
@@ -162,7 +166,7 @@ LocalBufferAlloc(SMgrRelation smgr, ForkNumber forkNum, BlockNumber blockNum,
 		/*
 		 * it's all ours now.
 		 */
-		bufHdr->tag = newTag;
+		*bufTag = newTag;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 		buf_state &= ~(BUF_FLAG_MASK | BUF_USAGECOUNT_MASK);
@@ -183,6 +187,7 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 {
 	instr_time	io_start;
 	Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
+	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
 
 	Assert(LocalRefCount[-BufferDescriptorGetBuffer(bufHdr) - 1] > 0);
 
@@ -195,17 +200,17 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 
 	/* Find smgr relation for buffer */
 	if (reln == NULL)
-		reln = smgropen(BufTagGetRelFileLocator(&bufHdr->tag),
+		reln = smgropen(BufTagGetRelFileLocator(tag),
 						MyProcNumber);
 
-	PageSetChecksumInplace(localpage, bufHdr->tag.blockNum);
+	PageSetChecksumInplace(localpage, tag->blockNum);
 
 	io_start = pgstat_prepare_io_time(track_io_timing);
 
 	/* And write... */
 	smgrwrite(reln,
-			  BufTagGetForkNum(&bufHdr->tag),
-			  bufHdr->tag.blockNum,
+			  BufTagGetForkNum(tag),
+			  tag->blockNum,
 			  localpage,
 			  false);
 
@@ -398,12 +403,14 @@ ExtendBufferedRelLocal(BufferManagerRelation bmr,
 	{
 		int			victim_buf_id;
 		BufferDesc *victim_buf_hdr;
+		BufferTag  *victim_buf_tag;
 		BufferTag	tag;
 		LocalBufferLookupEnt *hresult;
 		bool		found;
 
 		victim_buf_id = -buffers[i] - 1;
 		victim_buf_hdr = GetLocalBufferDescriptor(victim_buf_id);
+		victim_buf_tag = GetLocalBufferTag(victim_buf_id);
 
 		/* in case we need to pin an existing buffer below */
 		ResourceOwnerEnlarge(CurrentResourceOwner);
@@ -441,7 +448,7 @@ ExtendBufferedRelLocal(BufferManagerRelation bmr,
 
 			Assert(!(buf_state & (BM_VALID | BM_TAG_VALID | BM_DIRTY | BM_JUST_DIRTIED)));
 
-			victim_buf_hdr->tag = tag;
+			*victim_buf_tag = tag;
 
 			buf_state |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
 
@@ -603,6 +610,7 @@ void
 InvalidateLocalBuffer(BufferDesc *bufHdr, bool check_unreferenced)
 {
 	Buffer		buffer = BufferDescriptorGetBuffer(bufHdr);
+	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
 	int			bufid = -buffer - 1;
 	uint32		buf_state;
 	LocalBufferLookupEnt *hresult;
@@ -630,19 +638,19 @@ InvalidateLocalBuffer(BufferDesc *bufHdr, bool check_unreferenced)
 	if (check_unreferenced &&
 		(LocalRefCount[bufid] != 0 || BUF_STATE_GET_REFCOUNT(buf_state) != 0))
 		elog(ERROR, "block %u of %s is still referenced (local %d)",
-			 bufHdr->tag.blockNum,
-			 relpathbackend(BufTagGetRelFileLocator(&bufHdr->tag),
+			 tag->blockNum,
+			 relpathbackend(BufTagGetRelFileLocator(tag),
 							MyProcNumber,
-							BufTagGetForkNum(&bufHdr->tag)).str,
+							BufTagGetForkNum(tag)).str,
 			 LocalRefCount[bufid]);
 
 	/* Remove entry from hashtable */
 	hresult = (LocalBufferLookupEnt *)
-		hash_search(LocalBufHash, &bufHdr->tag, HASH_REMOVE, NULL);
+		hash_search(LocalBufHash, tag, HASH_REMOVE, NULL);
 	if (!hresult)				/* shouldn't happen */
 		elog(ERROR, "local buffer hash table corrupted");
 	/* Mark buffer invalid */
-	ClearBufferTag(&bufHdr->tag);
+	ClearBufferTag(tag);
 	buf_state &= ~BUF_FLAG_MASK;
 	buf_state &= ~BUF_USAGECOUNT_MASK;
 	pg_atomic_unlocked_write_u32(&bufHdr->state, buf_state);
@@ -668,14 +676,15 @@ DropRelationLocalBuffers(RelFileLocator rlocator, ForkNumber forkNum,
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
+		BufferTag  *bufTag = GetLocalBufferTag(i);
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator) &&
-			BufTagGetForkNum(&bufHdr->tag) == forkNum &&
-			bufHdr->tag.blockNum >= firstDelBlock)
+			BufTagMatchesRelFileLocator(bufTag, &rlocator) &&
+			BufTagGetForkNum(bufTag) == forkNum &&
+			bufTag->blockNum >= firstDelBlock)
 		{
 			InvalidateLocalBuffer(bufHdr, true);
 		}
@@ -697,12 +706,13 @@ DropRelationAllLocalBuffers(RelFileLocator rlocator)
 	for (i = 0; i < NLocBuffer; i++)
 	{
 		BufferDesc *bufHdr = GetLocalBufferDescriptor(i);
+		BufferTag  *bufTag = GetLocalBufferTag(i);
 		uint32		buf_state;
 
 		buf_state = pg_atomic_read_u32(&bufHdr->state);
 
 		if ((buf_state & BM_TAG_VALID) &&
-			BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator))
+			BufTagMatchesRelFileLocator(bufTag, &rlocator))
 		{
 			InvalidateLocalBuffer(bufHdr, true);
 		}
@@ -737,6 +747,7 @@ InitLocalBuffers(void)
 
 	/* Allocate and zero buffer headers and auxiliary arrays */
 	LocalBufferDescriptors = (BufferDesc *) calloc(nbufs, sizeof(BufferDesc));
+	LocalBufferTags = (BufferTag *) calloc(nbufs, sizeof(BufferTag));
 	LocalBufferBlockPointers = (Block *) calloc(nbufs, sizeof(Block));
 	LocalRefCount = (int32 *) calloc(nbufs, sizeof(int32));
 	if (!LocalBufferDescriptors || !LocalBufferBlockPointers || !LocalRefCount)
