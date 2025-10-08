@@ -313,6 +313,7 @@ HIPInsertElementLocked(HIPHashHeader *header, uint32 hash,
 	uint32		nextptr = pg_atomic_read_u32(tail_ref);
 	int32		freeslot;
 
+	/* fast-path cacheline-local elements, with */
 	for (int i = 0; i < HIPElementsPerCacheLine; i++)
 	{
 		int j = ((bucketidx + i) % HIPElementsPerCacheLine);
@@ -328,21 +329,49 @@ HIPInsertElementLocked(HIPHashHeader *header, uint32 hash,
 				goto slot_found;
 			}
 
-			/* not free */
+			/* not free anymore */
 			SpinLockRelease(&header->partitions[partnum].p.fllock);
 		}
+	}
+
+	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
+	{
+		int npartnum = ((partnum + i) % NUM_HIP_PARTITIONS);
+		HIPPartition *part;
+
+		part = &header->partitions[npartnum].p;
+
+		if (unlikely(part->flnmembers == 0))
+			continue;
+
+		SpinLockAcquire(&part->fllock);
+		if (unlikely(part->flnmembers) == 0)
+		{
+			SpinLockRelease(&part->fllock);
+			continue;
+		}
+
+		freeslot = -((int32) pg_atomic_read_u32(&part->flstart));
+		inserted = &header->elements[freeslot];
+
+		goto slot_found;
 	}
 
 	elog(PANIC, "No slot found");
 slot_found:
 	Assert(partnum == HIPSlotToPartition(freeslot));
 	Assert(&header->elements[freeslot] == inserted);
+	Assert(HIPElementIsFree(inserted));
+
 	HIPRemoveFromFreelist(header, inserted, freeslot,
 						  &header->partitions[partnum].p);
+
 	inserted->used.hash = hash;
 	inserted->used.index = index;
-	pg_atomic_write_membarrier_u32(&inserted->used.next, nextptr);
-	pg_atomic_write_membarrier_u32(&bucket->bucket, freeslot);
+
+	pg_atomic_write_u32(&inserted->used.next, nextptr);
+	pg_atomic_write_membarrier_u32(&bucket->bucket, (uint32) (-freeslot));
+
 	SpinLockRelease(&header->partitions[partnum].p.fllock);
 }
 
