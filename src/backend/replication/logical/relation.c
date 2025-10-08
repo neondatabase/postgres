@@ -946,3 +946,58 @@ FindLogicalRepLocalIndex(Relation localrel, LogicalRepRelation *remoterel,
 
 	return InvalidOid;
 }
+
+/*
+ * Get the number of entries in the LogicalRepRelMap.
+ */
+int
+logicalrep_get_num_rels(void)
+{
+	if (LogicalRepRelMap == NULL)
+		return 0;
+
+	return hash_get_num_entries(LogicalRepRelMap);
+}
+
+/*
+ * Write all the remote relation information from the LogicalRepRelMapEntry to
+ * the output stream.
+ */
+void
+logicalrep_write_all_rels(StringInfo out)
+{
+	LogicalRepRelMapEntry *entry;
+	HASH_SEQ_STATUS status;
+
+	if (LogicalRepRelMap == NULL)
+		return;
+
+	hash_seq_init(&status, LogicalRepRelMap);
+
+	while ((entry = (LogicalRepRelMapEntry *) hash_seq_search(&status)) != NULL)
+		logicalrep_write_internal_rel(out, &entry->remoterel);
+}
+
+/*
+ * Get the LogicalRepRelMapEntry corresponding to the given relid without
+ * opening the local relation.
+ */
+LogicalRepRelMapEntry *
+logicalrep_get_relentry(LogicalRepRelId remoteid)
+{
+	LogicalRepRelMapEntry *entry;
+	bool		found;
+
+	if (LogicalRepRelMap == NULL)
+		logicalrep_relmap_init();
+
+	/* Search for existing entry. */
+	entry = hash_search(LogicalRepRelMap, (void *) &remoteid,
+						HASH_FIND, &found);
+
+	if (!found)
+		elog(DEBUG1, "no relation map entry for remote relation ID %u",
+			 remoteid);
+
+	return entry;
+}

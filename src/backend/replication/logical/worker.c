@@ -194,6 +194,7 @@ typedef struct FlushPosition
 	dlist_node	node;
 	XLogRecPtr	local_end;
 	XLogRecPtr	remote_end;
+	TransactionId pa_remote_xid;
 } FlushPosition;
 
 static dlist_head lsn_mapping = DLIST_STATIC_INIT(lsn_mapping);
@@ -297,6 +298,7 @@ static List *on_commit_wakeup_workers_subids = NIL;
 
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+static TransactionId remote_xid = InvalidTransactionId;
 
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
@@ -351,6 +353,49 @@ typedef struct ApplySubXactData
 
 static ApplySubXactData subxact_data = {0, 0, InvalidTransactionId, NULL};
 
+typedef struct ReplicaIdentityKey
+{
+	Oid			relid;
+	LogicalRepTupleData *data;
+} ReplicaIdentityKey;
+
+typedef struct ReplicaIdentityEntry
+{
+	ReplicaIdentityKey *keydata;
+	TransactionId remote_xid;
+
+	/* needed for simplehash */
+	uint32		hash;
+	char		status;
+} ReplicaIdentityEntry;
+
+#include "common/hashfn.h"
+
+static uint32 hash_replica_identity(ReplicaIdentityKey *key);
+static bool hash_replica_identity_compare(ReplicaIdentityKey *a,
+										  ReplicaIdentityKey *b);
+
+/* Define parameters for replica identity hash table code generation. */
+#define SH_PREFIX		replica_identity
+#define SH_ELEMENT_TYPE	ReplicaIdentityEntry
+#define SH_KEY_TYPE		ReplicaIdentityKey *
+#define	SH_KEY			keydata
+#define SH_HASH_KEY(tb, key)	hash_replica_identity(key)
+#define SH_EQUAL(tb, a, b)		hash_replica_identity_compare(a, b)
+#define SH_STORE_HASH
+#define SH_GET_HASH(tb, a) (a)->hash
+#define	SH_SCOPE		static inline
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+#define REPLICA_IDENTITY_INITIAL_SIZE 128
+#define REPLICA_IDENTITY_CLEANUP_THRESHOLD 1024
+
+static replica_identity_hash *replica_identity_table = NULL;
+
+static void write_internal_dependencies(StringInfo s, List *depends_on_xids);
+
 static inline void subxact_filename(char *path, Oid subid, TransactionId xid);
 static inline void changes_filename(char *path, Oid subid, TransactionId xid);
 
@@ -365,11 +410,7 @@ static inline void cleanup_subxact_info(void);
 /*
  * Serialize and deserialize changes for a toplevel transaction.
  */
-static void stream_open_file(Oid subid, TransactionId xid,
-							 bool first_segment);
 static void stream_write_change(char action, StringInfo s);
-static void stream_open_and_write_change(TransactionId xid, char action, StringInfo s);
-static void stream_close_file(void);
 
 static void send_feedback(XLogRecPtr recvpos, bool force, bool requestReply);
 
@@ -409,6 +450,595 @@ static TransApplyAction get_transaction_apply_action(TransactionId xid,
 													 ParallelApplyWorkerInfo **winfo);
 
 static void replorigin_reset(int code, Datum arg);
+
+/*
+ * Compute the hash value for entries in the replica_identity_table.
+ */
+static uint32
+hash_replica_identity(ReplicaIdentityKey *key)
+{
+	int			i;
+	uint32		hashkey = 0;
+
+	hashkey = hash_combine(hashkey, hash_uint32(key->relid));
+
+	for (i = 0; i < key->data->ncols; i++)
+	{
+		uint32		hkey;
+
+		if (key->data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			continue;
+
+		hkey = hash_any((const unsigned char *) key->data->colvalues[i].data,
+						key->data->colvalues[i].len);
+		hashkey = hash_combine(hashkey, hkey);
+	}
+
+	return hashkey;
+}
+
+/*
+ * Compare two entries in the replica_identity_table.
+ */
+static bool
+hash_replica_identity_compare(ReplicaIdentityKey *a, ReplicaIdentityKey *b)
+{
+	if (a->relid != b->relid ||
+		a->data->ncols != b->data->ncols)
+		return false;
+
+	for (int i = 0; i < a->data->ncols; i++)
+	{
+		if (a->data->colstatus[i] != b->data->colstatus[i])
+			return false;
+
+		if (a->data->colvalues[i].len != b->data->colvalues[i].len)
+			return false;
+
+		if (strcmp(a->data->colvalues[i].data, b->data->colvalues[i].data))
+			return false;
+
+		elog(DEBUG1, "conflicting key %s", a->data->colvalues[i].data);
+	}
+
+	return true;
+}
+
+/*
+ * Free resources associated with a replica identity key.
+ */
+static void
+free_replica_identity_key(ReplicaIdentityKey *key)
+{
+	Assert(key);
+
+	pfree(key->data->colvalues);
+	pfree(key->data->colstatus);
+	pfree(key->data);
+	pfree(key);
+}
+
+/*
+ * Clean up hash table entries associated with the given transaction IDs.
+ */
+static void
+cleanup_replica_identity_table(List *committed_xid)
+{
+	replica_identity_iterator i;
+	ReplicaIdentityEntry *rientry;
+
+	if (!committed_xid)
+		return;
+
+	replica_identity_start_iterate(replica_identity_table, &i);
+	while ((rientry = replica_identity_iterate(replica_identity_table, &i)) != NULL)
+	{
+		if (!list_member_xid(committed_xid, rientry->remote_xid))
+			continue;
+
+		/* Clean up the hash entry for committed transaction */
+		free_replica_identity_key(rientry->keydata);
+		replica_identity_delete_item(replica_identity_table, rientry);
+	}
+}
+
+/*
+ * Check committed transactions and clean up corresponding entries in the hash
+ * table.
+ */
+static void
+cleanup_committed_replica_identity_entries(void)
+{
+	dlist_mutable_iter iter;
+	List	   *committed_xids = NIL;
+
+	dlist_foreach_modify(iter, &lsn_mapping)
+	{
+		FlushPosition *pos =
+			dlist_container(FlushPosition, node, iter.cur);
+		bool		skipped_write;
+
+		if (!TransactionIdIsValid(pos->pa_remote_xid) ||
+			!XLogRecPtrIsInvalid(pos->local_end))
+			continue;
+
+		pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid, true,
+												&skipped_write);
+
+		elog(DEBUG1,
+			 "got commit end from parallel apply worker, "
+			 "txn: %u, remote_end %X/%X, local_end %X/%X",
+			 pos->pa_remote_xid, LSN_FORMAT_ARGS(pos->remote_end),
+			 LSN_FORMAT_ARGS(pos->local_end));
+
+		if (!skipped_write && XLogRecPtrIsInvalid(pos->local_end))
+			continue;
+
+		committed_xids = lappend_xid(committed_xids, pos->pa_remote_xid);
+	}
+
+	/* cleanup the entries for committed transactions */
+	cleanup_replica_identity_table(committed_xids);
+}
+
+/*
+ * Append a transaction dependency, excluding duplicates and committed
+ * transactions.
+ */
+static List *
+check_and_append_xid_dependency(List *depends_on_xids,
+								TransactionId *depends_on_xid,
+								TransactionId current_xid)
+{
+	Assert(depends_on_xid);
+
+	if (!TransactionIdIsValid(*depends_on_xid))
+		return depends_on_xids;
+
+	if (TransactionIdEquals(*depends_on_xid, current_xid))
+		return depends_on_xids;
+
+	if (list_member_xid(depends_on_xids, *depends_on_xid))
+		return depends_on_xids;
+
+	/*
+	 * Return and reset the xid if the transaction has been committed.
+	 */
+	if (pa_transaction_committed(*depends_on_xid))
+	{
+		*depends_on_xid = InvalidTransactionId;
+		return depends_on_xids;
+	}
+
+	return lappend_xid(depends_on_xids, *depends_on_xid);
+}
+
+/*
+ * Check for dependencies on preceding transactions that modify the same key.
+ * Returns the dependent transactions in 'depends_on_xids' and records the
+ * current change.
+ */
+static void
+check_dependency_on_replica_identity(Oid relid,
+									 LogicalRepTupleData *original_data,
+									 TransactionId new_depended_xid,
+									 List **depends_on_xids)
+{
+	LogicalRepRelMapEntry *relentry;
+	LogicalRepTupleData *ridata;
+	ReplicaIdentityKey *rikey;
+	ReplicaIdentityEntry *rientry;
+	MemoryContext oldctx;
+	int			n_ri;
+	bool		found = false;
+
+	Assert(depends_on_xids);
+
+	/* Search for existing entry */
+	relentry = logicalrep_get_relentry(relid);
+
+	Assert(relentry);
+
+	/*
+	 * First search whether any previous transaction has affected the whole
+	 * table e.g., truncate or schema change from publisher.
+	 */
+	*depends_on_xids = check_and_append_xid_dependency(*depends_on_xids,
+													   &relentry->last_depended_xid,
+													   new_depended_xid);
+
+	n_ri = bms_num_members(relentry->remoterel.attkeys);
+
+	/*
+	 * Return if there are no replica identity columns, indicating that the
+	 * remote relation has neither a replica identity key nor is marked as
+	 * replica identity full.
+	 */
+	if (!n_ri)
+		return;
+
+	/* Check if the RI key value of the tuple is invalid */
+	for (int i = 0; i < original_data->ncols; i++)
+	{
+		if (!bms_is_member(i, relentry->remoterel.attkeys))
+			continue;
+
+		/*
+		 * Return if RI key is NULL or is explicitly marked unchanged. The key
+		 * value could be NULL in the new tuple of a update opertaion which
+		 * means the RI key is not updated.
+		 */
+		if (original_data->colstatus[i] == LOGICALREP_COLUMN_NULL ||
+			original_data->colstatus[i] == LOGICALREP_COLUMN_UNCHANGED)
+			return;
+	}
+
+	oldctx = MemoryContextSwitchTo(ApplyContext);
+
+	/* Allocate space for replica identity values */
+	ridata = palloc0_object(LogicalRepTupleData);
+	ridata->colvalues = palloc0_array(StringInfoData, n_ri);
+	ridata->colstatus = palloc0_array(char, n_ri);
+	ridata->ncols = n_ri;
+
+	for (int i_original = 0, i_ri = 0; i_original < original_data->ncols; i_original++)
+	{
+		StringInfo	original_colvalue = &original_data->colvalues[i_original];
+
+		if (!bms_is_member(i_original, relentry->remoterel.attkeys))
+			continue;
+
+		initStringInfoExt(&ridata->colvalues[i_ri], original_colvalue->len + 1);
+		appendStringInfoString(&ridata->colvalues[i_ri], original_colvalue->data);
+		ridata->colstatus[i_ri] = original_data->colstatus[i_original];
+		i_ri++;
+	}
+
+	rikey = palloc0_object(ReplicaIdentityKey);
+	rikey->relid = relid;
+	rikey->data = ridata;
+
+	if (TransactionIdIsValid(new_depended_xid))
+	{
+		rientry = replica_identity_insert(replica_identity_table, rikey,
+										  &found);
+
+		/*
+		 * Release the key built to search the entry, if the entry already
+		 * exists. Otherwise, initialize the remote_xid.
+		 */
+		if (found)
+		{
+			elog(DEBUG1, "found conflicting replica identity change from %u",
+				 rientry->remote_xid);
+
+			free_replica_identity_key(rikey);
+		}
+		else
+			rientry->remote_xid = InvalidTransactionId;
+	}
+	else
+	{
+		rientry = replica_identity_lookup(replica_identity_table, rikey);
+		free_replica_identity_key(rikey);
+	}
+
+	MemoryContextSwitchTo(oldctx);
+
+	/* Return if no entry found */
+	if (!rientry)
+		return;
+
+	Assert(!found || TransactionIdIsValid(rientry->remote_xid));
+
+	*depends_on_xids = check_and_append_xid_dependency(*depends_on_xids,
+													   &rientry->remote_xid,
+													   new_depended_xid);
+
+	/*
+	 * Update the new depended xid into the entry if valid, the new xid could
+	 * be invalid if the transaction will be applied by the leader itself
+	 * which means all the changes will be committed before processing next
+	 * transaction, so no need to be depended on.
+	 */
+	if (TransactionIdIsValid(new_depended_xid))
+		rientry->remote_xid = new_depended_xid;
+
+	/*
+	 * Remove the entry if the transaction has been committed and no new
+	 * dependency needs to be added.
+	 */
+	else if (!TransactionIdIsValid(rientry->remote_xid))
+	{
+		free_replica_identity_key(rientry->keydata);
+		replica_identity_delete_item(replica_identity_table, rientry);
+	}
+}
+
+/*
+ * Check for preceding transactions that involve insert, delete, or update
+ * operations on the specified table, and return them in 'depends_on_xids'.
+ */
+static void
+find_all_dependencies_on_rel(LogicalRepRelId relid, TransactionId new_depended_xid,
+							 List **depends_on_xids)
+{
+	replica_identity_iterator i;
+	ReplicaIdentityEntry *rientry;
+
+	Assert(depends_on_xids);
+
+	replica_identity_start_iterate(replica_identity_table, &i);
+	while ((rientry = replica_identity_iterate(replica_identity_table, &i)) != NULL)
+	{
+		Assert(TransactionIdIsValid(rientry->remote_xid));
+
+		if (rientry->keydata->relid != relid)
+			continue;
+
+		/* Clean up the hash entry for committed transaction while on it */
+		if (pa_transaction_committed(rientry->remote_xid))
+		{
+			free_replica_identity_key(rientry->keydata);
+			replica_identity_delete_item(replica_identity_table, rientry);
+
+			continue;
+		}
+
+		*depends_on_xids = check_and_append_xid_dependency(*depends_on_xids,
+														   &rientry->remote_xid,
+														   new_depended_xid);
+	}
+}
+
+/*
+ * Check for any preceding transactions that affect the given table and returns
+ * them in 'depends_on_xids'.
+ */
+static void
+check_dependency_on_rel(LogicalRepRelId relid, TransactionId new_depended_xid,
+						List **depends_on_xids)
+{
+	LogicalRepRelMapEntry *relentry;
+
+	Assert(depends_on_xids);
+
+	find_all_dependencies_on_rel(relid, new_depended_xid, depends_on_xids);
+
+	/* Search for existing entry */
+	relentry = logicalrep_get_relentry(relid);
+
+	/*
+	 * The relentry has not been initialized yet, indicating no change has
+	 * been applide yet.
+	 */
+	if (!relentry)
+		return;
+
+	*depends_on_xids = check_and_append_xid_dependency(*depends_on_xids,
+													   &relentry->last_depended_xid,
+													   new_depended_xid);
+
+	if (TransactionIdIsValid(new_depended_xid))
+		relentry->last_depended_xid = new_depended_xid;
+}
+
+/*
+ * Check dependencies related to the current change by determining if the
+ * modification impacts the same row or table as another ongoing transaction. If
+ * needed, instruct parallel apply workers to wait for these preceding
+ * transactions to complete.
+ *
+ * Simultaneously, track the dependency for the current change to ensure that
+ * subsequent transactions address this dependency.
+ */
+static void
+handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
+							TransactionId new_depended_xid,
+							ParallelApplyWorkerInfo *winfo)
+{
+	LogicalRepRelId relid;
+	LogicalRepTupleData oldtup;
+	LogicalRepTupleData newtup;
+	LogicalRepRelation *rel;
+	List	   *depends_on_xids = NIL;
+	List	   *remote_relids;
+	bool		has_oldtup = false;
+	bool		cascade = false;
+	bool		restart_seqs = false;
+	StringInfoData dependencies;
+
+	/*
+	 * Parse the consume data using a local copy instead of directly consuming
+	 * the given remote change as the caller may also read the data from the
+	 * remote message.
+	 */
+	StringInfoData change = *s;
+
+	/* Compute dependency only for non-streaming transaction */
+	if (in_streamed_transaction || (winfo && winfo->stream_txn))
+		return;
+
+	/* Only the leader checks dependencies and schedules the parallel apply */
+	if (!am_leader_apply_worker())
+		return;
+
+	if (!replica_identity_table)
+		replica_identity_table = replica_identity_create(ApplyContext,
+														 REPLICA_IDENTITY_INITIAL_SIZE,
+														 NULL);
+
+	if (replica_identity_table->members >= REPLICA_IDENTITY_CLEANUP_THRESHOLD)
+		cleanup_committed_replica_identity_entries();
+
+	switch (action)
+	{
+		case LOGICAL_REP_MSG_INSERT:
+			relid = logicalrep_read_insert(&change, &newtup);
+			check_dependency_on_replica_identity(relid, &newtup,
+												 new_depended_xid,
+												 &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_UPDATE:
+			relid = logicalrep_read_update(&change, &has_oldtup, &oldtup,
+										   &newtup);
+
+			if (has_oldtup)
+				check_dependency_on_replica_identity(relid, &oldtup,
+													 new_depended_xid,
+													 &depends_on_xids);
+
+			check_dependency_on_replica_identity(relid, &newtup,
+												 new_depended_xid,
+												 &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_DELETE:
+			relid = logicalrep_read_delete(&change, &oldtup);
+			check_dependency_on_replica_identity(relid, &oldtup,
+												 new_depended_xid,
+												 &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_TRUNCATE:
+			remote_relids = logicalrep_read_truncate(&change, &cascade,
+													 &restart_seqs);
+
+			/*
+			 * Truncate affects all rows in a table, so the current
+			 * transaction should wait for all preceding transactions that
+			 * modified the same table.
+			 */
+			foreach_int(truncated_relid, remote_relids)
+				check_dependency_on_rel(truncated_relid, new_depended_xid,
+										&depends_on_xids);
+
+			break;
+
+		case LOGICAL_REP_MSG_RELATION:
+			rel = logicalrep_read_rel(&change);
+
+			/*
+			 * The replica identity key could be changed, making existing
+			 * entries in the replica identity invalid. In this case, parallel
+			 * apply is not allowed on this specific table until all running
+			 * transactions that modified it have finished.
+			 */
+			check_dependency_on_rel(rel->remoteid, new_depended_xid,
+									&depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_TYPE:
+		case LOGICAL_REP_MSG_MESSAGE:
+
+			/*
+			 * Type updates accompany relation updates, so dependencies have
+			 * already been checked during relation updates. Logical messages
+			 * do not conflict with any changes, so they can be ignored.
+			 */
+			break;
+
+		default:
+			Assert(false);
+			break;
+	}
+
+	if (!depends_on_xids)
+		return;
+
+	/*
+	 * Notify the transactions that they are dependent on the current
+	 * transaction.
+	 */
+	pa_record_dependency_on_transactions(depends_on_xids);
+
+	/*
+	 * If the leader applies the transaction itself, start waiting for
+	 * transactions that depend on the current transaction immediately.
+	 */
+	if (winfo == NULL)
+	{
+		foreach_xid(xid, depends_on_xids)
+			pa_wait_for_depended_transaction(xid);
+
+		return;
+	}
+
+	initStringInfo(&dependencies);
+
+	/* Build the dependency message used to send to parallel apply worker */
+	write_internal_dependencies(&dependencies, depends_on_xids);
+
+	if (!winfo->serialize_changes)
+	{
+		if (pa_send_data(winfo, dependencies.len, dependencies.data))
+			return;
+
+		pa_switch_to_partial_serialize(winfo, true);
+	}
+
+	/* Skip writing the first internal message flag */
+	dependencies.cursor++;
+	stream_write_change(LOGICAL_REP_MSG_INTERNAL_DEPENDENCY,
+						&dependencies);
+}
+
+/*
+ * Write internal dependency information to the output for the parallel apply
+ * worker.
+ */
+static void
+write_internal_dependencies(StringInfo s, List *depends_on_xids)
+{
+	pq_sendbyte(s, PARALLEL_APPLY_INTERNAL_MESSAGE);
+	pq_sendbyte(s, LOGICAL_REP_MSG_INTERNAL_DEPENDENCY);
+	pq_sendint32(s, list_length(depends_on_xids));
+
+	foreach_xid(xid, depends_on_xids)
+		pq_sendint32(s, xid);
+}
+
+/*
+ * Handle internal dependency information.
+ *
+ * Wait for all transactions listed in the message to commit.
+ */
+static void
+apply_handle_internal_dependency(StringInfo s)
+{
+	int			nxids = pq_getmsgint(s, 4);
+
+	for (int i = 0; i < nxids; i++)
+	{
+		TransactionId xid = pq_getmsgint(s, 4);
+
+		pa_wait_for_depended_transaction(xid);
+	}
+}
+
+/*
+ * Handle internal relation information.
+ *
+ * Update all relation details in the relation map cache.
+ */
+static void
+apply_handle_internal_relation(StringInfo s)
+{
+	int			num_rels;
+
+	num_rels = pq_getmsgint(s, 4);
+
+	for (int i = 0; i < num_rels; i++)
+	{
+		LogicalRepRelation *rel = logicalrep_read_rel(s);
+
+		logicalrep_relmap_update(rel);
+
+		elog(DEBUG1, "parallel apply worker worker init relmap for %s",
+			 rel->relname);
+	}
+}
 
 /*
  * Form the origin name for the subscription.
@@ -557,13 +1187,18 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 	TransApplyAction apply_action;
 	StringInfoData original_msg;
 
-	apply_action = get_transaction_apply_action(stream_xid, &winfo);
+	Assert(!in_streamed_transaction || TransactionIdIsValid(stream_xid));
+
+	apply_action = get_transaction_apply_action(in_streamed_transaction
+												? stream_xid : remote_xid,
+												&winfo);
 
 	/* not in streaming mode */
 	if (apply_action == TRANS_LEADER_APPLY)
+	{
+		handle_dependency_on_change(action, s, InvalidTransactionId, winfo);
 		return false;
-
-	Assert(TransactionIdIsValid(stream_xid));
+	}
 
 	/*
 	 * The parallel apply worker needs the xid in this message to decide
@@ -575,14 +1210,27 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 
 	/*
 	 * We should have received XID of the subxact as the first part of the
-	 * message, so extract it.
+	 * message in streaming transactions, so extract it.
 	 */
-	current_xid = pq_getmsgint(s, 4);
+	if (in_streamed_transaction)
+		current_xid = pq_getmsgint(s, 4);
+	else
+		current_xid = remote_xid;
 
 	if (!TransactionIdIsValid(current_xid))
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("invalid transaction ID in streamed replication transaction")));
+
+	handle_dependency_on_change(action, s, current_xid, winfo);
+
+	/*
+	 * Re-fetch the latest apply action as it might have been changed during
+	 * dependency check.
+	 */
+	apply_action = get_transaction_apply_action(in_streamed_transaction
+												? stream_xid : remote_xid,
+												&winfo);
 
 	switch (apply_action)
 	{
@@ -986,16 +1634,48 @@ static void
 apply_handle_begin(StringInfo s)
 {
 	LogicalRepBeginData begin_data;
+	ParallelApplyWorkerInfo *winfo;
+	TransApplyAction apply_action;
 
 	/* There must not be an active streaming transaction. */
 	Assert(!TransactionIdIsValid(stream_xid));
 
 	logicalrep_read_begin(s, &begin_data);
-	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	remote_xid = begin_data.xid;
+
+	set_apply_error_context_xact(remote_xid, begin_data.final_lsn);
 
 	remote_final_lsn = begin_data.final_lsn;
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
+
+	pa_allocate_worker(remote_xid, false);
+
+	apply_action = get_transaction_apply_action(remote_xid, &winfo);
+
+	elog(DEBUG1, "new remote_xid %u", remote_xid);
+	switch (apply_action)
+	{
+		case TRANS_LEADER_APPLY:
+			break;
+
+		case TRANS_LEADER_SEND_TO_PARALLEL:
+			Assert(winfo);
+			pa_send_data(winfo, s->len, s->data);
+			pa_set_stream_apply_worker(winfo);
+			break;
+
+		case TRANS_PARALLEL_APPLY:
+			/* Hold the lock until the end of the transaction. */
+			pa_lock_transaction(MyParallelShared->xid, AccessExclusiveLock);
+			pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_STARTED);
+			break;
+
+		default:
+			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
+			break;
+	}
 
 	in_remote_transaction = true;
 
@@ -1011,6 +1691,11 @@ static void
 apply_handle_commit(StringInfo s)
 {
 	LogicalRepCommitData commit_data;
+	ParallelApplyWorkerInfo *winfo;
+	TransApplyAction apply_action;
+
+	/* Save the message before it is consumed. */
+	StringInfoData original_msg = *s;
 
 	logicalrep_read_commit(s, &commit_data);
 
@@ -1021,7 +1706,73 @@ apply_handle_commit(StringInfo s)
 								 LSN_FORMAT_ARGS(commit_data.commit_lsn),
 								 LSN_FORMAT_ARGS(remote_final_lsn))));
 
-	apply_handle_commit_internal(&commit_data);
+	apply_action = get_transaction_apply_action(remote_xid, &winfo);
+
+	switch (apply_action)
+	{
+		case TRANS_LEADER_APPLY:
+			apply_handle_commit_internal(&commit_data);
+			break;
+
+		case TRANS_LEADER_SEND_TO_PARALLEL:
+			Assert(winfo);
+
+			if (pa_send_data(winfo, s->len, s->data))
+			{
+				pa_commit(winfo->shared->xid);
+				/* Finish processing the transaction. */
+				pa_xact_finish(winfo, commit_data.end_lsn);
+				break;
+			}
+
+			/*
+			 * Switch to serialize mode when we are not able to send the
+			 * change to parallel apply worker.
+			 */
+			pa_switch_to_partial_serialize(winfo, true);
+
+			/* fall through */
+		case TRANS_LEADER_PARTIAL_SERIALIZE:
+			Assert(winfo);
+
+			stream_open_and_write_change(remote_xid, LOGICAL_REP_MSG_COMMIT,
+										 &original_msg);
+
+			pa_set_fileset_state(winfo->shared, FS_SERIALIZE_DONE);
+
+			/* Finish processing the transaction. */
+			pa_xact_finish(winfo, commit_data.end_lsn);
+			break;
+
+		case TRANS_PARALLEL_APPLY:
+
+			/*
+			 * If the parallel apply worker is applying spooled messages then
+			 * close the file before committing.
+			 */
+			if (stream_fd)
+				stream_close_file();
+
+			pa_before_apply_commit();
+			apply_handle_commit_internal(&commit_data);
+			pa_after_apply_commit();
+
+			MyParallelShared->last_commit_end = XactLastCommitEnd;
+
+			pa_commit_transaction();
+
+			pa_unlock_transaction(remote_xid, AccessExclusiveLock);
+			break;
+
+		default:
+			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
+			break;
+	}
+
+	remote_xid = InvalidTransactionId;
+	in_remote_transaction = false;
+
+	elog(DEBUG1, "reset remote_xid %u", remote_xid);
 
 	/* Process any tables that are being synchronized in parallel. */
 	process_syncing_tables(commit_data.end_lsn);
@@ -1141,7 +1892,8 @@ apply_handle_prepare(StringInfo s)
 	 * XactLastCommitEnd, and adding it for this purpose doesn't seems worth
 	 * it.
 	 */
-	store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr);
+	store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr,
+						 InvalidTransactionId);
 
 	in_remote_transaction = false;
 
@@ -1186,6 +1938,8 @@ apply_handle_commit_prepared(StringInfo s)
 	/* There is no transaction when COMMIT PREPARED is called */
 	begin_replication_step();
 
+	/* TODO wait for xid to finish */
+
 	/*
 	 * Update origin state so we can restart streaming from correct position
 	 * in case of crash.
@@ -1198,7 +1952,8 @@ apply_handle_commit_prepared(StringInfo s)
 	CommitTransactionCommand();
 	pgstat_report_stat(false);
 
-	store_flush_position(prepare_data.end_lsn, XactLastCommitEnd);
+	store_flush_position(prepare_data.end_lsn, XactLastCommitEnd,
+						 InvalidTransactionId);
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
@@ -1264,7 +2019,8 @@ apply_handle_rollback_prepared(StringInfo s)
 	 * transaction because we always flush the WAL record for it. See
 	 * apply_handle_prepare.
 	 */
-	store_flush_position(rollback_data.rollback_end_lsn, InvalidXLogRecPtr);
+	store_flush_position(rollback_data.rollback_end_lsn, InvalidXLogRecPtr,
+						 InvalidTransactionId);
 	in_remote_transaction = false;
 
 	/* Process any tables that are being synchronized in parallel. */
@@ -1323,7 +2079,8 @@ apply_handle_stream_prepare(StringInfo s)
 			 * It is okay not to set the local_end LSN for the prepare because
 			 * we always flush the prepare record. See apply_handle_prepare.
 			 */
-			store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr);
+			store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr,
+								 InvalidTransactionId);
 
 			in_remote_transaction = false;
 
@@ -1514,7 +2271,7 @@ apply_handle_stream_start(StringInfo s)
 
 	/* Try to allocate a worker for the streaming transaction. */
 	if (first_segment)
-		pa_allocate_worker(stream_xid);
+		pa_allocate_worker(stream_xid, true);
 
 	apply_action = get_transaction_apply_action(stream_xid, &winfo);
 
@@ -1571,6 +2328,11 @@ apply_handle_stream_start(StringInfo s)
 			/* fall through */
 		case TRANS_LEADER_PARTIAL_SERIALIZE:
 			Assert(winfo);
+
+			/*
+			 * TODO, the pa worker could start to wait too soon when
+			 * processing some old stream start
+			 */
 
 			/*
 			 * Open the spool file unless it was already opened when switching
@@ -2295,7 +3057,8 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 
 		pgstat_report_stat(false);
 
-		store_flush_position(commit_data->end_lsn, XactLastCommitEnd);
+		store_flush_position(commit_data->end_lsn, XactLastCommitEnd,
+							 InvalidTransactionId);
 	}
 	else
 	{
@@ -2328,6 +3091,9 @@ apply_handle_relation(StringInfo s)
 
 	/* Also reset all entries in the partition map that refer to remoterel. */
 	logicalrep_partmap_reset_relmap(rel);
+
+	if (am_leader_apply_worker())
+		pa_distribute_schema_changes_to_workers(rel);
 }
 
 /*
@@ -2959,6 +3725,8 @@ FindReplTupleInLocalRel(ApplyExecutionData *edata, Relation localrel,
 
 /*
  * This handles insert, update, delete on a partitioned table.
+ *
+ * TODO, support parallel apply.
  */
 static void
 apply_handle_tuple_routing(ApplyExecutionData *edata,
@@ -3251,6 +4019,8 @@ apply_handle_truncate(StringInfo s)
 	ListCell   *lc;
 	LOCKMODE	lockmode = AccessExclusiveLock;
 
+	elog(LOG, "truncate");
+
 	/*
 	 * Quick return if we are skipping data modification changes or handling
 	 * streamed transactions.
@@ -3462,6 +4232,14 @@ apply_dispatch(StringInfo s)
 			apply_handle_stream_prepare(s);
 			break;
 
+		case LOGICAL_REP_MSG_INTERNAL_RELATION:
+			apply_handle_internal_relation(s);
+			break;
+
+		case LOGICAL_REP_MSG_INTERNAL_DEPENDENCY:
+			apply_handle_internal_dependency(s);
+			break;
+
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -3482,6 +4260,10 @@ apply_dispatch(StringInfo s)
  * check which entries on it are already locally flushed. Those we can report
  * as having been flushed.
  *
+ * For non-streaming transactions managed by a parallel apply worker, we will
+ * get the local commit end from the shared parallel apply worker info once the
+ * transaction has been committed by the worker.
+ *
  * The have_pending_txes is true if there are outstanding transactions that
  * need to be flushed.
  */
@@ -3491,6 +4273,7 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 {
 	dlist_mutable_iter iter;
 	XLogRecPtr	local_flush = GetFlushRecPtr(NULL);
+	List	   *committed_pa_xid = NIL;
 
 	/*
 	 * If synchronous replication is configured, take into account its position.
@@ -3513,6 +4296,36 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 		FlushPosition *pos =
 			dlist_container(FlushPosition, node, iter.cur);
 
+		if (TransactionIdIsValid(pos->pa_remote_xid) &&
+			XLogRecPtrIsInvalid(pos->local_end))
+		{
+			bool		skipped_write;
+
+			pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid, true,
+													&skipped_write);
+
+			elog(DEBUG1,
+				 "got commit end from parallel apply worker, "
+				 "txn: %u, remote_end %X/%X, local_end %X/%X",
+				 pos->pa_remote_xid, LSN_FORMAT_ARGS(pos->remote_end),
+				 LSN_FORMAT_ARGS(pos->local_end));
+
+			/*
+			 * Break the loop if the worker has not finished applying the
+			 * transaction. There's no need to check subsequent transactions,
+			 * as they must commit after the current transaction being
+			 * examined and thus won't have their commit end available yet.
+			 */
+			if (!skipped_write && XLogRecPtrIsInvalid(pos->local_end))
+				break;
+
+			committed_pa_xid = lappend_xid(committed_pa_xid, pos->pa_remote_xid);
+		}
+
+		/*
+		 * Worker has finished applying or the transaction was applied in the
+		 * leader apply worker
+		 */
 		*write = pos->remote_end;
 
 		if (pos->local_end <= local_flush)
@@ -3521,29 +4334,19 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 			dlist_delete(iter.cur);
 			pfree(pos);
 		}
-		else
-		{
-			/*
-			 * Don't want to uselessly iterate over the rest of the list which
-			 * could potentially be long. Instead get the last element and
-			 * grab the write position from there.
-			 */
-			pos = dlist_tail_element(FlushPosition, node,
-									 &lsn_mapping);
-			*write = pos->remote_end;
-			*have_pending_txes = true;
-			return;
-		}
 	}
 
 	*have_pending_txes = !dlist_is_empty(&lsn_mapping);
+
+	cleanup_replica_identity_table(committed_pa_xid);
 }
 
 /*
  * Store current remote/local lsn pair in the tracking list.
  */
 void
-store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn)
+store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn,
+					 TransactionId remote_xid)
 {
 	FlushPosition *flushpos;
 
@@ -3561,6 +4364,7 @@ store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn)
 	flushpos = (FlushPosition *) palloc(sizeof(FlushPosition));
 	flushpos->local_end = local_lsn;
 	flushpos->remote_end = remote_lsn;
+	flushpos->pa_remote_xid = remote_xid;
 
 	dlist_push_tail(&lsn_mapping, &flushpos->node);
 	MemoryContextSwitchTo(ApplyMessageContext);
@@ -4338,7 +5142,7 @@ stream_cleanup_files(Oid subid, TransactionId xid)
  * changes for this transaction, create the buffile, otherwise open the
  * previously created file.
  */
-static void
+void
 stream_open_file(Oid subid, TransactionId xid, bool first_segment)
 {
 	char		path[MAXPGPATH];
@@ -4383,7 +5187,7 @@ stream_open_file(Oid subid, TransactionId xid, bool first_segment)
  * stream_close_file
  *	  Close the currently open file with streamed changes.
  */
-static void
+void
 stream_close_file(void)
 {
 	Assert(stream_fd != NULL);
@@ -4431,7 +5235,7 @@ stream_write_change(char action, StringInfo s)
  * target file if not already before writing the message and close the file at
  * the end.
  */
-static void
+void
 stream_open_and_write_change(TransactionId xid, char action, StringInfo s)
 {
 	Assert(!in_streamed_transaction);

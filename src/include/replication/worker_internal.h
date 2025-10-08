@@ -15,6 +15,7 @@
 #include "access/xlogdefs.h"
 #include "catalog/pg_subscription.h"
 #include "datatype/timestamp.h"
+#include "lib/dshash.h"
 #include "miscadmin.h"
 #include "replication/logicalrelation.h"
 #include "replication/walreceiver.h"
@@ -180,6 +181,11 @@ typedef struct ParallelApplyWorkerShared
 	 */
 	PartialFileSetState fileset_state;
 	FileSet		fileset;
+
+	dsa_handle	parallel_apply_dsa_handle;
+	dshash_table_handle parallelized_txns_handle;
+
+	bool		has_dependent_txn;
 } ParallelApplyWorkerShared;
 
 /*
@@ -213,6 +219,8 @@ typedef struct ParallelApplyWorkerInfo
 	 * transaction. False indicates this worker is available for re-use.
 	 */
 	bool		in_use;
+
+	bool		stream_txn;
 
 	ParallelApplyWorkerShared *shared;
 } ParallelApplyWorkerInfo;
@@ -275,6 +283,10 @@ extern void apply_dispatch(StringInfo s);
 extern void maybe_reread_subscription(void);
 
 extern void stream_cleanup_files(Oid subid, TransactionId xid);
+extern void stream_open_file(Oid subid, TransactionId xid, bool first_segment);
+extern void stream_close_file(void);
+extern void stream_open_and_write_change(TransactionId xid, char action,
+										 StringInfo s);
 
 extern void set_stream_options(WalRcvStreamOptions *options,
 							   char *slotname,
@@ -288,19 +300,23 @@ extern void SetupApplyOrSyncWorker(int worker_slot);
 
 extern void DisableSubscriptionAndExit(void);
 
-extern void store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn);
+extern void store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn,
+								 TransactionId remote_xid);
 
 /* Function for apply error callback */
 extern void apply_error_callback(void *arg);
 extern void set_apply_error_context_origin(char *originname);
 
 /* Parallel apply worker setup and interactions */
-extern void pa_allocate_worker(TransactionId xid);
+extern void pa_allocate_worker(TransactionId xid, bool stream_txn);
 extern ParallelApplyWorkerInfo *pa_find_worker(TransactionId xid);
+extern XLogRecPtr pa_get_last_commit_end(TransactionId xid, bool delete_entry,
+										 bool *skipped_write);
 extern void pa_detach_all_error_mq(void);
 
 extern bool pa_send_data(ParallelApplyWorkerInfo *winfo, Size nbytes,
 						 const void *data);
+extern void pa_distribute_schema_changes_to_workers(LogicalRepRelation *rel);
 extern void pa_switch_to_partial_serialize(ParallelApplyWorkerInfo *winfo,
 										   bool stream_locked);
 
@@ -325,11 +341,17 @@ extern void pa_decr_and_wait_stream_block(void);
 
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
+extern bool pa_transaction_committed(TransactionId xid);
+extern void pa_record_dependency_on_transactions(List *depends_on_xids);
+extern void pa_commit_transaction(void);
+extern void pa_wait_for_depended_transaction(TransactionId xid);
 
 #define isParallelApplyWorker(worker) ((worker)->in_use && \
 									   (worker)->type == WORKERTYPE_PARALLEL_APPLY)
 #define isTablesyncWorker(worker) ((worker)->in_use && \
 								   (worker)->type == WORKERTYPE_TABLESYNC)
+
+#define PARALLEL_APPLY_INTERNAL_MESSAGE	'i'
 
 static inline bool
 am_tablesync_worker(void)
@@ -350,5 +372,11 @@ am_parallel_apply_worker(void)
 	Assert(MyLogicalRepWorker->in_use);
 	return isParallelApplyWorker(MyLogicalRepWorker);
 }
+
+extern void pa_before_apply_commit(void);
+
+extern void pa_after_apply_commit(void);
+
+extern void pa_commit(TransactionId xid);
 
 #endif							/* WORKER_INTERNAL_H */
