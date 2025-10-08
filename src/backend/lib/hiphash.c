@@ -72,9 +72,12 @@ struct HIPHashHeader {
 };
 
 #define HIPSlotToFreeList(num) ((num / HIPElementsPerCacheLine) % NUM_HIP_PARTITIONS)
-#define HIPElementIsFree(elem) ((((int32) pg_atomic_read_u32(&elem->tag)) < 0)
+#define HIPElementIsFree(elem) ((((int32) pg_atomic_read_u32(&elem->tag)) < 0))
 
 static inline int32 HIPHashToBucket(HIPHashHeader *hdr, uint32 hash);
+static bool HIPElementMatches(HIPHashHeader *hdr, HIPHashElement *element,
+							  uint32 searchhash, void *searchelem,
+							  HIPEntryIndex index);
 
 static HIPHashElement * HIPPopFreeListEntry(HIPHashHeader *header,
 											HIPHashElement *element,
@@ -99,15 +102,10 @@ void
 HIPInit(HIPHashHeader *header, int32 nelements, int locktranche,
 		void *refarray, Size refstride, Size refcmpsz)
 {
-	uint64	reciprocal;
-
 	header->nelements = nelements;
 	header->refarray = refarray;
 	header->refstride = refstride;
 	header->refcmpsz = refcmpsz;
-
-	reciprocal = ((uint64) 1 << 32) / nelements;
-	header->reciprocal = reciprocal;
 
 	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
 	{
@@ -154,6 +152,36 @@ HIPHashToBucket(HIPHashHeader *hdr, uint32 hash)
 	return hash % hdr->nelements;
 }
 
+/*
+ * HIPElementMatches - Does this element match the search query?
+ *
+ * Returns true if it matches, false otherwise.
+ */
+static bool
+HIPElementMatches(HIPHashHeader *hdr, HIPHashElement *element,
+				  uint32 searchhash, void *searchelem,
+				  HIPEntryIndex index)
+{
+	uint32			checkidx;
+	Size			offset;
+	void		   *refelemptr;
+
+	Assert(offset >= 0);
+
+	if (element->used.hash != searchhash)
+		return false;
+
+	offset = index * hdr->refstride;
+	refelemptr = (char *) (hdr->refarray) + offset;
+
+	if (memcmp(searchelem, refelemptr, hdr->refcmpsz) != 0)
+		return false;
+
+	checkidx = pg_atomic_read_membarrier_u32(&element->tag);
+
+	return checkidx == index;
+}
+
 HIPEntryIndex
 HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
 					   void *searchelem)
@@ -161,9 +189,107 @@ HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
 	int32		bucketidx = HIPHashToBucket(header, hash);
 	HIPHashElement *elem = &header->elements[bucketidx];
 	uint32		nextptr = pg_atomic_read_u32(&elem->bucket);
+
+	/* Slot empty? -> Element not present */
+	if (nextptr == InvalidSlotPtr)
+		return HIPNotPresent;
+
+	/*
+	 * We co-allocate elements with their buckets where possible.
+	 * By adding this branch, we allow the CPU to speculate past
+	 * this memory access; which is likely to succeed.
+	 */
+	if ((-nextptr) != bucketidx)
+		elem = &header->elements[-nextptr];
+
+	/* follow the chain */
 	while (nextptr != InvalidSlotPtr)
 	{
-		if ()
+		HIPEntryIndex idx = pg_atomic_read_membarrier_u32(&elem->tag);
+		nextptr = pg_atomic_read_u32(&elem->used.next);
+
+		/* Element is not populated; the list was concurrently modified */
+		if (idx < 0)
+			return HIPTryWithLocks;
+
+		/* If the element matches, nice! */
+		if (HIPElementMatches(header, elem, hash, searchelem, idx))
+		{
+			return idx;
+		}
+
+		/* The element didn't match - follow the link to the next element */
+		if (nextptr >= 0)
+		{
+			elem = &header->elements[-nextptr];
+		}
+		else
+		{
+			/*
+			 * No next element. In cases of bad luck we can be victim to concurrent
+			 * modification, so make the caller retry with locks.
+			 */
+			return HIPTryWithLocks;
+		}
 	}
+
+	pg_unreachable();
+}
+
+/*
+ *
+ */
+HIPEntryIndex
+HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
+					   void *searchelem)
+{
+	int32		bucketidx = HIPHashToBucket(header, hash);
+	HIPHashElement *elem = &header->elements[bucketidx];
+	uint32		nextptr = pg_atomic_read_u32(&elem->bucket);
+
+	/* Slot empty? -> Element not present */
+	if (nextptr == InvalidSlotPtr)
+		return HIPNotPresent;
+
+	/*
+	 * We co-allocate elements with their buckets where possible.
+	 * By adding this branch, we allow the CPU to speculate past
+	 * this memory access; which is likely to succeed.
+	 */
+	if ((-nextptr) != bucketidx)
+		elem = &header->elements[-nextptr];
+
+	/* follow the chain */
+	while (nextptr != InvalidSlotPtr)
+	{
+		HIPEntryIndex idx = pg_atomic_read_membarrier_u32(&elem->tag);
+		nextptr = pg_atomic_read_u32(&elem->used.next);
+
+		/* Element is not populated; the list was concurrently modified */
+		if (idx < 0)
+			return HIPTryWithLocks;
+
+		/* If the element matches, nice! */
+		if (HIPElementMatches(header, elem, hash, searchelem, idx))
+		{
+			return idx;
+		}
+
+		/* The element didn't match - follow the link to the next element */
+		if (nextptr >= 0)
+		{
+			elem = &header->elements[-nextptr];
+		}
+		else
+		{
+			/*
+			 * No next element. In cases of bad luck we can be victim to concurrent
+			 * modification, so make the caller retry with locks.
+			 */
+			return HIPTryWithLocks;
+		}
+	}
+
+	pg_unreachable();
 }
 
