@@ -108,10 +108,10 @@ BufferManagerShmemInit(void)
 		ShmemInitStruct("Checkpoint BufferIds",
 						NBuffers * sizeof(CkptSortItem), &foundBufCkpt);
 
-	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
+	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt || foundBufHash)
 	{
 		/* should find all of these, or none of them */
-		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt);
+		Assert(foundDescs && foundBufs && foundIOCV && foundBufCkpt && foundBufHash);
 		/* note: this path is only taken in EXEC_BACKEND case */
 	}
 	else
