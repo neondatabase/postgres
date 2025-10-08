@@ -37,6 +37,7 @@
 #include "access/twophase_rmgr.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
+#include "lib/hiphash.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "storage/lmgr.h"
@@ -318,9 +319,16 @@ static volatile FastPathStrongRelationLockData *FastPathStrongRelationLocks;
  * The LockMethodLockHash and LockMethodProcLockHash hash tables are in
  * shared memory; LockMethodLocalHash is local to each backend.
  */
-static HTAB *LockMethodLockHash;
-static HTAB *LockMethodProcLockHash;
-static HTAB *LockMethodLocalHash;
+static HIPHashHeader *LockMethodLockHash;
+static HIPHashHeader *LockMethodProcLockHash;
+static HIPHashHeader *LockMethodLocalHash;
+
+/*
+ * Pre-allocated arrays of lock structures for HIP hash tables
+ */
+static LOCK *AllLocks;
+static PROCLOCK *AllProclocks;
+static LOCALLOCK *AllLocalLocks;
 
 
 /* private state for error cleanup */
@@ -462,11 +470,12 @@ LockManagerShmemInit(void)
 	info.entrysize = sizeof(LOCK);
 	info.num_partitions = NUM_LOCK_PARTITIONS;
 
-	LockMethodLockHash = ShmemInitHash("LOCK hash",
-									   init_table_size,
-									   max_table_size,
-									   &info,
-									   HASH_ELEM | HASH_BLOBS | HASH_PARTITION);
+	AllLocks = (LOCK *) ShmemInitStruct("LOCK array",
+										mul_size(max_table_size, sizeof(LOCK)),
+										&found);
+	LockMethodLockHash = (HIPHashHeader *) ShmemInitStruct("LOCK hash",HIPGetSize(max_table_size), &found);
+	HIPInit(LockMethodLockHash, max_table_size, LWTRANCHE_LOCK_MANAGER, AllLocks, sizeof(LOCK), sizeof(LOCKTAG));
+
 
 	/* Assume an average of 2 holders per lock */
 	max_table_size *= 2;
@@ -481,11 +490,11 @@ LockManagerShmemInit(void)
 	info.hash = proclock_hash;
 	info.num_partitions = NUM_LOCK_PARTITIONS;
 
-	LockMethodProcLockHash = ShmemInitHash("PROCLOCK hash",
-										   init_table_size,
-										   max_table_size,
-										   &info,
-										   HASH_ELEM | HASH_FUNCTION | HASH_PARTITION);
+	AllProclocks = (PROCLOCK *) ShmemInitStruct("PROCLOCK array",
+												mul_size(max_table_size, sizeof(PROCLOCK)),
+												&found);
+	LockMethodProcLockHash = (HIPHashHeader *) ShmemInitStruct("PROCLOCK hash",HIPGetSize(max_table_size), &found);
+	HIPInit(LockMethodProcLockHash, max_table_size, LWTRANCHE_LOCK_MANAGER, AllProclocks, sizeof(PROCLOCK), sizeof(PROCLOCKTAG));
 
 	/*
 	 * Allocate fast-path structures.
@@ -508,14 +517,16 @@ InitLockManagerAccess(void)
 	 * counts and resource owner information.
 	 */
 	HASHCTL		info;
+	bool		found;
 
 	info.keysize = sizeof(LOCALLOCKTAG);
 	info.entrysize = sizeof(LOCALLOCK);
 
-	LockMethodLocalHash = hash_create("LOCALLOCK hash",
-									  16,
-									  &info,
-									  HASH_ELEM | HASH_BLOBS);
+	AllLocalLocks = (LOCALLOCK *) ShmemInitStruct("LOCALLOCK array",
+												  mul_size(16, sizeof(LOCALLOCK)),
+												  &found);
+	LockMethodLocalHash = (HIPHashHeader *) ShmemInitStruct("LOCALLOCK hash",16, &found);
+	HIPInit(LockMethodLocalHash, 16, LWTRANCHE_LOCK_MANAGER, AllLocalLocks, sizeof(LOCALLOCK), sizeof(LOCALLOCKTAG));
 }
 
 
@@ -555,7 +566,10 @@ GetLockTagsMethodTable(const LOCKTAG *locktag)
 uint32
 LockTagHashCode(const LOCKTAG *locktag)
 {
-	return get_hash_value(LockMethodLockHash, locktag);
+	/* The HTAB for Locktag was initially using HASH_BLOBS. */
+	/* This results in using tag_hash if the size of the key is not 4 bytes. */
+	/* As Locktag is more than 4 bytes, we use tag_hash. */
+	return tag_hash(locktag, sizeof(LOCKTAG));
 }
 
 /*
@@ -1286,18 +1300,35 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
 	PROCLOCK   *proclock;
 	PROCLOCKTAG proclocktag;
 	uint32		proclock_hashcode;
-	bool		found;
+	HIPEntryIndex lock_idx;
+	HIPEntryIndex prock_idx;
+	bool		found = true;
 
 	/*
 	 * Find or create a lock with this tag.
 	 */
-	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-												locktag,
-												hashcode,
-												HASH_ENTER_NULL,
-												&found);
-	if (!lock)
-		return NULL;
+	lock_idx = HIPGetElementUnlocked(LockMethodLockHash,
+										   hashcode,
+										   AllLocks);
+	
+	// If the element is not present
+	if (lock_idx == HIPNotPresent)
+	{
+		// If we cannot create a new element, return NULL
+		if (!HIPHasFreeSlots(LockMethodLockHash, hashcode))
+		{
+			found = false;
+			return NULL;
+		}
+		
+		// Create a new element
+		lock_idx = HIPInsertElement(LockMethodLockHash, hashcode, AllLocks);
+		lock = &AllLocks[lock_idx];
+	}
+	else
+	{
+		lock = &AllLocks[lock_idx];
+	}
 
 	/*
 	 * if it's a new lock object, initialize it
@@ -1333,15 +1364,11 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
 	/*
 	 * Find or create a proclock entry with this tag
 	 */
-	proclock = (PROCLOCK *) hash_search_with_hash_value(LockMethodProcLockHash,
-														&proclocktag,
-														proclock_hashcode,
-														HASH_ENTER_NULL,
-														&found);
-	if (!proclock)
+	prock_idx = HIPGetElementUnlocked(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+	if (prock_idx == HIPNotPresent)
 	{
 		/* Oops, not enough shmem for the proclock */
-		if (lock->nRequested == 0)
+		if (!HIPHasFreeSlots(LockMethodProcLockHash, proclock_hashcode))
 		{
 			/*
 			 * There are no other requestors of this lock, so garbage-collect
@@ -1350,14 +1377,18 @@ SetupLockInTable(LockMethod lockMethodTable, PGPROC *proc,
 			 * anyone to release the lock object later.
 			 */
 			Assert(dlist_is_empty(&(lock->procLocks)));
-			if (!hash_search_with_hash_value(LockMethodLockHash,
-											 &(lock->tag),
-											 hashcode,
-											 HASH_REMOVE,
-											 NULL))
+			if (HIPRemoveElement(LockMethodLockHash, hashcode, lock, AllLocks) == HIPNotPresent)
 				elog(PANIC, "lock table corrupted");
+			return NULL;
 		}
-		return NULL;
+
+		// Create a new element
+		prock_idx = HIPInsertElement(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+		proclock = &AllProclocks[prock_idx];
+	}
+	else
+	{
+		proclock = &AllProclocks[prock_idx];
 	}
 
 	/*
@@ -1750,11 +1781,7 @@ CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 		dlist_delete(&proclock->lockLink);
 		dlist_delete(&proclock->procLink);
 		proclock_hashcode = ProcLockHashCode(&proclock->tag, hashcode);
-		if (!hash_search_with_hash_value(LockMethodProcLockHash,
-										 &(proclock->tag),
-										 proclock_hashcode,
-										 HASH_REMOVE,
-										 NULL))
+		if (HIPRemoveElement(LockMethodProcLockHash, proclock_hashcode, proclock, AllProclocks) < 0)
 			elog(PANIC, "proclock table corrupted");
 	}
 
@@ -1766,11 +1793,7 @@ CleanUpLock(LOCK *lock, PROCLOCK *proclock,
 		 */
 		LOCK_PRINT("CleanUpLock: deleting", lock, 0);
 		Assert(dlist_is_empty(&lock->procLocks));
-		if (!hash_search_with_hash_value(LockMethodLockHash,
-										 &(lock->tag),
-										 hashcode,
-										 HASH_REMOVE,
-										 NULL))
+		if (HIPRemoveElement(LockMethodLockHash, hashcode, lock, AllLocks) < 0)
 			elog(PANIC, "lock table corrupted");
 	}
 	else if (wakeupNeeded)
@@ -2210,25 +2233,24 @@ LockRelease(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 	if (!lock)
 	{
 		PROCLOCKTAG proclocktag;
+		HIPEntryIndex lock_idx;
+		HIPEntryIndex prock_idx;
 
 		Assert(EligibleForRelationFastPath(locktag, lockmode));
-		lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-													locktag,
-													locallock->hashcode,
-													HASH_FIND,
-													NULL);
+		lock_idx = HIPGetElementUnlocked(LockMethodLockHash, locallock->hashcode, AllLocks);
+		lock = &AllLocks[lock_idx];
+
 		if (!lock)
 			elog(ERROR, "failed to re-find shared lock object");
 		locallock->lock = lock;
 
 		proclocktag.myLock = lock;
 		proclocktag.myProc = MyProc;
-		locallock->proclock = (PROCLOCK *) hash_search(LockMethodProcLockHash,
-													   &proclocktag,
-													   HASH_FIND,
-													   NULL);
-		if (!locallock->proclock)
+		procklock_idx = HIPGetElementUnlocked(LockMethodProcLockHash, proclocktag, AllProclocks);
+		if (procklock_idx < 0)
 			elog(ERROR, "failed to re-find shared proclock object");
+		else
+			locallock->proclock = &AllProclocks[procklock_idx];
 	}
 	LOCK_PRINT("LockRelease: found", lock, lockmode);
 	proclock = locallock->proclock;
@@ -2985,14 +3007,15 @@ FastPathGetRelationLockEntry(LOCALLOCK *locallock)
 		LOCK	   *lock;
 		PROCLOCKTAG proclocktag;
 		uint32		proclock_hashcode;
+		HIPEntryIndex lock_idx;
+		HIPEntryIndex prock_idx;
 
 		LWLockAcquire(partitionLock, LW_SHARED);
 
-		lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-													locktag,
-													locallock->hashcode,
-													HASH_FIND,
-													NULL);
+
+		lock_idx = HIPGetElementUnlocked(LockMethodLockHash, locallock->hashcode, AllLocks);
+		lock = &AllLocks[lock_idx];
+
 		if (!lock)
 			elog(ERROR, "failed to re-find shared lock object");
 
@@ -3000,14 +3023,12 @@ FastPathGetRelationLockEntry(LOCALLOCK *locallock)
 		proclocktag.myProc = MyProc;
 
 		proclock_hashcode = ProcLockHashCode(&proclocktag, locallock->hashcode);
-		proclock = (PROCLOCK *)
-			hash_search_with_hash_value(LockMethodProcLockHash,
-										&proclocktag,
-										proclock_hashcode,
-										HASH_FIND,
-										NULL);
-		if (!proclock)
+		prock_idx = HIPGetElementUnlocked(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+		if (prock_idx < 0)
 			elog(ERROR, "failed to re-find shared proclock object");
+		else
+			proclock = &AllProclocks[prock_idx];
+
 		LWLockRelease(partitionLock);
 	}
 
@@ -3045,6 +3066,7 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 	PROCLOCK   *proclock;
 	uint32		hashcode;
 	LWLock	   *partitionLock;
+	HIPEntryIndex lock_idx;
 	int			count = 0;
 	int			fast_count = 0;
 
@@ -3174,12 +3196,9 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 	 */
 	LWLockAcquire(partitionLock, LW_SHARED);
 
-	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-												locktag,
-												hashcode,
-												HASH_FIND,
-												NULL);
-	if (!lock)
+	lock_idx = HIPGetElementUnlocked(LockMethodLockHash, hashcode, AllLocks);
+
+	if (lock_idx < 0)
 	{
 		/*
 		 * If the lock object doesn't exist, there is nothing holding a lock
@@ -3191,6 +3210,10 @@ GetLockConflicts(const LOCKTAG *locktag, LOCKMODE lockmode, int *countp)
 		if (countp)
 			*countp = count;
 		return vxids;
+	}
+	else
+	{
+		lock = &AllLocks[lock_idx];
 	}
 
 	/*
@@ -3261,6 +3284,8 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 	uint32		hashcode;
 	uint32		proclock_hashcode;
 	LWLock	   *partitionLock;
+	HIPEntryIndex lock_idx;
+	HIPEntryIndex prock_idx;
 	bool		wakeupNeeded;
 
 	hashcode = LockTagHashCode(locktag);
@@ -3271,13 +3296,12 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 	/*
 	 * Re-find the lock object (it had better be there).
 	 */
-	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-												locktag,
-												hashcode,
-												HASH_FIND,
-												NULL);
-	if (!lock)
+	lock_idx = HIPGetElementUnlocked(LockMethodLockHash, hashcode, AllLocks);
+
+	if (lock_idx < 0)
 		elog(PANIC, "failed to re-find shared lock object");
+	else
+		lock = &AllLocks[lock_idx];
 
 	/*
 	 * Re-find the proclock object (ditto).
@@ -3287,12 +3311,13 @@ LockRefindAndRelease(LockMethod lockMethodTable, PGPROC *proc,
 
 	proclock_hashcode = ProcLockHashCode(&proclocktag, hashcode);
 
-	proclock = (PROCLOCK *) hash_search_with_hash_value(LockMethodProcLockHash,
-														&proclocktag,
-														proclock_hashcode,
-														HASH_FIND,
-														NULL);
-	if (!proclock)
+	prock_idx = HIPGetElementUnlocked(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+	if (prock_idx < 0)
+		elog(PANIC, "failed to re-find shared proclock object");
+	else
+		proclock = &AllProclocks[prock_idx];
+
+	if (prock_idx < 0)
 		elog(PANIC, "failed to re-find shared proclock object");
 
 	/*
@@ -4360,18 +4385,27 @@ lock_twophase_recover(TransactionId xid, uint16 info,
 	/*
 	 * Find or create a lock with this tag.
 	 */
-	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-												locktag,
-												hashcode,
-												HASH_ENTER_NULL,
-												&found);
-	if (!lock)
+	lock_idx = HIPGetElementUnlocked(LockMethodLockHash, hashcode, AllLocks);
+
+	if (lock_idx < 0)
 	{
-		LWLockRelease(partitionLock);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of shared memory"),
-				 errhint("You might need to increase \"%s\".", "max_locks_per_transaction")));
+		found = false;
+		if (!HIPHasFreeSlots(LockMethodLockHash, hashcode))
+		{
+			LWLockRelease(partitionLock);
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of shared memory"),
+					 errhint("You might need to increase \"%s\".", "max_locks_per_transaction")));
+		}
+
+		lock_idx = HIPInsertElement(LockMethodLockHash, hashcode, AllLocks);
+		lock = &AllLocks[lock_idx];
+	}
+	else
+	{
+		found = true;
+		lock = &AllLocks[lock_idx];
 	}
 
 	/*
@@ -4408,15 +4442,12 @@ lock_twophase_recover(TransactionId xid, uint16 info,
 	/*
 	 * Find or create a proclock entry with this tag
 	 */
-	proclock = (PROCLOCK *) hash_search_with_hash_value(LockMethodProcLockHash,
-														&proclocktag,
-														proclock_hashcode,
-														HASH_ENTER_NULL,
-														&found);
-	if (!proclock)
+	prock_idx = HIPGetElementUnlocked(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+	if (prock_idx < 0)
 	{
+		found = false;
 		/* Oops, not enough shmem for the proclock */
-		if (lock->nRequested == 0)
+		if (!HIPHasFreeSlots(LockMethodProcLockHash, proclock_hashcode))
 		{
 			/*
 			 * There are no other requestors of this lock, so garbage-collect
@@ -4431,12 +4462,21 @@ lock_twophase_recover(TransactionId xid, uint16 info,
 											 HASH_REMOVE,
 											 NULL))
 				elog(PANIC, "lock table corrupted");
+
+			LWLockRelease(partitionLock);
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of shared memory"),
+						errhint("You might need to increase \"%s\".", "max_locks_per_transaction")));
 		}
-		LWLockRelease(partitionLock);
-		ereport(ERROR,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of shared memory"),
-				 errhint("You might need to increase \"%s\".", "max_locks_per_transaction")));
+		
+		prock_idx = HIPInsertElement(LockMethodProcLockHash, proclock_hashcode, AllProclocks);
+		proclock = &AllProclocks[prock_idx];
+	}
+	else
+	{
+		found = true;
+		proclock = &AllProclocks[prock_idx];
 	}
 
 	/*
@@ -4837,13 +4877,10 @@ LockWaiterCount(const LOCKTAG *locktag)
 	partitionLock = LockHashPartitionLock(hashcode);
 	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
 
-	lock = (LOCK *) hash_search_with_hash_value(LockMethodLockHash,
-												locktag,
-												hashcode,
-												HASH_FIND,
-												&found);
-	if (found)
+	lock_idx = HIPGetElementUnlocked(LockMethodLockHash, hashcode, AllLocks);
+	if (lock_idx >= 0)
 	{
+		lock = &AllLocks[lock_idx];
 		Assert(lock != NULL);
 		waiters = lock->nRequested;
 	}

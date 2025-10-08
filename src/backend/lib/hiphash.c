@@ -374,7 +374,7 @@ slot_found:
 	SpinLockRelease(&hdr->partitions[partnum].p.fllock);
 }
 
-void
+HIPEntryIndex
 HIPRemoveElement(HIPHashHeader *hdr, uint32 hash,
 				 HIPEntryIndex idx, void *searchelem)
 {
@@ -385,12 +385,16 @@ HIPRemoveElement(HIPHashHeader *hdr, uint32 hash,
 
 	reselemidx = HIPGetElementInternal(hdr, hash, searchelem, &out);
 
+	if (reselemidx < 0)
+		return reselemidx;
+
 	Assert(reselemidx >= 0);
 	elem = &hdr->elements[reselemidx];
 	Assert(!HIPElementIsFree(elem));
 	Assert(elem->used.index == idx);
 
 	HIPAppendFreeListEntry(hdr, elem, reselemidx);
+	return out;
 }
 
 static void
@@ -427,4 +431,30 @@ HIPRemoveFromFreelist(HIPHashHeader *hdr, HIPHashElement *element,
 	}
 
 	partition->flnmembers--;
+}
+
+/*
+ * HIPHasFreeSlots - Check if there are free slots available in the partition
+ *                   for the given hash.
+ *
+ * This function checks whether the partition that would handle the given hash
+ * value has any free slots in its free list. This can be used to determine if
+ * an insertion is likely to succeed without actually attempting it.
+ *
+ * Returns true if free slots are available, false otherwise.
+ */
+bool
+HIPHasFreeSlots(HIPHashHeader *hdr, uint32 hash)
+{
+	int32		bucketidx;
+	int			partnum;
+	HIPPartition *part;
+
+	/* Determine which bucket and partition this hash maps to */
+	bucketidx = HIPHashToBucket(hdr, hash);
+	partnum = HIPSlotToPartition(bucketidx);
+	part = &hdr->partitions[partnum].p;
+
+	/* Check if the partition has any free members */
+	return (part->flnmembers > 0);
 }

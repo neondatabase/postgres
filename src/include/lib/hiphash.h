@@ -70,7 +70,14 @@ HIPEntryIndex HIPInsertElement(HIPHashHeader *header, uint32 hash,
  *
  * Caller is responsible for locking.
  */
-void HIPRemoveElement(HIPHashHeader *header, uint32 hash,
+HIPEntryIndex HIPRemoveElement(HIPHashHeader *header, uint32 hash,
 					  HIPEntryIndex entry, void *searchelem);
+
+/*
+ * Check if there are free slots available in the partition for the given hash.
+ *
+ * Returns true if slots are available, false otherwise.
+ */
+bool HIPHasFreeSlots(HIPHashHeader *header, uint32 hash);
 
 #endif /* HIPHASH_H */
