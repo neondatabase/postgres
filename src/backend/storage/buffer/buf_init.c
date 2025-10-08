@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "storage/aio.h"
+#include "lib/hiphash.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 
@@ -23,6 +24,8 @@ char	   *BufferBlocks;
 ConditionVariableMinimallyPadded *BufferIOCVArray;
 WritebackContext BackendWritebackContext;
 CkptSortItem *CkptBufferIds;
+
+static HIPHashHeader *BufHashHeader;
 
 
 /*
@@ -70,7 +73,8 @@ BufferManagerShmemInit(void)
 	bool		foundBufs,
 				foundDescs,
 				foundIOCV,
-				foundBufCkpt;
+				foundBufCkpt,
+				foundBufHash;
 
 	/* Align descriptors to a cacheline boundary. */
 	BufferDescriptors = (BufferDescPadded *)
@@ -90,6 +94,9 @@ BufferManagerShmemInit(void)
 		ShmemInitStruct("Buffer IO Condition Variables",
 						NBuffers * sizeof(ConditionVariableMinimallyPadded),
 						&foundIOCV);
+
+	BufHashHeader = (HIPHashHeader *)
+		ShmemInitStruct("Buffer Hash Header", HIPGetSize(NBuffers), &foundBufHash);
 
 	/*
 	 * The array used to sort to-be-checkpointed buffer ids is located in
@@ -183,6 +190,9 @@ BufferManagerShmemSize(void)
 
 	/* size of checkpoint sort array in bufmgr.c */
 	size = add_size(size, mul_size(NBuffers, sizeof(CkptSortItem)));
+
+	/* size of buffer hash header */
+	size = add_size(size, HIPGetSize(NBuffers));
 
 	return size;
 }

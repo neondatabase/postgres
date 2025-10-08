@@ -28,8 +28,7 @@ Size HIPGetSize(int nelements);
  * Initialize this HIP hash table with its size, the LW lock trance to
  * for locking, and the array of elements it's a lookup table for.
  */
-void HIPInit(int nelements, int locktranche,
-			 void *refarray, Size refstride, Size refcmpsz);
+void HIPInit(HIPHashHeader *header, int nelements, int locktranche, void *refarray, Size refstride, Size refcmpsz);
 
 /*
  * Get this element from the table, without locking.
@@ -39,7 +38,7 @@ void HIPInit(int nelements, int locktranche,
  * of the hashed element could not be guaranteed due to e.g. potential
  * recent changes to the bucket.
  */
-HIPEntryIndex HIPGetElementUnchecked(uint32 hash,
+HIPEntryIndex HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
 									 void *searchelem);
 
 /*
@@ -47,7 +46,7 @@ HIPEntryIndex HIPGetElementUnchecked(uint32 hash,
  *
  * Returns HIPNotPresent when the element is not found.
  */
-HIPEntryIndex HIPGetElementChecked(uint32 hash,
+HIPEntryIndex HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
 								   void *searchelem);
 
 /*
@@ -55,7 +54,7 @@ HIPEntryIndex HIPGetElementChecked(uint32 hash,
  *
  * Caller is responsible for locking.
  */
-HIPEntryIndex HIPInsertElement(uint32 hash,
+HIPEntryIndex HIPInsertElement(HIPHashHeader *header, uint32 hash,
 							   HIPEntryIndex entry);
 
 /*
@@ -63,7 +62,7 @@ HIPEntryIndex HIPInsertElement(uint32 hash,
  *
  * Caller is responsible for locking.
  */
-void HIPRemoveElement(uint32 hash,
+void HIPRemoveElement(HIPHashHeader *header, uint32 hash,
 					  HIPEntryIndex entry);
 
 #endif /* HIPHASH_H */

@@ -487,7 +487,9 @@ StrategyInitialize(bool init)
 	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
 	 */
 	// InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
-	HIPInit(NBuffers + NUM_BUFFER_PARTITIONS);
+	HIPInit(BufHashHeader, NBuffers + NUM_BUFFER_PARTITIONS, 
+			LWTRANCHE_BUFFER_MAPPING, BufferDescriptors, 
+			sizeof(BufferDescPadded), sizeof(BufferTag));
 
 	/*
 	 * Get or create the shared strategy control block

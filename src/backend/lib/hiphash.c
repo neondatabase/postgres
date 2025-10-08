@@ -85,8 +85,6 @@ static HIPHashElement * HIPPopFreeListEntry(HIPHashHeader *header,
 											uint32 hash);
 static void HIPAppendFreeListEntry(HIPHashHeader *header, HIPHashElement *element, int slotno);
 
-static HIPHashHeader *HIPHashHeader;
-
 Size
 HIPGetSize(int32 nelements)
 {
@@ -101,18 +99,17 @@ HIPGetSize(int32 nelements)
  * Initialize this HIP hash table.
  */
 void
-HIPInit(int32 nelements, int locktranche)
+HIPInit(HIPHashHeader *header, int32 nelements, int locktranche, void *refarray, Size refstride, Size refcmpsz)
 {
-	HipHashHeader = (HIPHashHeader *)ShmemInitStruct("HIP Hash Header", HIPGetSize(nelements), &found);
-	HipHashHeader->nelements = nelements;
+	header->nelements = nelements;
 	header->refarray = refarray;
 	header->refstride = refstride;
 	header->refcmpsz = refcmpsz;
 
 	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
 	{
-		HIPPartition *part = &HipHashHeader->partitions[i].p;
-		memset(&HipHashHeader->partitions[i]._pad, 0, HIP_CACHE_LINE_SIZE);
+		HIPPartition *part = &header->partitions[i].p;
+		memset(&header->partitions[i]._pad, 0, HIP_CACHE_LINE_SIZE);
 		LWLockInitialize(&part->bucketlock, locktranche);
 		SpinLockInit(&part->fllock);
 		pg_atomic_unlocked_write_u32(&part->flstart, InvalidSlotPtr);
@@ -121,23 +118,23 @@ HIPInit(int32 nelements, int locktranche)
 
 	for (int32 i = 0; i < nelements; i++)
 	{
-		HIPHashElement *elem = &HipHashHeader->elements[i];
+		HIPHashElement *elem = &header->elements[i];
 		pg_atomic_unlocked_write_u32(&elem->bucket, InvalidSlotPtr);
-		HIPAppendFreeListEntry(HipHashHeader, elem, i);
+		HIPAppendFreeListEntry(header, elem, i);
 	}
 }
 
 static void
-HIPAppendFreeListEntry(HIPHashElement *element, int32 slotno)
+HIPAppendFreeListEntry(HIPHashHeader *header, HIPHashElement *element, int32 slotno)
 {
 	int		partid = HIPSlotToFreeList(slotno);
-	HIPPartition *part = &HipHashHeader->partitions[partid].p;
+	HIPPartition *part = &header->partitions[partid].p;
 	HIPHashElement *lastflelem;
 	int32		last;
 
 	SpinLockAcquire(&part->fllock);
 	last = pg_atomic_read_u32(&part->flend);
-	lastflelem = &HipHashHeader->elements[last];
+	lastflelem = &header->elements[last];
 
 	pg_atomic_unlocked_write_u32(&element->free.next, (uint32) InvalidSlotPtr);
 	pg_atomic_unlocked_write_u32(&element->free.prev, last);

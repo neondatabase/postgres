@@ -28,6 +28,7 @@
 #include "storage/spin.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
+#include "lib/hiphash.h"
 
 /*
  * Buffer state is a single 32-bit variable where following data is combined.
@@ -325,6 +326,7 @@ typedef struct WritebackContext
 extern PGDLLIMPORT BufferDescPadded *BufferDescriptors;
 extern PGDLLIMPORT ConditionVariableMinimallyPadded *BufferIOCVArray;
 extern PGDLLIMPORT WritebackContext BackendWritebackContext;
+extern PGDLLIMPORT HIPHashHeader *BufHashHeader;
 
 /* in localbuf.c */
 extern PGDLLIMPORT BufferDesc *LocalBufferDescriptors;
