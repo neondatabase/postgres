@@ -267,7 +267,7 @@ HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
 
 		/* Element is not populated; the list was concurrently modified */
 		if (idx < 0)
-			return HIPTryWithLocks;
+			return HIPNotPresent;
 
 		/* If the element matches, nice! */
 		if (HIPElementMatches(header, elem, hash, searchelem, idx))
@@ -286,7 +286,7 @@ HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
 			 * No next element. In cases of bad luck we can be victim to concurrent
 			 * modification, so make the caller retry with locks.
 			 */
-			return HIPTryWithLocks;
+			return HIPNotPresent;
 		}
 	}
 
