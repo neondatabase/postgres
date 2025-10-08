@@ -110,7 +110,7 @@ HIPInit(HIPHashHeader *header, int32 nelements, int locktranche,
 	for (int i = 0; i < NUM_HIP_PARTITIONS; i++)
 	{
 		HIPPartition *part = &header->partitions[i].p;
-		memset(&header->partitions[i].pad, 0, HIP_CACHE_LINE_SIZE);
+		memset(&header->partitions[i]._pad, 0, HIP_CACHE_LINE_SIZE);
 		LWLockInitialize(&part->bucketlock, locktranche);
 		SpinLockInit(&part->fllock);
 		pg_atomic_unlocked_write_u32(&part->flstart, InvalidSlotPtr);
