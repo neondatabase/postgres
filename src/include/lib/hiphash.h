@@ -39,16 +39,24 @@ void HIPInit(HIPHashHeader *header, int nelements, int locktranche,
  * of the hashed element could not be guaranteed due to e.g. potential
  * recent changes to the bucket.
  */
-HIPEntryIndex HIPGetElementUnchecked(HIPHashHeader *header, uint32 hash,
-									 void *searchelem);
+HIPEntryIndex HIPGetElementUnlocked(HIPHashHeader *header, uint32 hash,
+									void *searchelem);
 
 /*
  * Find this exact element, with locking.
  *
  * Returns HIPNotPresent when the element is not found.
  */
-HIPEntryIndex HIPGetElementChecked(HIPHashHeader *header, uint32 hash,
-								   void *searchelem);
+HIPEntryIndex HIPGetElementLocked(HIPHashHeader *header, uint32 hash,
+								  void *searchelem);
+
+/*
+ * Insert this exact element.
+ *
+ * Caller must hold a write lock on this hash's partition.
+ */
+void HIPInsertElementLocked(HIPHashHeader *header, uint32 hash,
+							HIPEntryIndex index);
 
 /*
  * Insert this entry into the HIP hash table.
