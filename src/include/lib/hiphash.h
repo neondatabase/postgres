@@ -24,6 +24,10 @@ typedef int32 HIPEntryIndex;
 #define HIPTryWithLocks (-2)
 
 Size HIPGetSize(int nelements);
+/*
+ * Initialize this HIP hash table with its size, the LW lock trance to
+ * for locking, and the array of elements it's a lookup table for.
+ */
 void HIPInit(HIPHashHeader *header, int nelements, int locktranche,
 			 void *refarray, Size refstride, Size refcmpsz);
 
