@@ -2737,8 +2737,8 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 
 		LWLockAcquire(partition_lock, LW_EXCLUSIVE);
 
-		// existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
-		existing_id = HIPInsertElement(BufHashHeader, hash, victim_buf_hdr->buf_id);
+		existing_id = BufTableInsert(&tag, hash, victim_buf_hdr->buf_id);
+		Assert(existing_id == HIPInsertElement(BufHashHeader, hash, victim_buf_hdr->buf_id));
 
 		/*
 		 * We get here only in the corner case where we are trying to extend
