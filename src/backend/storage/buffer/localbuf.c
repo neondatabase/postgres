@@ -187,7 +187,7 @@ FlushLocalBuffer(BufferDesc *bufHdr, SMgrRelation reln)
 {
 	instr_time	io_start;
 	Page		localpage = (char *) LocalBufHdrGetBlock(bufHdr);
-	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
+	BufferTag	*tag = GetLocalBufferTag(-BufferDescriptorGetBuffer(bufHdr) - 1);
 
 	Assert(LocalRefCount[-BufferDescriptorGetBuffer(bufHdr) - 1] > 0);
 
@@ -610,8 +610,8 @@ void
 InvalidateLocalBuffer(BufferDesc *bufHdr, bool check_unreferenced)
 {
 	Buffer		buffer = BufferDescriptorGetBuffer(bufHdr);
-	BufferTag	*tag = GetLocalBufferTag(bufHdr->buf_id);
 	int			bufid = -buffer - 1;
+	BufferTag	*tag = GetLocalBufferTag(bufid);
 	uint32		buf_state;
 	LocalBufferLookupEnt *hresult;
 

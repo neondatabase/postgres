@@ -2191,7 +2191,6 @@ InvalidateBuffer(BufferDesc *buf, BufferTag *tag)
 	LWLock	   *oldPartitionLock;	/* buffer partition lock for it */
 	uint32		oldFlags;
 	uint32		buf_state;
-	HIPEntryIndex			old_buf_id;
 
 	/* Save the original buffer tag before dropping the spinlock */
 	oldTag = *tag;
@@ -2261,8 +2260,10 @@ retry:
 	 * Remove the buffer from the lookup hashtable, if it was in there.
 	 */
 	if (oldFlags & BM_TAG_VALID)
+	{
 		BufTableDelete(&oldTag, oldHash);
-		HIPRemoveElement(BufHashHeader, oldHash, old_buf_id);
+		HIPRemoveElement(BufHashHeader, oldHash, buf->buf_id, &oldTag);
+	}
 
 	/*
 	 * Done with mapping lock.
@@ -2291,7 +2292,6 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr, BufferTag *buf_tag)
 	uint32		hash;
 	LWLock	   *partition_lock;
 	BufferTag	tag;
-	HIPEntryIndex			buf_id;
 
 	Assert(GetPrivateRefCount(BufferDescriptorGetBuffer(buf_hdr)) == 1);
 
@@ -2343,7 +2343,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr, BufferTag *buf_tag)
 
 	/* finally delete buffer from the buffer mapping table */
 	BufTableDelete(&tag, hash);
-	HIPRemoveElement(BufHashHeader, hash, buf_id);
+	HIPRemoveElement(BufHashHeader, hash, buf_hdr->buf_id, &tag);
 
 	LWLockRelease(partition_lock);
 
@@ -6710,6 +6710,7 @@ EvictUnpinnedBuffer(Buffer buf, bool *buffer_flushed)
 	ReservePrivateRefCountEntry();
 
 	desc = GetBufferDescriptor(buf - 1);
+	tag = GetBufferTag(buf - 1);
 	LockBufHdr(desc);
 
 	return EvictUnpinnedBufferInternal(desc, tag, buffer_flushed);

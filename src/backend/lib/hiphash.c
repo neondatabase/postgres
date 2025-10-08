@@ -134,16 +134,28 @@ HIPAppendFreeListEntry(HIPHashHeader *hdr, HIPHashElement *element, int32 slotno
 	HIPHashElement *lastflelem;
 	int32		last;
 
+	Assert(slotno >= 0);
+
 	SpinLockAcquire(&part->fllock);
 	last = pg_atomic_read_u32(&part->flend);
-	lastflelem = &hdr->elements[last];
+	if (last >= 0)
+	{
+		lastflelem = &hdr->elements[last];
 
-	pg_atomic_unlocked_write_u32(&element->free.next, (uint32) InvalidSlotPtr);
-	pg_atomic_unlocked_write_u32(&element->free.prev, last);
-	part->flnmembers++;
-
-	Assert(HIPElementIsFree(lastelem));
-	pg_atomic_write_membarrier_u32(&lastflelem->free.next, -slotno);
+		pg_atomic_unlocked_write_u32(&element->free.next, (uint32) InvalidSlotPtr);
+		pg_atomic_unlocked_write_u32(&element->free.prev, -last - 1);
+		part->flnmembers++;
+		Assert(HIPElementIsFree(lastelem));
+		pg_atomic_write_membarrier_u32(&lastflelem->free.next, -slotno - 1);
+	}
+	else
+	{
+		part->flnmembers++;
+		pg_atomic_write_membarrier_u32(&element->free.next, InvalidSlotPtr);
+		pg_atomic_write_membarrier_u32(&element->free.prev, InvalidSlotPtr);
+		pg_atomic_write_membarrier_u32(&part->flend, slotno);
+		pg_atomic_write_membarrier_u32(&part->flstart, slotno);
+	}
 	SpinLockRelease(&part->fllock);
 }
 
@@ -189,19 +201,21 @@ HIPGetElementInternal(HIPHashHeader *hdr, uint32 hash,
 {
 	int32		bucketidx = HIPHashToBucket(hdr, hash);
 	HIPHashElement *elem = &hdr->elements[bucketidx];
-	uint32		nextptr = pg_atomic_read_u32(&elem->bucket);
+	int32		nextptr = pg_atomic_read_u32(&elem->bucket);
 
 	/* Slot empty? -> Element not present */
 	if (nextptr == InvalidSlotPtr)
 		return HIPNotPresent;
+
+	Assert(nextptr < 0);
 
 	/*
 	 * We co-allocate elements with their buckets where possible.
 	 * By adding this branch, we allow the CPU to speculate past
 	 * this memory access; which is likely to succeed.
 	 */
-	if ((-nextptr) != bucketidx)
-		elem = &hdr->elements[-nextptr];
+	if ((-nextptr - 1) != bucketidx)
+		elem = &hdr->elements[-nextptr - 1];
 
 	/* follow the chain */
 	while (nextptr != InvalidSlotPtr)
@@ -220,13 +234,13 @@ HIPGetElementInternal(HIPHashHeader *hdr, uint32 hash,
 		if (HIPElementMatches(hdr, elem, hash, searchelem, idx))
 		{
 			*out = idx;
-			return -curptr;
+			return -curptr - 1;
 		}
 
 		/* The element didn't match - follow the link to the next element */
-		if (nextptr >= 0)
+		if (nextptr < 0)
 		{
-			elem = &hdr->elements[-nextptr];
+			elem = &hdr->elements[-nextptr - 1];
 		}
 		else
 		{
@@ -336,7 +350,7 @@ HIPInsertElementLocked(HIPHashHeader *hdr, uint32 hash,
 			continue;
 		}
 
-		freeslot = -((int32) pg_atomic_read_u32(&part->flstart));
+		freeslot = (int32) pg_atomic_read_u32(&part->flstart);
 		inserted = &hdr->elements[freeslot];
 
 		goto slot_found;
@@ -355,7 +369,7 @@ slot_found:
 	inserted->used.index = index;
 
 	pg_atomic_write_u32(&inserted->used.next, nextptr);
-	pg_atomic_write_membarrier_u32(&bucket->bucket, (uint32) (-freeslot));
+	pg_atomic_write_membarrier_u32(&bucket->bucket, (uint32) (-freeslot - 1));
 
 	SpinLockRelease(&hdr->partitions[partnum].p.fllock);
 }
