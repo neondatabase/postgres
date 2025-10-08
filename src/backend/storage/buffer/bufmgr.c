@@ -2256,7 +2256,7 @@ retry:
 	 * Remove the buffer from the lookup hashtable, if it was in there.
 	 */
 	if (oldFlags & BM_TAG_VALID)
-		//BufTableDelete(&oldTag, oldHash);
+		BufTableDelete(&oldTag, oldHash);
 		HIPRemoveElement(BufHashHeader, oldHash, old_buf_id);
 
 	/*
@@ -2337,7 +2337,7 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 	Assert(BUF_STATE_GET_REFCOUNT(buf_state) > 0);
 
 	/* finally delete buffer from the buffer mapping table */
-	//BufTableDelete(&tag, hash);
+	BufTableDelete(&tag, hash);
 	HIPRemoveElement(BufHashHeader, hash, buf_id);
 
 	LWLockRelease(partition_lock);
