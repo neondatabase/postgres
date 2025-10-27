@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/heapam.h"
 #include "access/relation.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -69,6 +70,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	char	   *ttype;
 	PrewarmType ptype;
 	AclResult	aclresult;
+	uint32 		scan_flags = SO_TYPE_SEQSCAN | SO_TEMP_SNAPSHOT;
+	HeapTuple 	tuple;
 
 	/* Basic sanity checking. */
 	if (PG_ARGISNULL(0))
@@ -185,29 +188,46 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
-		BlockNumber prefetch_block = first_block;
-		Oid			nspOid;
-		int			io_concurrency;
-
-		nspOid = rel->rd_rel->reltablespace;
-		io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
-
-		/*
-		 * In buffer mode, we actually pull the data into shared_buffers.
-		 */
-		for (block = first_block; block <= last_block; ++block)
+		if (get_relkind_objtype(rel->rd_rel->relkind) == OBJECT_TABLE && forkNumber == MAIN_FORKNUM)
 		{
-			Buffer buf;
-			BlockNumber prefetch_stop = block + Min(last_block - block + 1,
-													io_concurrency);
-			CHECK_FOR_INTERRUPTS();
-			while (prefetch_block < prefetch_stop)
+			elog(LOG, "pg_prewarm: SeqScan relation \"%s\" starting %ld for %ld blocks", RelationGetRelationName(rel), first_block, last_block - first_block + 1);
+			// Use heap scan to set hint bits on every tuple. SO_ALLOW_PAGEMODE is intentionally NOT SET.
+			// Otherwise, when a page is all visible, tuple hint bits won't be set.
+			Snapshot snapshot = RegisterSnapshot(GetTransactionSnapshot());
+			TableScanDesc scan = heap_beginscan(rel, snapshot, 0, NULL, NULL, scan_flags);
+			heap_setscanlimits(scan, first_block, last_block - first_block + 1);
+			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
 			{
-				PrefetchBuffer(rel, forkNumber, prefetch_block++);
+				CHECK_FOR_INTERRUPTS();
 			}
-			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
-			ReleaseBuffer(buf);
-			++blocks_done;
+			heap_endscan(scan);
+		}
+		else
+		{
+			BlockNumber prefetch_block = first_block;
+			Oid			nspOid;
+			int			io_concurrency;
+
+			nspOid = rel->rd_rel->reltablespace;
+			io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
+
+			/*
+			* In buffer mode, we actually pull the data into shared_buffers.
+			*/
+			for (block = first_block; block <= last_block; ++block)
+			{
+				Buffer buf;
+				BlockNumber prefetch_stop = block + Min(last_block - block + 1,
+														io_concurrency);
+				CHECK_FOR_INTERRUPTS();
+				while (prefetch_block < prefetch_stop)
+				{
+					PrefetchBuffer(rel, forkNumber, prefetch_block++);
+				}
+				buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
+				ReleaseBuffer(buf);
+				++blocks_done;
+			}
 		}
 	}
 
