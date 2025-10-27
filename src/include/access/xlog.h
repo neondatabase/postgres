@@ -275,9 +275,6 @@ extern set_lwlsn_db_hook_type set_lwlsn_db_hook;
 extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
 extern set_max_lwlsn_hook_type set_max_lwlsn_hook;
 
-typedef void (*flush_dirty_buffers_hook_type)(int flags);
-extern flush_dirty_buffers_hook_type flush_dirty_buffers_hook;
-
 extern void SetRedoStartLsn(XLogRecPtr RedoStartLSN);
 extern XLogRecPtr GetRedoStartLsn(void);
 
