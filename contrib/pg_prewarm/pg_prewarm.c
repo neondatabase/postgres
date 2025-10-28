@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/heapam.h"
 #include "access/relation.h"
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -203,36 +204,59 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
-		struct pg_prewarm_read_stream_private p;
-		ReadStream *stream;
 
-		/*
-		 * In buffer mode, we actually pull the data into shared_buffers.
-		 */
-
-		/* Set up the private state for our streaming buffer read callback. */
-		p.blocknum = first_block;
-		p.last_block = last_block;
-
-		stream = read_stream_begin_relation(READ_STREAM_FULL,
-											NULL,
-											rel,
-											forkNumber,
-											pg_prewarm_read_stream_next_block,
-											&p,
-											0);
-
-		for (block = first_block; block <= last_block; ++block)
+		if (get_relkind_objtype(rel->rd_rel->relkind) == OBJECT_TABLE && forkNumber == MAIN_FORKNUM)
 		{
-			Buffer		buf;
+			uint32 		scan_flags = SO_TYPE_SEQSCAN | SO_TEMP_SNAPSHOT;
+			HeapTuple 	tuple;
+			Snapshot snapshot;
+			TableScanDesc scan;
 
-			CHECK_FOR_INTERRUPTS();
-			buf = read_stream_next_buffer(stream, NULL);
-			ReleaseBuffer(buf);
-			++blocks_done;
+			elog(LOG, "pg_prewarm: SeqScan relation \"%s\" starting %ld for %ld blocks", RelationGetRelationName(rel), first_block, last_block - first_block + 1);
+			// Use heap scan to set hint bits on every tuple. SO_ALLOW_PAGEMODE is intentionally NOT SET.
+			// Otherwise, when a page is all visible, tuple hint bits won't be set.
+			snapshot = RegisterSnapshot(GetTransactionSnapshot());
+			scan = heap_beginscan(rel, snapshot, 0, NULL, NULL, scan_flags);
+			heap_setscanlimits(scan, first_block, last_block - first_block + 1);
+			while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+			{
+				CHECK_FOR_INTERRUPTS();
+			}
+			heap_endscan(scan);
 		}
-		Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
-		read_stream_end(stream);
+		else
+		{
+			struct pg_prewarm_read_stream_private p;
+			ReadStream *stream;
+
+			/*
+			* In buffer mode, we actually pull the data into shared_buffers.
+			*/
+
+			/* Set up the private state for our streaming buffer read callback. */
+			p.blocknum = first_block;
+			p.last_block = last_block;
+
+			stream = read_stream_begin_relation(READ_STREAM_FULL,
+												NULL,
+												rel,
+												forkNumber,
+												pg_prewarm_read_stream_next_block,
+												&p,
+												0);
+
+			for (block = first_block; block <= last_block; ++block)
+			{
+				Buffer		buf;
+
+				CHECK_FOR_INTERRUPTS();
+				buf = read_stream_next_buffer(stream, NULL);
+				ReleaseBuffer(buf);
+				++blocks_done;
+			}
+			Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+			read_stream_end(stream);
+		}
 	}
 
 	/* Close relation, release lock. */
