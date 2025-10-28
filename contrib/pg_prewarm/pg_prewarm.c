@@ -39,6 +39,7 @@ typedef enum
 	PREWARM_PREFETCH,
 	PREWARM_READ,
 	PREWARM_BUFFER,
+	PREWARM_TUPLE,
 } PrewarmType;
 
 static PGIOAlignedBlock blockbuffer;
@@ -91,6 +92,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		ptype = PREWARM_READ;
 	else if (strcmp(ttype, "buffer") == 0)
 		ptype = PREWARM_BUFFER;
+	else if (strcmp(ttype, "tuple") == 0)
+		ptype = PREWARM_TUPLE;
 	else
 	{
 		ereport(ERROR,
@@ -196,7 +199,44 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
+		BlockRangeReadStreamPrivate p;
+		ReadStream *stream;
 
+		/*
+		* In buffer mode, we actually pull the data into shared_buffers.
+		*/
+
+		/* Set up the private state for our streaming buffer read callback. */
+		p.current_blocknum = first_block;
+		p.last_exclusive = last_block + 1;
+
+		/*
+		* It is safe to use batchmode as block_range_read_stream_cb takes no
+		* locks.
+		*/
+		stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
+											READ_STREAM_FULL |
+											READ_STREAM_USE_BATCHING,
+											NULL,
+											rel,
+											forkNumber,
+											block_range_read_stream_cb,
+											&p,
+											0);
+
+		for (block = first_block; block <= last_block; ++block)
+		{
+			Buffer		buf;
+
+			CHECK_FOR_INTERRUPTS();
+			buf = read_stream_next_buffer(stream, NULL);
+			ReleaseBuffer(buf);
+			++blocks_done;
+		}
+		Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+		read_stream_end(stream);
+	} else if (ptype == PREWARM_TUPLE)
+	{
 		if (get_relkind_objtype(rel->rd_rel->relkind) == OBJECT_TABLE && forkNumber == MAIN_FORKNUM)
 		{
 			uint32 		scan_flags = SO_TYPE_SEQSCAN | SO_TEMP_SNAPSHOT;
@@ -215,45 +255,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 				CHECK_FOR_INTERRUPTS();
 			}
 			heap_endscan(scan);
-		}
-		else
+		} else
 		{
-			BlockRangeReadStreamPrivate p;
-			ReadStream *stream;
-
-			/*
-			* In buffer mode, we actually pull the data into shared_buffers.
-			*/
-
-			/* Set up the private state for our streaming buffer read callback. */
-			p.current_blocknum = first_block;
-			p.last_exclusive = last_block + 1;
-
-			/*
-			* It is safe to use batchmode as block_range_read_stream_cb takes no
-			* locks.
-			*/
-			stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
-												READ_STREAM_FULL |
-												READ_STREAM_USE_BATCHING,
-												NULL,
-												rel,
-												forkNumber,
-												block_range_read_stream_cb,
-												&p,
-												0);
-
-			for (block = first_block; block <= last_block; ++block)
-			{
-				Buffer		buf;
-
-				CHECK_FOR_INTERRUPTS();
-				buf = read_stream_next_buffer(stream, NULL);
-				ReleaseBuffer(buf);
-				++blocks_done;
-			}
-			Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
-			read_stream_end(stream);	
+			ereport(INFO,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("tuple prewarm is only supported for heap relations on main fork")));
 		}
 	}
 
