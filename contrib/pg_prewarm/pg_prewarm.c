@@ -36,7 +36,8 @@ typedef enum
 {
 	PREWARM_PREFETCH,
 	PREWARM_READ,
-	PREWARM_BUFFER
+	PREWARM_BUFFER,
+	PREWARM_TUPLE,
 } PrewarmType;
 
 static PGIOAlignedBlock blockbuffer;
@@ -89,6 +90,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		ptype = PREWARM_READ;
 	else if (strcmp(ttype, "buffer") == 0)
 		ptype = PREWARM_BUFFER;
+	else if (strcmp(ttype, "tuple") == 0)
+		ptype = PREWARM_TUPLE;
 	else
 	{
 		ereport(ERROR,
@@ -186,6 +189,33 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
+		BlockNumber prefetch_block = first_block;
+		Oid			nspOid;
+		int			io_concurrency;
+
+		nspOid = rel->rd_rel->reltablespace;
+		io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
+
+		/*
+		* In buffer mode, we actually pull the data into shared_buffers.
+		*/
+		for (block = first_block; block <= last_block; ++block)
+		{
+			Buffer buf;
+			BlockNumber prefetch_stop = block + Min(last_block - block + 1,
+													io_concurrency);
+			CHECK_FOR_INTERRUPTS();
+			while (prefetch_block < prefetch_stop)
+			{
+				PrefetchBuffer(rel, forkNumber, prefetch_block++);
+			}
+			buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
+			ReleaseBuffer(buf);
+			++blocks_done;
+		}
+	}
+	else if (ptype == PREWARM_TUPLE)
+	{
 		if (get_relkind_objtype(rel->rd_rel->relkind) == OBJECT_TABLE && forkNumber == MAIN_FORKNUM)
 		{
 			uint32 		scan_flags = SO_TYPE_SEQSCAN | SO_TEMP_SNAPSHOT;
@@ -204,33 +234,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 				CHECK_FOR_INTERRUPTS();
 			}
 			heap_endscan(scan);
-		}
-		else
+		} else
 		{
-			BlockNumber prefetch_block = first_block;
-			Oid			nspOid;
-			int			io_concurrency;
-
-			nspOid = rel->rd_rel->reltablespace;
-			io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
-
-			/*
-			* In buffer mode, we actually pull the data into shared_buffers.
-			*/
-			for (block = first_block; block <= last_block; ++block)
-			{
-				Buffer buf;
-				BlockNumber prefetch_stop = block + Min(last_block - block + 1,
-														io_concurrency);
-				CHECK_FOR_INTERRUPTS();
-				while (prefetch_block < prefetch_stop)
-				{
-					PrefetchBuffer(rel, forkNumber, prefetch_block++);
-				}
-				buf = ReadBufferExtended(rel, forkNumber, block, RBM_NORMAL, NULL);
-				ReleaseBuffer(buf);
-				++blocks_done;
-			}
+			ereport(INFO,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("tuple prewarm is only supported for heap relations on main fork")));
 		}
 	}
 
