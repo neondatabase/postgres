@@ -36,6 +36,7 @@ typedef enum
 	PREWARM_PREFETCH,
 	PREWARM_READ,
 	PREWARM_BUFFER,
+	PREWARM_TUPLE,
 } PrewarmType;
 
 static PGIOAlignedBlock blockbuffer;
@@ -107,6 +108,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		ptype = PREWARM_READ;
 	else if (strcmp(ttype, "buffer") == 0)
 		ptype = PREWARM_BUFFER;
+	else if (strcmp(ttype, "tuple") == 0)
+		ptype = PREWARM_TUPLE;
 	else
 	{
 		ereport(ERROR,
@@ -204,7 +207,38 @@ pg_prewarm(PG_FUNCTION_ARGS)
 	}
 	else if (ptype == PREWARM_BUFFER)
 	{
+		struct pg_prewarm_read_stream_private p;
+		ReadStream *stream;
 
+		/*
+		* In buffer mode, we actually pull the data into shared_buffers.
+		*/
+
+		/* Set up the private state for our streaming buffer read callback. */
+		p.blocknum = first_block;
+		p.last_block = last_block;
+
+		stream = read_stream_begin_relation(READ_STREAM_FULL,
+											NULL,
+											rel,
+											forkNumber,
+											pg_prewarm_read_stream_next_block,
+											&p,
+											0);
+
+		for (block = first_block; block <= last_block; ++block)
+		{
+			Buffer		buf;
+
+			CHECK_FOR_INTERRUPTS();
+			buf = read_stream_next_buffer(stream, NULL);
+			ReleaseBuffer(buf);
+			++blocks_done;
+		}
+		Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+		read_stream_end(stream);
+	} else if (ptype == PREWARM_TUPLE)
+	{
 		if (get_relkind_objtype(rel->rd_rel->relkind) == OBJECT_TABLE && forkNumber == MAIN_FORKNUM)
 		{
 			uint32 		scan_flags = SO_TYPE_SEQSCAN | SO_TEMP_SNAPSHOT;
@@ -223,39 +257,10 @@ pg_prewarm(PG_FUNCTION_ARGS)
 				CHECK_FOR_INTERRUPTS();
 			}
 			heap_endscan(scan);
-		}
-		else
-		{
-			struct pg_prewarm_read_stream_private p;
-			ReadStream *stream;
-
-			/*
-			* In buffer mode, we actually pull the data into shared_buffers.
-			*/
-
-			/* Set up the private state for our streaming buffer read callback. */
-			p.blocknum = first_block;
-			p.last_block = last_block;
-
-			stream = read_stream_begin_relation(READ_STREAM_FULL,
-												NULL,
-												rel,
-												forkNumber,
-												pg_prewarm_read_stream_next_block,
-												&p,
-												0);
-
-			for (block = first_block; block <= last_block; ++block)
-			{
-				Buffer		buf;
-
-				CHECK_FOR_INTERRUPTS();
-				buf = read_stream_next_buffer(stream, NULL);
-				ReleaseBuffer(buf);
-				++blocks_done;
-			}
-			Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
-			read_stream_end(stream);
+		} else {
+			ereport(INFO,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("tuple prewarm is only supported for heap tables in main fork")));
 		}
 	}
 
