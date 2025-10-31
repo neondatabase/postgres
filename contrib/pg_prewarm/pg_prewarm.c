@@ -211,8 +211,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		ReadStream *stream;
 
 		/*
-		* In buffer mode, we actually pull the data into shared_buffers.
-		*/
+		 * In buffer mode, we actually pull the data into shared_buffers.
+		 */
 
 		/* Set up the private state for our streaming buffer read callback. */
 		p.blocknum = first_block;
