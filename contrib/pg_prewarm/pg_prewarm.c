@@ -197,8 +197,8 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		io_concurrency = get_tablespace_maintenance_io_concurrency(nspOid);
 
 		/*
-		* In buffer mode, we actually pull the data into shared_buffers.
-		*/
+		 * In buffer mode, we actually pull the data into shared_buffers.
+		 */
 		for (block = first_block; block <= last_block; ++block)
 		{
 			Buffer buf;
