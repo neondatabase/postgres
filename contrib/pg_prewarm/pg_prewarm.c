@@ -203,17 +203,17 @@ pg_prewarm(PG_FUNCTION_ARGS)
 		ReadStream *stream;
 
 		/*
-		* In buffer mode, we actually pull the data into shared_buffers.
-		*/
+		 * In buffer mode, we actually pull the data into shared_buffers.
+		 */
 
 		/* Set up the private state for our streaming buffer read callback. */
 		p.current_blocknum = first_block;
 		p.last_exclusive = last_block + 1;
 
 		/*
-		* It is safe to use batchmode as block_range_read_stream_cb takes no
-		* locks.
-		*/
+		 * It is safe to use batchmode as block_range_read_stream_cb takes no
+		 * locks.
+		 */
 		stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 											READ_STREAM_FULL |
 											READ_STREAM_USE_BATCHING,
