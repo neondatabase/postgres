@@ -12,6 +12,7 @@
  */
 #include "postgres.h"
 
+#include <inttypes.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -282,7 +283,7 @@ pg_prewarm(PG_FUNCTION_ARGS)
 			Snapshot snapshot;
 			TableScanDesc scan;
 
-			elog(LOG, "pg_prewarm: SeqScan relation \"%s\" starting %ld for %ld blocks", RelationGetRelationName(rel), first_block, last_block - first_block + 1);
+			elog(LOG, "pg_prewarm: SeqScan relation \"%s\" starting %" PRIu64 " for %" PRIu64 " blocks", RelationGetRelationName(rel), first_block, last_block - first_block + 1);
 			// Use heap scan to set hint bits on every tuple. SO_ALLOW_PAGEMODE is intentionally NOT SET.
 			// Otherwise, when a page is all visible, tuple hint bits won't be set.
 			snapshot = RegisterSnapshot(GetTransactionSnapshot());
