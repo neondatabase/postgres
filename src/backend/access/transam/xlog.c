@@ -867,6 +867,10 @@ XLogInsertRecord(XLogRecData *rdata,
 		 * our local copy but not force a recomputation.  (If doPageWrites was
 		 * just turned off, we could recompute the record without full pages,
 		 * but we choose not to bother.)
+		 *
+		 * However, if force_disable_full_page_write is true, we skip the
+		 * recomputation check since we're deliberately disabling full page
+		 * writes for this record via the FPI control hook.
 		 */
 		if (RedoRecPtr != Insert->RedoRecPtr)
 		{
@@ -877,7 +881,8 @@ XLogInsertRecord(XLogRecData *rdata,
 
 		if (doPageWrites &&
 			(!prevDoPageWrites ||
-			 (fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
+			 (!force_disable_full_page_write &&
+			  fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
 		{
 			/*
 			 * Oops, some buffer now needs to be backed up that the caller
