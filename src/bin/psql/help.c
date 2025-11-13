@@ -179,6 +179,10 @@ slashUsage(unsigned short int pager)
 	fprintf(output, _("  \\gset [PREFIX]         execute query and store results in psql variables\n"));
 	fprintf(output, _("  \\gx [(OPTIONS)] [FILE] as \\g, but forces expanded output mode\n"));
 	fprintf(output, _("  \\q                     quit psql\n"));
+	fprintf(output, _("  \\restrict RESTRICT_KEY\n"
+					  "                         enter restricted mode with provided key\n"));
+	fprintf(output, _("  \\unrestrict RESTRICT_KEY\n"
+					  "                         exit restricted mode if key matches\n"));
 	fprintf(output, _("  \\watch [SEC]           execute query every SEC seconds\n"));
 	fprintf(output, "\n");
 
@@ -687,7 +691,7 @@ void
 print_copyright(void)
 {
 	puts("PostgreSQL Database Management System\n"
-		 "(formerly known as Postgres, then as Postgres95)\n\n"
+		 "(also known as Postgres, formerly known as Postgres95)\n\n"
 		 "Portions Copyright (c) 1996-2021, PostgreSQL Global Development Group\n\n"
 		 "Portions Copyright (c) 1994, The Regents of the University of California\n\n"
 		 "Permission to use, copy, modify, and distribute this software and its\n"
