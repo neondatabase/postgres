@@ -434,11 +434,12 @@ skip_invalid:
 			/* Calculate pointer to beginning of next page */
 			targetPagePtr += XLOG_BLCKSZ;
 
-			/* Wait for the next page to become available */
-			readOff = ReadPageInternal(state, targetPagePtr,
-									   Min(total_len - gotlen + SizeOfXLogShortPHD,
-										   XLOG_BLCKSZ));
-
+			/*
+			 * Read the page header before processing the record data, so we
+			 * can handle the case where the previous record ended as being a
+			 * partial one.
+			 */
+			readOff = ReadPageInternal(state, targetPagePtr, SizeOfXLogShortPHD);
 			if (readOff < 0)
 				goto err;
 
@@ -495,6 +496,13 @@ skip_invalid:
 
 				SKIP_INVALID_RECORD(RecPtr);
 			}
+
+			/* Wait for the next page to become available */
+			readOff = ReadPageInternal(state, targetPagePtr,
+									   Min(total_len - gotlen + SizeOfXLogShortPHD,
+										   XLOG_BLCKSZ));
+			if (readOff < 0)
+				goto err;
 
 			/* Append the continuation from this page to the buffer */
 			pageHeaderSize = XLogPageHeaderSize(pageHeader);
