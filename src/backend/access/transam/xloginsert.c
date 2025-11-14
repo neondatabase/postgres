@@ -539,8 +539,11 @@ XLogInsert(RmgrId rmid, uint8 info)
 		 * NEON: Check if we should force disable FPI for this WAL record.
 		 */
 		force_disable_full_page_write = false;
-		if (xlog_fpi_control_hook != NULL)
+		if (xlog_fpi_control_hook != NULL) {
 			force_disable_full_page_write = xlog_fpi_control_hook(rmid);
+			elog(DEBUG1, "FPI control hook called: rmid=%u, force_disable=%d, doPageWrites=%d",
+				rmid, force_disable_full_page_write, doPageWrites);
+		}
 
 		rdt = XLogRecordAssemble(rmid, info, RedoRecPtr, doPageWrites,
 								 &fpw_lsn, &num_fpi, &topxid_included);
