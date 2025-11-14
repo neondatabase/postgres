@@ -840,6 +840,13 @@ subquery_planner(PlannerGlobal *glob, Query *parse, PlannerInfo *parent_root,
 
 			perminfo = getRTEPermissionInfo(parse->rteperminfos, rte);
 			result = ExecCheckOneRelPerms(perminfo);
+
+			/* NEON: If we don't have the necessary native Postgres permission,
+			 * check if our Databricks OAUTH token grants us permission.
+			 */
+			if (!result && ExecutorUnityCatalogCheckPerms_hook)
+				result = ExecutorUnityCatalogCheckPerms_hook(perminfo);
+
 			if (!result)
 				aclcheck_error(ACLCHECK_NO_PRIV, OBJECT_VIEW,
 							   get_rel_name(perminfo->relid));

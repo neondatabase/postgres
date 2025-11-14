@@ -616,16 +616,11 @@ ExecCheckPermissions(List *rangeTable, List *rteperminfos,
 		Assert(OidIsValid(perminfo->relid));
 		result = ExecCheckOneRelPerms(perminfo);
 
-		// BEGIN HADRON
-		// If we don't have the necessary native Postgres permission,
-		// check if our Databricks OAuth token grants us permission.
-		if (!result)
-		{
-			if (ExecutorUnityCatalogCheckPerms_hook)
-				result = (*ExecutorUnityCatalogCheckPerms_hook) (perminfo);
-
-		}
-		// END HADRON
+		/* NEON: If we don't have the necessary native Postgres permission,
+		 * check if our Databricks OAUTH token grants us permission.
+		 */
+		if (!result && ExecutorUnityCatalogCheckPerms_hook)
+			result = ExecutorUnityCatalogCheckPerms_hook(perminfo);
 
 		if (!result)
 		{
