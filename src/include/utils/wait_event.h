@@ -13,6 +13,9 @@
 /* enums for wait events */
 #include "utils/wait_event_types.h"
 
+#define WAIT_EVENT_CLASS_MASK	0xFF000000
+#define WAIT_EVENT_ID_MASK		0x0000FFFF
+
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
 static inline void pgstat_report_wait_start(uint32 wait_event_info);
@@ -21,6 +24,11 @@ extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
 
 extern PGDLLIMPORT uint32 *my_wait_event_info;
+
+typedef void (*pgstat_report_wait_start_hook_type)(uint32 wait_event_info);
+extern PGDLLIMPORT pgstat_report_wait_start_hook_type pgstat_report_wait_start_hook;
+typedef void (*pgstat_report_wait_end_hook_type)(uint32 wait_event_info);
+extern PGDLLIMPORT pgstat_report_wait_end_hook_type pgstat_report_wait_end_hook;
 
 
 /*
@@ -73,6 +81,9 @@ pgstat_report_wait_start(uint32 wait_event_info)
 	 * four-bytes, updates are atomic.
 	 */
 	*(volatile uint32 *) my_wait_event_info = wait_event_info;
+
+	if (pgstat_report_wait_start_hook)
+		pgstat_report_wait_start_hook(wait_event_info);
 }
 
 /* ----------
@@ -84,6 +95,9 @@ pgstat_report_wait_start(uint32 wait_event_info)
 static inline void
 pgstat_report_wait_end(void)
 {
+	if (pgstat_report_wait_end_hook)
+		pgstat_report_wait_end_hook(*(volatile uint32 *) my_wait_event_info);
+
 	/* see pgstat_report_wait_start() */
 	*(volatile uint32 *) my_wait_event_info = 0;
 }

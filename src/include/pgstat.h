@@ -839,4 +839,8 @@ extern PGDLLIMPORT PgStat_Counter pgStatTransactionIdleTime;
 /* updated by the traffic cop and in errfinish() */
 extern PGDLLIMPORT SessionEndType pgStatSessionEndCause;
 
+typedef void (*pgstat_report_stat_hook_type)(bool force);
+extern PGDLLIMPORT pgstat_report_stat_hook_type pgstat_report_stat_hook;
+
+
 #endif							/* PGSTAT_H */
