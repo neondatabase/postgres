@@ -848,7 +848,8 @@ XLogInsertRecord(XLogRecData *rdata,
 
 	if (doPageWrites &&
 		(!prevDoPageWrites ||
-		 (fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
+		(!force_disable_full_page_write &&
+			fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
 	{
 		/*
 		 * Oops, some buffer now needs to be backed up that the caller didn't

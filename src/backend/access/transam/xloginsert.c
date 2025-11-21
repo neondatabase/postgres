@@ -94,6 +94,12 @@ int			max_replication_apply_lag;
 int			max_replication_flush_lag;
 int			max_replication_write_lag;
 
+/* NEON: Hook to control Full Page Image (FPI) writes */
+xlog_fpi_control_hook_type xlog_fpi_control_hook = NULL;
+
+/* NEON: Global flag to force disable FPI for current WAL record */
+bool force_disable_full_page_write = false;
+
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
 static int	max_registered_block_id = 0;	/* highest block_id + 1 currently
@@ -516,6 +522,16 @@ XLogInsert(RmgrId rmid, uint8 info)
 		 */
 		GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
+		/*
+		 * NEON: Check if we should force disable FPI for this WAL record.
+		 */
+		 force_disable_full_page_write = false;
+		 if (xlog_fpi_control_hook != NULL) {
+			 force_disable_full_page_write = xlog_fpi_control_hook(rmid);
+			 elog(DEBUG1, "FPI control hook called: rmid=%u, force_disable=%d, doPageWrites=%d",
+				 rmid, force_disable_full_page_write, doPageWrites);
+		 }
+
 		rdt = XLogRecordAssemble(rmid, info, RedoRecPtr, doPageWrites,
 								 &fpw_lsn, &num_fpi, &topxid_included);
 
@@ -616,9 +632,17 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			 */
 			XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
 
-			needs_backup = (page_lsn <= RedoRecPtr);
+			if (force_disable_full_page_write)
+				needs_backup = false;
+			else
+				needs_backup = (page_lsn <= RedoRecPtr);
+
 			if (!needs_backup)
 			{
+				/*
+				 * Set fpw_lsn to signal that this record should be
+				 * recomputed if doPageWrites changes.
+				 */
 				if (*fpw_lsn == InvalidXLogRecPtr || page_lsn < *fpw_lsn)
 					*fpw_lsn = page_lsn;
 			}
