@@ -82,10 +82,11 @@ ginhandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = ginbeginscan;
 	amroutine->amrescan = ginrescan;
 	amroutine->amgettuple = NULL;
+	amroutine->amgetbatch = NULL;
+	amroutine->amfreebatch = NULL;
 	amroutine->amgetbitmap = gingetbitmap;
 	amroutine->amendscan = ginendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
+	amroutine->amposreset = NULL;
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;

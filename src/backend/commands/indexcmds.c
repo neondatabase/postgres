@@ -881,7 +881,7 @@ DefineIndex(Oid tableId,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("access method \"%s\" does not support multicolumn indexes",
 						accessMethodName)));
-	if (exclusion && amRoutine->amgettuple == NULL)
+	if (exclusion && amRoutine->amgettuple == NULL && amRoutine->amgetbatch == NULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("access method \"%s\" does not support exclusion constraints",

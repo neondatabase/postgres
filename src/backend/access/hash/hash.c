@@ -103,10 +103,11 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = hashbeginscan;
 	amroutine->amrescan = hashrescan;
 	amroutine->amgettuple = hashgettuple;
+	amroutine->amgetbatch = NULL;
+	amroutine->amfreebatch = NULL;
 	amroutine->amgetbitmap = hashgetbitmap;
 	amroutine->amendscan = hashendscan;
-	amroutine->ammarkpos = NULL;
-	amroutine->amrestrpos = NULL;
+	amroutine->amposreset = NULL;
 	amroutine->amestimateparallelscan = NULL;
 	amroutine->aminitparallelscan = NULL;
 	amroutine->amparallelrescan = NULL;

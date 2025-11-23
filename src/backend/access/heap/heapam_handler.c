@@ -84,7 +84,9 @@ heapam_index_fetch_begin(Relation rel)
 	IndexFetchHeapData *hscan = palloc0(sizeof(IndexFetchHeapData));
 
 	hscan->xs_base.rel = rel;
+	hscan->xs_base.rs = NULL;
 	hscan->xs_cbuf = InvalidBuffer;
+	hscan->xs_blk = InvalidBlockNumber;
 
 	return &hscan->xs_base;
 }
@@ -94,10 +96,14 @@ heapam_index_fetch_reset(IndexFetchTableData *scan)
 {
 	IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
 
+	if (scan->rs)
+		read_stream_reset(scan->rs);
+
 	if (BufferIsValid(hscan->xs_cbuf))
 	{
 		ReleaseBuffer(hscan->xs_cbuf);
 		hscan->xs_cbuf = InvalidBuffer;
+		hscan->xs_blk = InvalidBlockNumber;
 	}
 }
 
@@ -107,6 +113,9 @@ heapam_index_fetch_end(IndexFetchTableData *scan)
 	IndexFetchHeapData *hscan = (IndexFetchHeapData *) scan;
 
 	heapam_index_fetch_reset(scan);
+
+	if (scan->rs)
+		read_stream_end(scan->rs);
 
 	pfree(hscan);
 }
@@ -124,22 +133,36 @@ heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 
 	Assert(TTS_IS_BUFFERTUPLE(slot));
 
-	/* We can skip the buffer-switching logic if we're in mid-HOT chain. */
-	if (!*call_again)
+	/*
+	 * Switch to correct buffer if we don't have it already (we can skip this
+	 * if we're in mid-HOT chain)
+	 */
+	if (!*call_again && hscan->xs_blk != ItemPointerGetBlockNumber(tid))
 	{
-		/* Switch to correct buffer if we don't have it already */
-		Buffer		prev_buf = hscan->xs_cbuf;
+		/* Remember this buffer's block number for next time */
+		hscan->xs_blk = ItemPointerGetBlockNumber(tid);
 
-		hscan->xs_cbuf = ReleaseAndReadBuffer(hscan->xs_cbuf,
-											  hscan->xs_base.rel,
-											  ItemPointerGetBlockNumber(tid));
+		if (BufferIsValid(hscan->xs_cbuf))
+			ReleaseBuffer(hscan->xs_cbuf);
 
 		/*
-		 * Prune page, but only if we weren't already on this page
+		 * When using a read stream, the stream will already know which block
+		 * number comes next (though an assertion will verify a match below)
 		 */
-		if (prev_buf != hscan->xs_cbuf)
-			heap_page_prune_opt(hscan->xs_base.rel, hscan->xs_cbuf);
+		if (scan->rs)
+			hscan->xs_cbuf = read_stream_next_buffer(scan->rs, NULL);
+		else
+			hscan->xs_cbuf = ReadBuffer(hscan->xs_base.rel, hscan->xs_blk);
+
+		/*
+		 * Prune page when it is pinned for the first time
+		 */
+		heap_page_prune_opt(hscan->xs_base.rel, hscan->xs_cbuf);
 	}
+
+	/* Assert that the TID's block number's buffer is now pinned */
+	Assert(BufferIsValid(hscan->xs_cbuf));
+	Assert(BufferGetBlockNumber(hscan->xs_cbuf) == hscan->xs_blk);
 
 	/* Obtain share-lock on the buffer so we can examine visibility */
 	LockBuffer(hscan->xs_cbuf, BUFFER_LOCK_SHARE);

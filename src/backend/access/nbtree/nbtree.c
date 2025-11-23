@@ -35,7 +35,6 @@
 #include "utils/fmgrprotos.h"
 #include "utils/index_selfuncs.h"
 #include "utils/memutils.h"
-#include "utils/spccache.h"
 
 
 /*
@@ -159,11 +158,12 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amadjustmembers = btadjustmembers;
 	amroutine->ambeginscan = btbeginscan;
 	amroutine->amrescan = btrescan;
-	amroutine->amgettuple = btgettuple;
+	amroutine->amgettuple = NULL;
+	amroutine->amgetbatch = btgetbatch;
+	amroutine->amfreebatch = btfreebatch;
 	amroutine->amgetbitmap = btgetbitmap;
 	amroutine->amendscan = btendscan;
-	amroutine->ammarkpos = btmarkpos;
-	amroutine->amrestrpos = btrestrpos;
+	amroutine->amposreset = btposreset;
 	amroutine->amestimateparallelscan = btestimateparallelscan;
 	amroutine->aminitparallelscan = btinitparallelscan;
 	amroutine->amparallelrescan = btparallelrescan;
@@ -221,13 +221,12 @@ btinsert(Relation rel, Datum *values, bool *isnull,
 }
 
 /*
- *	btgettuple() -- Get the next tuple in the scan.
+ *	btgetbatch() -- Get the next batch of tuples in the scan.
  */
-bool
-btgettuple(IndexScanDesc scan, ScanDirection dir)
+IndexScanBatch
+btgetbatch(IndexScanDesc scan, IndexScanBatch batch, ScanDirection dir)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
-	bool		res;
 
 	Assert(scan->heapRelation != NULL);
 
@@ -242,44 +241,18 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 		 * the appropriate direction.  If we haven't done so yet, we call
 		 * _bt_first() to get the first item in the scan.
 		 */
-		if (!BTScanPosIsValid(so->currPos))
-			res = _bt_first(scan, dir);
+		if (batch == NULL)
+			batch = _bt_first(scan, dir);
 		else
-		{
-			/*
-			 * Check to see if we should kill the previously-fetched tuple.
-			 */
-			if (scan->kill_prior_tuple)
-			{
-				/*
-				 * Yes, remember it for later. (We'll deal with all such
-				 * tuples at once right before leaving the index page.)  The
-				 * test for numKilled overrun is not just paranoia: if the
-				 * caller reverses direction in the indexscan then the same
-				 * item might get entered multiple times. It's not worth
-				 * trying to optimize that, so we don't detect it, but instead
-				 * just forget any excess entries.
-				 */
-				if (so->killedItems == NULL)
-					so->killedItems = (int *)
-						palloc(MaxTIDsPerBTreePage * sizeof(int));
-				if (so->numKilled < MaxTIDsPerBTreePage)
-					so->killedItems[so->numKilled++] = so->currPos.itemIndex;
-			}
+			batch = _bt_next(scan, dir, batch);
 
-			/*
-			 * Now continue the scan.
-			 */
-			res = _bt_next(scan, dir);
-		}
-
-		/* If we have a tuple, return it ... */
-		if (res)
+		/* If we have a batch, return it ... */
+		if (batch)
 			break;
 		/* ... otherwise see if we need another primitive index scan */
 	} while (so->numArrayKeys && _bt_start_prim_scan(scan, dir));
 
-	return res;
+	return batch;
 }
 
 /*
@@ -289,6 +262,7 @@ int64
 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	IndexScanBatch batch;
 	int64		ntids = 0;
 	ItemPointer heapTid;
 
@@ -297,29 +271,33 @@ btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	/* Each loop iteration performs another primitive index scan */
 	do
 	{
-		/* Fetch the first page & tuple */
-		if (_bt_first(scan, ForwardScanDirection))
+		/* Fetch the first batch */
+		if ((batch = _bt_first(scan, ForwardScanDirection)))
 		{
-			/* Save tuple ID, and continue scanning */
-			heapTid = &scan->xs_heaptid;
+			int			itemIndex = 0;
+
+			/* Save first tuple's TID */
+			heapTid = &batch->items[itemIndex].heapTid;
 			tbm_add_tuples(tbm, heapTid, 1, false);
 			ntids++;
 
 			for (;;)
 			{
-				/*
-				 * Advance to next tuple within page.  This is the same as the
-				 * easy case in _bt_next().
-				 */
-				if (++so->currPos.itemIndex > so->currPos.lastItem)
+				/* Advance to next TID within page-sized batch */
+				if (++itemIndex > batch->lastItem)
 				{
+					/* btfreebatch won't be called */
+					ReleaseBuffer(batch->buf);
+
 					/* let _bt_next do the heavy lifting */
-					if (!_bt_next(scan, ForwardScanDirection))
+					itemIndex = 0;
+					batch = _bt_next(scan, ForwardScanDirection, batch);
+					if (!batch)
 						break;
 				}
 
 				/* Save tuple ID, and continue scanning */
-				heapTid = &so->currPos.items[so->currPos.itemIndex].heapTid;
+				heapTid = &batch->items[itemIndex].heapTid;
 				tbm_add_tuples(tbm, heapTid, 1, false);
 				ntids++;
 			}
@@ -347,8 +325,6 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 
 	/* allocate private workspace */
 	so = (BTScanOpaque) palloc(sizeof(BTScanOpaqueData));
-	BTScanPosInvalidate(so->currPos);
-	BTScanPosInvalidate(so->markPos);
 	if (scan->numberOfKeys > 0)
 		so->keyData = (ScanKey) palloc(scan->numberOfKeys * sizeof(ScanKeyData));
 	else
@@ -361,17 +337,6 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->arrayKeys = NULL;
 	so->orderProcs = NULL;
 	so->arrayContext = NULL;
-
-	so->killedItems = NULL;		/* until needed */
-	so->numKilled = 0;
-	so->prefetch_maximum = 0;   /* disable prefetch */
-
-	/*
-	 * We don't know yet whether the scan will be index-only, so we do not
-	 * allocate the tuple workspace arrays until btrescan.  However, we set up
-	 * scan->xs_itupdesc whether we'll need it or not, since that's so cheap.
-	 */
-	so->currTuples = so->markTuples = NULL;
 
 	scan->xs_itupdesc = RelationGetDescr(rel);
 
@@ -389,80 +354,51 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 
-	/* we aren't holding any read locks, but gotta drop the pins */
-	if (BTScanPosIsValid(so->currPos))
-	{
-		/* Before leaving current page, deal with any killed items */
-		if (so->numKilled > 0)
-			_bt_killitems(scan);
-		BTScanPosUnpinIfPinned(so->currPos);
-		BTScanPosInvalidate(so->currPos);
-	}
-
-	/*
-	 * We prefer to eagerly drop leaf page pins before btgettuple returns.
-	 * This avoids making VACUUM wait to acquire a cleanup lock on the page.
-	 *
-	 * We cannot safely drop leaf page pins during index-only scans due to a
-	 * race condition involving VACUUM setting pages all-visible in the VM.
-	 * It's also unsafe for plain index scans that use a non-MVCC snapshot.
-	 *
-	 * When we drop pins eagerly, the mechanism that marks so->killedItems[]
-	 * index tuples LP_DEAD has to deal with concurrent TID recycling races.
-	 * The scheme used to detect unsafe TID recycling won't work when scanning
-	 * unlogged relations (since it involves saving an affected page's LSN).
-	 * Opt out of eager pin dropping during unlogged relation scans for now
-	 * (this is preferable to opting out of kill_prior_tuple LP_DEAD setting).
-	 *
-	 * Also opt out of dropping leaf page pins eagerly during bitmap scans.
-	 * Pins cannot be held for more than an instant during bitmap scans either
-	 * way, so we might as well avoid wasting cycles on acquiring page LSNs.
-	 *
-	 * See nbtree/README section on making concurrent TID recycling safe.
-	 *
-	 * Note: so->dropPin should never change across rescans.
-	 */
-	so->dropPin = (!scan->xs_want_itup &&
-				   IsMVCCSnapshot(scan->xs_snapshot) &&
-				   RelationNeedsWAL(scan->indexRelation) &&
-				   scan->heapRelation != NULL);
-
-	so->markItemIndex = -1;
-	so->needPrimScan = false;
-	so->scanBehind = false;
-	so->oppositeDirCheck = false;
-	BTScanPosUnpinIfPinned(so->markPos);
-	BTScanPosInvalidate(so->markPos);
-
-	/*
-	 * Allocate tuple workspace arrays, if needed for an index-only scan and
-	 * not already done in a previous rescan call.  To save on palloc
-	 * overhead, both workspaces are allocated as one palloc block; only this
-	 * function and btendscan know that.
-	 *
-	 * NOTE: this data structure also makes it safe to return data from a
-	 * "name" column, even though btree name_ops uses an underlying storage
-	 * datatype of cstring.  The risk there is that "name" is supposed to be
-	 * padded to NAMEDATALEN, but the actual index tuple is probably shorter.
-	 * However, since we only return data out of tuples sitting in the
-	 * currTuples array, a fetch of NAMEDATALEN bytes can at worst pull some
-	 * data out of the markTuples array --- running off the end of memory for
-	 * a SIGSEGV is not possible.  Yeah, this is ugly as sin, but it beats
-	 * adding special-case treatment for name_ops elsewhere.
-	 */
-	if (scan->xs_want_itup && so->currTuples == NULL)
-	{
-		so->currTuples = (char *) palloc(BLCKSZ * 2);
-		so->markTuples = so->currTuples + BLCKSZ;
-	}
-
 	/*
 	 * Reset the scan keys
 	 */
 	if (scankey && scan->numberOfKeys > 0)
 		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
+	so->needPrimScan = false;
+	so->scanBehind = false;
+	so->oppositeDirCheck = false;
 	so->numberOfKeys = 0;		/* until _bt_preprocess_keys sets it */
 	so->numArrayKeys = 0;		/* ditto */
+}
+
+/*
+ *	btfreebatch() -- Free batch, releasing its buffer pin
+ *
+ * XXX Should we really be freeing memory like this? What if we were to just
+ * reuse most memory across distinct pages, avoiding pfree/palloc cycles?
+ */
+void
+btfreebatch(IndexScanDesc scan, IndexScanBatch batch)
+{
+	/*
+	 * Check if there are tuples to kill from this batch (that weren't already
+	 * killed earlier on)
+	 */
+	if (batch->numKilled > 0)
+		_bt_killitems(scan, batch);
+
+	/* free AM-specific fields of the batch */
+	if (batch->pos)
+	{
+		if (!scan->batchState || !scan->batchState->dropPin)
+		{
+			ReleaseBuffer(batch->buf);
+			batch->buf = InvalidBuffer;
+		}
+
+		pfree(batch->pos);
+		batch->pos = NULL;
+	}
+
+	/* other fields (itemsvisibility, killItems, currTuples) freed elsewhere */
+
+	/* free the batch (or cache it for reuse) */
+	index_batch_release(scan, batch);
 }
 
 /*
@@ -473,116 +409,50 @@ btendscan(IndexScanDesc scan)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 
-	/* we aren't holding any read locks, but gotta drop the pins */
-	if (BTScanPosIsValid(so->currPos))
-	{
-		/* Before leaving current page, deal with any killed items */
-		if (so->numKilled > 0)
-			_bt_killitems(scan);
-		BTScanPosUnpinIfPinned(so->currPos);
-	}
-
-	so->markItemIndex = -1;
-	BTScanPosUnpinIfPinned(so->markPos);
-
-	/* No need to invalidate positions, the RAM is about to be freed. */
-
 	/* Release storage */
 	if (so->keyData != NULL)
 		pfree(so->keyData);
 	/* so->arrayKeys and so->orderProcs are in arrayContext */
 	if (so->arrayContext != NULL)
 		MemoryContextDelete(so->arrayContext);
-	if (so->killedItems != NULL)
-		pfree(so->killedItems);
-	if (so->currTuples != NULL)
-		pfree(so->currTuples);
-	/* so->markTuples should not be pfree'd, see btrescan */
 	pfree(so);
 }
 
 /*
- *	btmarkpos() -- save current scan position
+ *	btposreset() -- invalidate scan's array keys
  */
 void
-btmarkpos(IndexScanDesc scan)
+btposreset(IndexScanDesc scan, IndexScanBatch markbatch)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	BTScanPos	pos;
 
-	/* There may be an old mark with a pin (but no lock). */
-	BTScanPosUnpinIfPinned(so->markPos);
+	if (!so->numArrayKeys)
+		return;
 
 	/*
-	 * Just record the current itemIndex.  If we later step to next page
-	 * before releasing the marked position, _bt_steppage makes a full copy of
-	 * the currPos struct in markPos.  If (as often happens) the mark is moved
-	 * before we leave the page, we don't have to do that work.
+	 * Core system is about to restore a mark associated with a previously
+	 * returned batch.  Reset the scan's arrays to make all this safe.
 	 */
-	if (BTScanPosIsValid(so->currPos))
-		so->markItemIndex = so->currPos.itemIndex;
+	pos = (BTScanPos) markbatch->pos;
+	_bt_start_array_keys(scan, pos->dir);
+
+	/*
+	 * Core system will invalidate all other batches.
+	 *
+	 * Deal with this by unsetting needPrimScan as well as moreRight (or as
+	 * well as moreLeft, when scanning backwards).  That way, the next time
+	 * _bt_next is called it will step to the right (or to the left).  At that
+	 * point _bt_readpage will restore the scan's arrays to elements that
+	 * correctly track the next page's position in the index's key space.
+	 */
+	if (ScanDirectionIsForward(pos->dir))
+		pos->moreRight = true;
 	else
-	{
-		BTScanPosInvalidate(so->markPos);
-		so->markItemIndex = -1;
-	}
-}
-
-/*
- *	btrestrpos() -- restore scan to last saved position
- */
-void
-btrestrpos(IndexScanDesc scan)
-{
-	BTScanOpaque so = (BTScanOpaque) scan->opaque;
-
-	if (so->markItemIndex >= 0)
-	{
-		/*
-		 * The scan has never moved to a new page since the last mark.  Just
-		 * restore the itemIndex.
-		 *
-		 * NB: In this case we can't count on anything in so->markPos to be
-		 * accurate.
-		 */
-		so->currPos.itemIndex = so->markItemIndex;
-	}
-	else
-	{
-		/*
-		 * The scan moved to a new page after last mark or restore, and we are
-		 * now restoring to the marked page.  We aren't holding any read
-		 * locks, but if we're still holding the pin for the current position,
-		 * we must drop it.
-		 */
-		if (BTScanPosIsValid(so->currPos))
-		{
-			/* Before leaving current page, deal with any killed items */
-			if (so->numKilled > 0)
-				_bt_killitems(scan);
-			BTScanPosUnpinIfPinned(so->currPos);
-		}
-
-		if (BTScanPosIsValid(so->markPos))
-		{
-			/* bump pin on mark buffer for assignment to current buffer */
-			if (BTScanPosIsPinned(so->markPos))
-				IncrBufferRefCount(so->markPos.buf);
-			memcpy(&so->currPos, &so->markPos,
-				   offsetof(BTScanPosData, items[1]) +
-				   so->markPos.lastItem * sizeof(BTScanPosItem));
-			if (so->currTuples)
-				memcpy(so->currTuples, so->markTuples,
-					   so->markPos.nextTupleOffset);
-			/* Reset the scan's array keys (see _bt_steppage for why) */
-			if (so->numArrayKeys)
-			{
-				_bt_start_array_keys(scan, so->currPos.dir);
-				so->needPrimScan = false;
-			}
-		}
-		else
-			BTScanPosInvalidate(so->currPos);
-	}
+		pos->moreLeft = true;
+	so->needPrimScan = false;
+	so->scanBehind = false;
+	so->oppositeDirCheck = false;
 }
 
 /*
@@ -829,15 +699,6 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *next_scan_page,
 	*next_scan_page = InvalidBlockNumber;
 	*last_curr_page = InvalidBlockNumber;
 
-	/*
-	 * Reset so->currPos, and initialize moreLeft/moreRight such that the next
-	 * call to _bt_readnextpage treats this backend similarly to a serial
-	 * backend that steps from *last_curr_page to *next_scan_page (unless this
-	 * backend's so->currPos is initialized by _bt_readfirstpage before then).
-	 */
-	BTScanPosInvalidate(so->currPos);
-	so->currPos.moreLeft = so->currPos.moreRight = true;
-
 	if (first)
 	{
 		/*
@@ -986,8 +847,6 @@ _bt_parallel_done(IndexScanDesc scan)
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
 	bool		status_changed = false;
-
-	Assert(!BTScanPosIsValid(so->currPos));
 
 	/* Do nothing, for non-parallel scans */
 	if (parallel_scan == NULL)

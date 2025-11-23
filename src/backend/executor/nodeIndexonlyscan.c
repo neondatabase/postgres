@@ -49,7 +49,13 @@
 static TupleTableSlot *IndexOnlyNext(IndexOnlyScanState *node);
 static void StoreIndexTuple(IndexOnlyScanState *node, TupleTableSlot *slot,
 							IndexTuple itup, TupleDesc itupdesc);
+static bool ios_prefetch_block(IndexScanDesc scan, void *arg,
+							   IndexScanBatchPos *pos);
 
+/* values stored in ios_prefetch_block in the batch cache */
+#define		IOS_UNKNOWN_VISIBILITY		0	/* default value */
+#define		IOS_ALL_VISIBLE				1
+#define		IOS_NOT_ALL_VISIBLE			2
 
 /* ----------------------------------------------------------------
  *		IndexOnlyNext
@@ -104,6 +110,17 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		node->ioss_VMBuffer = InvalidBuffer;
 
 		/*
+		 * Set the prefetch callback info, if the scan has batching enabled
+		 * (we only know what after index_beginscan, which also checks which
+		 * callbacks are defined for the AM.
+		 */
+		if (scandesc->batchState != NULL)
+		{
+			scandesc->batchState->prefetch = ios_prefetch_block;
+			scandesc->batchState->prefetchArg = (void *) node;
+		}
+
+		/*
 		 * If no run-time keys to calculate or they are ready, go ahead and
 		 * pass the scankeys to the index AM.
 		 */
@@ -120,9 +137,41 @@ IndexOnlyNext(IndexOnlyScanState *node)
 	 */
 	while ((tid = index_getnext_tid(scandesc, direction)) != NULL)
 	{
+		bool		all_visible;
 		bool		tuple_from_heap = false;
 
 		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Without batching, inspect the VM directly. With batching, we need
+		 * to retrieve the visibility information seen by the read_stream
+		 * callback (or rather by ios_prefetch_block), otherwise the
+		 * read_stream might get out of sync (if the VM got updated since
+		 * then).
+		 */
+		if (scandesc->batchState == NULL)
+		{
+			all_visible = VM_ALL_VISIBLE(scandesc->heapRelation,
+										 ItemPointerGetBlockNumber(tid),
+										 &node->ioss_VMBuffer);
+		}
+		else
+		{
+			/*
+			 * Reuse the previously determined page visibility info, or
+			 * calculate it now. If we decided not to prefetch the block, the
+			 * page had to be all-visible at that point. The VM bit might have
+			 * changed since then, but the tuple visibility could not have.
+			 *
+			 * XXX It's a bit weird we use the visibility to decide if we
+			 * should skip prefetching the block, and then deduce the
+			 * visibility from that (even if it matches pretty clearly). But
+			 * maybe we could/should have a more direct way to read the
+			 * private state?
+			 */
+			all_visible = !ios_prefetch_block(scandesc, node,
+											  &scandesc->batchState->readPos);
+		}
 
 		/*
 		 * We can skip the heap fetch if the TID references a heap page on
@@ -158,9 +207,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 		 * It's worth going through this complexity to avoid needing to lock
 		 * the VM buffer, which could cause significant contention.
 		 */
-		if (!VM_ALL_VISIBLE(scandesc->heapRelation,
-							ItemPointerGetBlockNumber(tid),
-							&node->ioss_VMBuffer))
+		if (!all_visible)
 		{
 			/*
 			 * Rats, we have to visit the heap to check visibility.
@@ -888,4 +935,52 @@ ExecIndexOnlyScanRetrieveInstrumentation(IndexOnlyScanState *node)
 		SharedInfo->num_workers * sizeof(IndexScanInstrumentation);
 	node->ioss_SharedInfo = palloc(size);
 	memcpy(node->ioss_SharedInfo, SharedInfo, size);
+}
+
+/* FIXME duplicate from indexam.c */
+#define INDEX_SCAN_BATCH(scan, idx)	\
+		((scan)->batchState->batches[(idx) % (scan)->batchState->maxBatches])
+
+/*
+ * ios_prefetch_block
+ *		Callback to only prefetch blocks that are not all-visible.
+ *
+ * We don't want to inspect the visibility map repeatedly, so the result of
+ * VM_ALL_VISIBLE is stored in the batch private data. The values are set
+ * to 0 by default, so we use two constants to remember if all-visible or
+ * not all-visible.
+ *
+ * However, this is not merely a question of performance. The VM may get
+ * modified during the scan, and we need to make sure the two places (the
+ * read_next callback and the index_fetch_heap here) make the same decision,
+ * otherwise we might get out of sync with the stream. For example, the
+ * callback might find a page is all-visible (and skips reading the block),
+ * and then someone might update the page, resetting the VM bit. If this
+ * place attempts to read the page from the stream, it'll fail because it
+ * will probably receive an entirely different page.
+ */
+static bool
+ios_prefetch_block(IndexScanDesc scan, void *arg, IndexScanBatchPos *pos)
+{
+	IndexOnlyScanState *node = (IndexOnlyScanState *) arg;
+	IndexScanBatch batch = INDEX_SCAN_BATCH(scan, pos->batch);
+
+	if (batch->itemsvisibility == NULL)
+		batch->itemsvisibility = palloc0(sizeof(char) * (batch->lastItem + 1));
+
+	if (batch->itemsvisibility[pos->index] == IOS_UNKNOWN_VISIBILITY)
+	{
+		bool		all_visible;
+		ItemPointer tid = &batch->items[pos->index].heapTid;
+
+		all_visible = VM_ALL_VISIBLE(scan->heapRelation,
+									 ItemPointerGetBlockNumber(tid),
+									 &node->ioss_VMBuffer);
+
+		batch->itemsvisibility[pos->index] =
+			all_visible ? IOS_ALL_VISIBLE : IOS_NOT_ALL_VISIBLE;
+	}
+
+	/* prefetch only blocks that are not all-visible */
+	return (batch->itemsvisibility[pos->index] == IOS_NOT_ALL_VISIBLE);
 }

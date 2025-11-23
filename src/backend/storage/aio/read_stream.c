@@ -99,6 +99,7 @@ struct ReadStream
 	int16		forwarded_buffers;
 	int16		pinned_buffers;
 	int16		distance;
+	int16		distance_old;
 	int16		initialized_buffers;
 	int			read_buffers_flags;
 	bool		sync_mode;		/* using io_method=sync */
@@ -476,6 +477,7 @@ read_stream_look_ahead(ReadStream *stream)
 		if (blocknum == InvalidBlockNumber)
 		{
 			/* End of stream. */
+			stream->distance_old = stream->distance;
 			stream->distance = 0;
 			break;
 		}
@@ -878,6 +880,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 		else
 		{
 			/* No more blocks, end of stream. */
+			stream->distance_old = stream->distance;
 			stream->distance = 0;
 			stream->oldest_buffer_index = stream->next_buffer_index;
 			stream->pinned_buffers = 0;
@@ -1064,6 +1067,9 @@ read_stream_reset(ReadStream *stream)
 	int16		index;
 	Buffer		buffer;
 
+	/* remember the old distance (if we reset before end of the stream) */
+	stream->distance_old = Max(stream->distance, stream->distance_old);
+
 	/* Stop looking ahead. */
 	stream->distance = 0;
 
@@ -1096,8 +1102,12 @@ read_stream_reset(ReadStream *stream)
 	Assert(stream->pinned_buffers == 0);
 	Assert(stream->ios_in_progress == 0);
 
-	/* Start off assuming data is cached. */
-	stream->distance = 1;
+	/*
+	 * Restore the old distance, if we have one. Otherwise start assuming data
+	 * is cached.
+	 */
+	stream->distance = Max(1, stream->distance_old);
+	stream->distance_old = 0;
 }
 
 /*

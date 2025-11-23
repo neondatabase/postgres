@@ -6755,6 +6755,10 @@ get_actual_variable_endpoint(Relation heapRel,
 	 * a huge amount of time here, so we give up once we've read too many heap
 	 * pages.  When we fail for that reason, the caller will end up using
 	 * whatever extremal value is recorded in pg_statistic.
+	 *
+	 * XXX We're not using ios_prefetch_block here.  That creates a window
+	 * where the scan's read stream can get out of sync.  At a minimum we'll
+	 * need to close this window by explicitly disabling heap I/O prefetching.
 	 */
 	InitNonVacuumableSnapshot(SnapshotNonVacuumable,
 							  GlobalVisTestFor(heapRel));

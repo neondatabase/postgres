@@ -161,10 +161,11 @@ typedef struct IndexAmRoutine
     ambeginscan_function ambeginscan;
     amrescan_function amrescan;
     amgettuple_function amgettuple;     /* can be NULL */
+    amgetbatch_function amgetbatch; /* can be NULL */
+    amfreebatch_function amfreebatch;	/* can be NULL */
     amgetbitmap_function amgetbitmap;   /* can be NULL */
     amendscan_function amendscan;
-    ammarkpos_function ammarkpos;       /* can be NULL */
-    amrestrpos_function amrestrpos;     /* can be NULL */
+    amposreset_function amposreset; /* can be NULL */
 
     /* interface functions to support parallel index scans */
     amestimateparallelscan_function amestimateparallelscan;    /* can be NULL */
@@ -746,6 +747,63 @@ amgettuple (IndexScanDesc scan,
 
   <para>
 <programlisting>
+IndexScanBatch
+amgetbatch (IndexScanDesc scan,
+            IndexScanBatch batch,
+            ScanDirection direction);
+</programlisting>
+   Return the next batch of index tuples in the given scan, moving in the given
+   direction (forward or backward in the index).  Returns an instance of
+   <structname>IndexScanBatch</structname> with index tuples loaded, or
+   <literal>NULL</literal> if there are no more index tuples. The caller may
+   provide a pre-allocated <structname>IndexScanBatch</structname> instance,
+   in which case the index tuples are loaded into it instead of allocating
+   a new one. The same caveats described for <function>amgettuple</function>
+   apply here too. When an entry in the returned batch means only that the
+   index contains an entry that matches the scan keys, not that the tuple
+   necessarily still exists in the heap or will pass the caller's snapshot
+   test.
+  </para>
+
+  <para>
+   The <function>amgetbatch</function> function need only be provided if the access
+   method supports <quote>plain</quote> index scans.  If it doesn't, the
+   <structfield>amgetbatch</structfield> field in its <structname>IndexAmRoutine</structname>
+   struct must be set to NULL.
+  </para>
+
+  <para>
+   The access method may provide only one of <function>amgettuple</function> and
+   <function>amgetbatch</function> callbacks, not both. When the access method
+   provides <function>amgetbatch</function>, it has to also povide
+   <function>amfreebatch</function>.
+  </para>
+
+  <para>
+   The <structname>IndexScanBatch</structname> returned by <function>amgetbatch</function>
+   is no longer managed by the access method. It is up to the caller to decide
+   when it should be reused or freed by passing it to <function>amfreebatch</function>.
+  </para>
+
+  <para>
+<programlisting>
+bool
+amfreebatch (IndexScanDesc scan,
+             IndexScanBatch batch);
+</programlisting>
+   Releases the batch returned by the <function>amgetbatch</function> earlier.
+   This frees all AM-specific resources associated with the batch, like buffer
+   pins, allocated memory, etc.
+  </para>
+
+  <para>
+   The <function>amfreebatch</function> function need only be provided if the access
+   method provides <function>amgetbatch</function>. Otherwise it has to remain
+   set to <literal>NULL</literal>.
+  </para>
+
+  <para>
+<programlisting>
 int64
 amgetbitmap (IndexScanDesc scan,
              TIDBitmap *tbm);
@@ -789,32 +847,25 @@ amendscan (IndexScanDesc scan);
   <para>
 <programlisting>
 void
-ammarkpos (IndexScanDesc scan);
+amposreset (IndexScanDesc scan);
 </programlisting>
-   Mark current scan position.  The access method need only support one
-   remembered scan position per scan.
+   Notify index AM that core code will change the scan's position to an item
+   returned as part of an earlier batch.  The index AM must therefore
+   invalidate any state that independently tracks the scan's progress
+   (e.g., array keys used with a ScalarArrayOpExpr qual).  Called by the core
+   system when it is about to restore a mark.
   </para>
 
   <para>
-   The <function>ammarkpos</function> function need only be provided if the access
-   method supports ordered scans.  If it doesn't,
-   the <structfield>ammarkpos</structfield> field in its <structname>IndexAmRoutine</structname>
-   struct may be set to NULL.
-  </para>
-
-  <para>
-<programlisting>
-void
-amrestrpos (IndexScanDesc scan);
-</programlisting>
-   Restore the scan to the most recently marked position.
-  </para>
-
-  <para>
-   The <function>amrestrpos</function> function need only be provided if the access
-   method supports ordered scans.  If it doesn't,
-   the <structfield>amrestrpos</structfield> field in its <structname>IndexAmRoutine</structname>
-   struct may be set to NULL.
+   The <function>amposreset</function> function need only be provided if the access
+   method supports ordered scans through the <function>amgetbatch</function>
+   interface.  If it doesn't, the <structfield>amposreset</structfield> field
+   in its <structname>IndexAmRoutine</structname> struct should be set to
+   NULL.  Index AMs that don't have any private state that might need to be
+   invalidated might still find it useful to provide an empty
+   <structfield>amposreset</structfield> function; if <function>amposreset</function>
+   is set to NULL, the core system will assume that it is unsafe to restore a
+   marked position.
   </para>
 
   <para>

@@ -16,9 +16,11 @@
 
 #include "access/htup_details.h"
 #include "access/itup.h"
+#include "access/sdir.h"
 #include "nodes/tidbitmap.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
+#include "storage/read_stream.h"
 #include "storage/relfilelocator.h"
 #include "storage/spin.h"
 #include "utils/relcache.h"
@@ -121,9 +123,164 @@ typedef struct ParallelBlockTableScanWorkerData *ParallelBlockTableScanWorker;
 typedef struct IndexFetchTableData
 {
 	Relation	rel;
+	ReadStream *rs;
 } IndexFetchTableData;
 
 struct IndexScanInstrumentation;
+
+/* Forward declaration, the prefetch callback needs IndexScanDescData. */
+typedef struct IndexScanBatchData IndexScanBatchData;
+
+typedef struct IndexScanBatchPosItem	/* what we remember about each match */
+{
+	ItemPointerData heapTid;	/* TID of referenced heap item */
+	OffsetNumber indexOffset;	/* index item's location within page */
+	LocationIndex tupleOffset;	/* IndexTuple's offset in workspace, if any */
+} IndexScanBatchPosItem;
+
+/*
+ * Data about one batch of items returned by the index AM
+ */
+typedef struct IndexScanBatchData
+{
+	Buffer		buf;			/* currPage buf (invalid means unpinned) */
+	XLogRecPtr	lsn;			/* currPage's LSN (when dropPin) */
+
+	/*
+	 * AM-specific state representing the current position of the scan within
+	 * the index
+	 */
+	void	   *pos;
+
+	/*
+	 * The items array is always ordered in index order (ie, increasing
+	 * indexoffset).  When scanning backwards it is convenient to fill the
+	 * array back-to-front, so we start at the last slot and fill downwards.
+	 * Hence we need both a first-valid-entry and a last-valid-entry counter.
+	 */
+	int			firstItem;		/* first valid index in items[] */
+	int			lastItem;		/* last valid index in items[] */
+
+	/* info about killed items if any (killedItems is NULL if never used) */
+	int		   *killedItems;	/* indexes of killed items */
+	int			numKilled;		/* number of currently stored items */
+
+	/*
+	 * If we are doing an index-only scan, these are the tuple storage
+	 * workspaces for the matching tuples (tuples referenced by items[]). Each
+	 * is of size BLCKSZ, so it can hold as much as a full page's worth of
+	 * tuples.
+	 *
+	 * XXX maybe currTuples should be part of the am-specific per-batch state
+	 * stored in "position" field?
+	 */
+	char	   *currTuples;		/* tuple storage for items[] */
+
+	/*
+	 * batch contents (TIDs, index tuples, kill bitmap, ...)
+	 *
+	 * XXX Shouldn't this be part of the "IndexScanBatchPosItem" struct? To
+	 * keep everything in one place? Or why should we have separate arrays?
+	 * One advantage is that we don't need to allocate memory for arrays that
+	 * we don't need ... e.g. if we don't need heap tuples, we don't allocate
+	 * that. We couldn't do that with everything in one struct.
+	 */
+	char	   *itemsvisibility;	/* Index-only scan visibility cache */
+
+	/* capacity of the batch (size of the items array) */
+	int			maxitems;
+	IndexScanBatchPosItem items[FLEXIBLE_ARRAY_MEMBER];
+} IndexScanBatchData;
+
+/*
+ * Position in the queue of batches - index of a batch, index of item in a batch.
+ */
+typedef struct IndexScanBatchPos
+{
+	int			batch;
+	int			index;
+} IndexScanBatchPos;
+
+typedef struct IndexScanDescData IndexScanDescData;
+typedef bool (*IndexPrefetchCallback) (IndexScanDescData * scan,
+									   void *arg,
+									   IndexScanBatchPos *pos);
+
+/*
+ * State used by amgetbatch index AMs, which manage per-page batches of items
+ * with matching index tuples using a circular buffer
+ */
+typedef struct IndexScanBatchState
+{
+	/* Index AM drops leaf pin before amgetbatch returns? */
+	bool		dropPin;
+
+	/*
+	 * Did we read the final batch in this scan direction? The batches may be
+	 * loaded from multiple places, and we need to remember when we fail to
+	 * load the next batch in a given scan (which means "no more batches").
+	 * amgetbatch may restart the scan on the get call, so we need to remember
+	 * it's over.
+	 */
+	bool		finished;
+	bool		reset;
+
+	/*
+	 * Did we disable prefetching/use of a read stream because it didn't pay
+	 * for itself?
+	 */
+	bool		prefetchingLockedIn;
+	bool		disabled;
+
+	/*
+	 * During prefetching, currentPrefetchBlock is the table AM block number
+	 * that was returned by our read stream callback most recently.  Used to
+	 * suppress duplicate successive read stream block requests.
+	 *
+	 * Prefetching can still perform non-successive requests for the same
+	 * block number (in general we're prefetching in exactly the same order
+	 * that the scan will return table AM TIDs in).  We need to avoid
+	 * duplicate successive requests because table AMs expect to be able to
+	 * hang on to buffer pins across table_index_fetch_tuple calls.
+	 */
+	BlockNumber currentPrefetchBlock;
+
+	/*
+	 * Current scan direction, for the currently loaded batches. This is used
+	 * to load data in the read stream API callback, etc.
+	 */
+	ScanDirection direction;
+
+	/* positions in the queue of batches (batch + item) */
+	IndexScanBatchPos readPos;	/* read position */
+	IndexScanBatchPos streamPos;	/* prefetch position (for read stream API) */
+	IndexScanBatchPos markPos;	/* mark/restore position */
+
+	IndexScanBatchData *markBatch;
+
+	/*
+	 * Array of batches returned by the AM. The array has a capacity (but can
+	 * be resized if needed). The headBatch is an index of the batch we're
+	 * currently reading from (this needs to be translated by modulo
+	 * maxBatches into index in the batches array).
+	 */
+	int			maxBatches;		/* size of the batches array */
+	int			headBatch;		/* head batch slot */
+	int			nextBatch;		/* next empty batch slot */
+
+	/* small cache of unused batches, to reduce malloc/free traffic */
+	struct
+	{
+		int			maxbatches;
+		IndexScanBatchData **batches;
+	}			cache;
+
+	IndexScanBatchData **batches;
+
+	/* callback to skip prefetching in IOS etc. */
+	IndexPrefetchCallback prefetch;
+	void	   *prefetchArg;
+} IndexScanBatchState;
 
 /*
  * We use the same IndexScanDescData structure for both amgettuple-based
@@ -138,6 +295,8 @@ typedef struct IndexScanDescData
 	struct SnapshotData *xs_snapshot;	/* snapshot to see */
 	int			numberOfKeys;	/* number of index qualifier conditions */
 	int			numberOfOrderBys;	/* number of ordering operators */
+	IndexScanBatchState *batchState;	/* amgetbatch related state */
+
 	struct ScanKeyData *keyData;	/* array of index qualifier descriptors */
 	struct ScanKeyData *orderByData;	/* array of ordering op descriptors */
 	bool		xs_want_itup;	/* caller requests index tuples */

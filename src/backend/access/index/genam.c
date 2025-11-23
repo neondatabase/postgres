@@ -89,6 +89,7 @@ RelationGetIndexScan(Relation indexRelation, int nkeys, int norderbys)
 	scan->xs_snapshot = InvalidSnapshot;	/* caller must initialize this */
 	scan->numberOfKeys = nkeys;
 	scan->numberOfOrderBys = norderbys;
+	scan->batchState = NULL;	/* used by amgetbatch index AMs */
 
 	/*
 	 * We allocate key workspace here, but it won't get filled until amrescan.
