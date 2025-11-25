@@ -15180,6 +15180,67 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 
 	ReleaseSysCache(tuple);
 
+	/*
+	 * If this is a heap relation and reduce_fpi was changed, invalidate
+	 * relcache for all indexes and toast relations so they pick up the new
+	 * value in their rd_reduce_fpi field.
+	 */
+	if (rel->rd_rel->relkind == RELKIND_RELATION)
+	{
+		List	   *changed_options = untransformRelOptions(newOptions);
+		ListCell   *cell;
+		bool		reduce_fpi_changed = false;
+
+		/* Check if reduce_fpi was in the ALTER statement */
+		foreach(cell, defList)
+		{
+			DefElem    *defel = (DefElem *) lfirst(cell);
+
+			if (strcmp(defel->defname, "reduce_fpi") == 0)
+			{
+				reduce_fpi_changed = true;
+				break;
+			}
+		}
+
+		if (reduce_fpi_changed)
+		{
+			List	   *indexoidlist;
+			ListCell   *indexoidscan;
+
+			/* Invalidate all indexes on this relation */
+			indexoidlist = RelationGetIndexList(rel);
+			foreach(indexoidscan, indexoidlist)
+			{
+				Oid			indexoid = lfirst_oid(indexoidscan);
+
+				CacheInvalidateRelcacheByRelid(indexoid);
+			}
+			list_free(indexoidlist);
+
+			/* Invalidate toast table and its indexes */
+			if (OidIsValid(rel->rd_rel->reltoastrelid))
+			{
+				Oid			toastrelid = rel->rd_rel->reltoastrelid;
+				Relation	toastrel;
+
+				CacheInvalidateRelcacheByRelid(toastrelid);
+
+				/* Also invalidate toast table's indexes */
+				toastrel = table_open(toastrelid, AccessShareLock);
+				indexoidlist = RelationGetIndexList(toastrel);
+				foreach(indexoidscan, indexoidlist)
+				{
+					Oid			indexoid = lfirst_oid(indexoidscan);
+
+					CacheInvalidateRelcacheByRelid(indexoid);
+				}
+				list_free(indexoidlist);
+				table_close(toastrel, AccessShareLock);
+			}
+		}
+	}
+
 	/* repeat the whole exercise for the toast table, if there's one */
 	if (OidIsValid(rel->rd_rel->reltoastrelid))
 	{

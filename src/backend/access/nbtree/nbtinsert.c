@@ -1317,6 +1317,7 @@ _bt_insertonpg(Relation rel,
 			uint8		xlinfo;
 			XLogRecPtr	recptr;
 			uint16		upostingoff;
+			uint8		bufflags;
 
 			xlrec.offnum = newitemoff;
 
@@ -1341,7 +1342,10 @@ _bt_insertonpg(Relation rel,
 			{
 				/* Internal page insert, which finishes a split on cbuf */
 				xlinfo = XLOG_BTREE_INSERT_UPPER;
-				XLogRegisterBuffer(1, cbuf, REGBUF_STANDARD);
+				bufflags = REGBUF_STANDARD;
+				if (RelationGetReduceFPI(rel))
+					bufflags |= REGBUF_REDUCE_FPI;
+				XLogRegisterBuffer(1, cbuf, bufflags);
 
 				if (BufferIsValid(metabuf))
 				{
@@ -1357,14 +1361,19 @@ _bt_insertonpg(Relation rel,
 					xlmeta.last_cleanup_num_delpages = metad->btm_last_cleanup_num_delpages;
 					xlmeta.allequalimage = metad->btm_allequalimage;
 
-					XLogRegisterBuffer(2, metabuf,
-									   REGBUF_WILL_INIT | REGBUF_STANDARD);
+					bufflags = REGBUF_WILL_INIT | REGBUF_STANDARD;
+					if (RelationGetReduceFPI(rel))
+						bufflags |= REGBUF_REDUCE_FPI;
+					XLogRegisterBuffer(2, metabuf, bufflags);
 					XLogRegisterBufData(2, (char *) &xlmeta,
 										sizeof(xl_btree_metadata));
 				}
 			}
 
-			XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
+			bufflags = REGBUF_STANDARD;
+			if (RelationGetReduceFPI(rel))
+				bufflags |= REGBUF_REDUCE_FPI;
+			XLogRegisterBuffer(0, buf, bufflags);
 			if (postingoff == 0)
 			{
 				/* Just log itup from caller */

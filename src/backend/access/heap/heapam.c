@@ -2200,6 +2200,8 @@ heap_insert(Relation relation, HeapTuple tup, CommandId cid,
 		 * write the whole page to the xlog, we don't need to store
 		 * xl_heap_header in the xlog.
 		 */
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
 		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD | bufflags);
 		XLogRegisterBufData(0, (char *) &xlhdr, SizeOfNeonHeapHeader);
 		/* PG73FORMAT: write bitmap [+ padding] [+ oid] + data */
@@ -3115,7 +3117,10 @@ l1:
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapDelete);
 
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, buffer, bufflags);
 
 		/*
 		 * Log replica identity of the deleted tuple if there is one
@@ -3887,7 +3892,10 @@ l2:
 			XLogRecPtr	recptr;
 
 			XLogBeginInsert();
-			XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+			int bufflags = REGBUF_STANDARD;
+			if (RelationGetReduceFPI(relation))
+				bufflags |= REGBUF_REDUCE_FPI;
+			XLogRegisterBuffer(0, buffer, bufflags);
 
 			xlrec.offnum = ItemPointerGetOffsetNumber(&oldtup.t_self);
 			xlrec.xmax = xmax_lock_old_tuple;
@@ -5220,7 +5228,10 @@ failed:
 		XLogRecPtr	recptr;
 
 		XLogBeginInsert();
-		XLogRegisterBuffer(0, *buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, *buffer, bufflags);
 
 		xlrec.offnum = ItemPointerGetOffsetNumber(&tuple->t_self);
 		xlrec.xmax = xid;
@@ -5973,7 +5984,10 @@ l4:
 			Page		page = BufferGetPage(buf);
 
 			XLogBeginInsert();
-			XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
+			int bufflags = REGBUF_STANDARD;
+			if (RelationGetReduceFPI(rel))
+				bufflags |= REGBUF_REDUCE_FPI;
+			XLogRegisterBuffer(0, buf, bufflags);
 
 			xlrec.offnum = ItemPointerGetOffsetNumber(&mytup.t_self);
 			xlrec.xmax = new_xmax;
@@ -6135,7 +6149,10 @@ heap_finish_speculative(Relation relation, ItemPointer tid)
 		XLogSetRecordFlags(XLOG_INCLUDE_ORIGIN);
 
 		XLogRegisterData((char *) &xlrec, SizeOfHeapConfirm);
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, buffer, bufflags);
 
 		recptr = XLogInsert(RM_HEAP_ID, XLOG_HEAP_CONFIRM);
 
@@ -6292,7 +6309,10 @@ heap_abort_speculative(Relation relation, ItemPointer tid)
 
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfNeonHeapDelete);
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, buffer, bufflags);
 
 		/* No replica identity & replication origin logged */
 
@@ -6536,7 +6556,10 @@ heap_inplace_update_and_unlock(Relation relation,
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfHeapInplace);
 
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, buffer, bufflags);
 		XLogRegisterBufData(0, (char *) htup + htup->t_hoff, newlen);
 
 		/* inplace updates aren't decoded atm, don't log the origin */
@@ -6639,7 +6662,10 @@ heap_inplace_update(Relation relation, HeapTuple tuple)
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfHeapInplace);
 
-		XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+		int bufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(relation))
+			bufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(0, buffer, bufflags);
 		XLogRegisterBufData(0, (char *) htup + htup->t_hoff, newlen);
 
 		/* inplace updates aren't decoded atm, don't log the origin */
@@ -8861,6 +8887,8 @@ log_heap_visible(Relation rel, Buffer heap_buffer, Buffer vm_buffer,
 	flags = REGBUF_STANDARD;
 	if (!XLogHintBitIsNeeded())
 		flags |= REGBUF_NO_IMAGE;
+	if (RelationGetReduceFPI(rel))
+		flags |= REGBUF_REDUCE_FPI;
 	XLogRegisterBuffer(1, heap_buffer, flags);
 
 	recptr = XLogInsert(RM_HEAP2_ID, XLOG_HEAP2_VISIBLE);
@@ -9001,10 +9029,17 @@ log_heap_update(Relation reln, Buffer oldbuf,
 		bufflags |= REGBUF_WILL_INIT;
 	if (need_tuple_data)
 		bufflags |= REGBUF_KEEP_DATA;
+	if (RelationGetReduceFPI(reln))
+		bufflags |= REGBUF_REDUCE_FPI;
 
 	XLogRegisterBuffer(0, newbuf, bufflags);
 	if (oldbuf != newbuf)
-		XLogRegisterBuffer(1, oldbuf, REGBUF_STANDARD);
+	{
+		int oldbufflags = REGBUF_STANDARD;
+		if (RelationGetReduceFPI(reln))
+			oldbufflags |= REGBUF_REDUCE_FPI;
+		XLogRegisterBuffer(1, oldbuf, oldbufflags);
+	}
 
 	XLogRegisterData((char *) &xlrec, SizeOfNeonHeapUpdate);
 

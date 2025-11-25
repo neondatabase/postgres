@@ -638,17 +638,17 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			needs_backup = false;
 		else
 		{
-			/*
-			 * We assume page LSN is first data on *every* page that can be
-			 * passed to XLogInsert, whether it has the standard page layout
-			 * or not.
-			 */
-			XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
+		/*
+		 * We assume page LSN is first data on *every* page that can be
+		 * passed to XLogInsert, whether it has the standard page layout
+		 * or not.
+		 */
+		XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
 
-			if (force_disable_full_page_write)
-				needs_backup = false;
-			else
-				needs_backup = (page_lsn <= RedoRecPtr);
+		if (force_disable_full_page_write && (regbuf->flags & REGBUF_REDUCE_FPI))
+			needs_backup = false;
+		else
+			needs_backup = (page_lsn <= RedoRecPtr);
 
 			if (!needs_backup)
 			{

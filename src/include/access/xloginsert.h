@@ -38,6 +38,8 @@
 #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
 									 * is taken */
 #define REGBUF_NO_CHANGE	0x20	/* intentionally register clean buffer */
+#define REGBUF_REDUCE_FPI	0x40	/* relation has reduce_fpi enabled, suppress
+									 * full page images when possible */
 
 extern int max_replication_apply_lag;
 extern int max_replication_flush_lag;
