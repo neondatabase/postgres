@@ -164,31 +164,62 @@ ReplicationSlotsShmemInit(void)
 /*
  * Check whether the passed slot name is valid and report errors at elevel.
  *
- * Slot names may consist out of [a-z0-9_]{1,NAMEDATALEN-1} which should allow
- * the name to be used as a directory name on every supported OS.
- *
- * Returns whether the directory name is valid or not if elevel < ERROR.
+ * See comments for ReplicationSlotValidateNameInternal().
  */
 bool
 ReplicationSlotValidateName(const char *name, int elevel)
+{
+	int			err_code;
+	char	   *err_msg = NULL;
+	char	   *err_hint = NULL;
+
+	if (!ReplicationSlotValidateNameInternal(name, &err_code, &err_msg,
+											 &err_hint))
+	{
+		ereport(elevel,
+				errcode(err_code),
+				errmsg_internal("%s", err_msg),
+				(err_hint != NULL) ? errhint("%s", err_hint) : 0);
+
+		pfree(err_msg);
+		if (err_hint != NULL)
+			pfree(err_hint);
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Check whether the passed slot name is valid.
+ *
+ * Slot names may consist out of [a-z0-9_]{1,NAMEDATALEN-1} which should allow
+ * the name to be used as a directory name on every supported OS.
+ *
+ * Returns true if the slot name is valid. Otherwise, returns false and stores
+ * the error code, error message, and optional hint in err_code, err_msg, and
+ * err_hint, respectively. The caller is responsible for freeing err_msg and
+ * err_hint, which are palloc'd.
+ */
+bool
+ReplicationSlotValidateNameInternal(const char *name, int *err_code,
+									char **err_msg, char **err_hint)
 {
 	const char *cp;
 
 	if (strlen(name) == 0)
 	{
-		ereport(elevel,
-				(errcode(ERRCODE_INVALID_NAME),
-				 errmsg("replication slot name \"%s\" is too short",
-						name)));
+		*err_code = ERRCODE_INVALID_NAME;
+		*err_msg = psprintf(_("replication slot name \"%s\" is too short"), name);
+		*err_hint = NULL;
 		return false;
 	}
 
 	if (strlen(name) >= NAMEDATALEN)
 	{
-		ereport(elevel,
-				(errcode(ERRCODE_NAME_TOO_LONG),
-				 errmsg("replication slot name \"%s\" is too long",
-						name)));
+		*err_code = ERRCODE_NAME_TOO_LONG;
+		*err_msg = psprintf(_("replication slot name \"%s\" is too long"), name);
+		*err_hint = NULL;
 		return false;
 	}
 
@@ -198,11 +229,9 @@ ReplicationSlotValidateName(const char *name, int elevel)
 			  || (*cp >= '0' && *cp <= '9')
 			  || (*cp == '_')))
 		{
-			ereport(elevel,
-					(errcode(ERRCODE_INVALID_NAME),
-					 errmsg("replication slot name \"%s\" contains invalid character",
-							name),
-					 errhint("Replication slot names may only contain lower case letters, numbers, and the underscore character.")));
+			*err_code = ERRCODE_INVALID_NAME;
+			*err_msg = psprintf(_("replication slot name \"%s\" contains invalid character"), name);
+			*err_hint = psprintf(_("Replication slot names may only contain lower case letters, numbers, and the underscore character."));
 			return false;
 		}
 	}
@@ -425,7 +454,7 @@ retry:
 		SpinLockRelease(&s->mutex);
 	}
 	else
-		active_pid = MyProcPid;
+		s->active_pid = active_pid = MyProcPid;
 	LWLockRelease(ReplicationSlotControlLock);
 
 	/*
@@ -1600,6 +1629,7 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 
 		pgstat_report_wait_end();
 		CloseTransientFile(fd);
+		unlink(tmppath);
 		LWLockRelease(&slot->io_in_progress_lock);
 
 		/* if write didn't set errno, assume problem is no disk space */
@@ -1620,7 +1650,9 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 
 		pgstat_report_wait_end();
 		CloseTransientFile(fd);
+		unlink(tmppath);
 		LWLockRelease(&slot->io_in_progress_lock);
+
 		errno = save_errno;
 		ereport(elevel,
 				(errcode_for_file_access(),
@@ -1634,7 +1666,9 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	{
 		int			save_errno = errno;
 
+		unlink(tmppath);
 		LWLockRelease(&slot->io_in_progress_lock);
+
 		errno = save_errno;
 		ereport(elevel,
 				(errcode_for_file_access(),
@@ -1648,7 +1682,9 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	{
 		int			save_errno = errno;
 
+		unlink(tmppath);
 		LWLockRelease(&slot->io_in_progress_lock);
+
 		errno = save_errno;
 		ereport(elevel,
 				(errcode_for_file_access(),
