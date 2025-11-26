@@ -77,6 +77,7 @@
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/syncrep.h"
+#include "replication/walreceiver.h"
 #include "storage/aio.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
@@ -5048,6 +5049,17 @@ struct config_string ConfigureNamesString[] =
 		&log_connections_string,
 		"",
 		check_log_connections, assign_log_connections, NULL
+	},
+
+	{
+		{"neon_storage_token", PGC_POSTMASTER, REPLICATION_STANDBY,
+			"Authentication token for Neon storage",
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY
+		},
+		&neon_storage_token,
+		"",
+		NULL, NULL, show_neon_storage_token,
 	},
 
 
