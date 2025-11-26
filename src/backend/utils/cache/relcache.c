@@ -1328,7 +1328,7 @@ retry:
 	/* extract reloptions if any */
 	RelationParseRelOptions(relation, pg_class_tuple);
 
-	/* initialize reduce_fpi flag (must be after RelationParseRelOptions) */
+	/* initialize reduce_fpi flag */
 	RelationInitReduceFPI(relation);
 
 	/*
