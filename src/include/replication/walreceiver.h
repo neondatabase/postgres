@@ -29,6 +29,7 @@
 extern PGDLLIMPORT int wal_receiver_status_interval;
 extern PGDLLIMPORT int wal_receiver_timeout;
 extern PGDLLIMPORT bool hot_standby_feedback;
+extern PGDLLIMPORT char *neon_storage_token;
 
 /*
  * MAXCONNINFO: maximum size of a connection string.
@@ -486,6 +487,8 @@ walrcv_clear_result(WalRcvExecResult *walres)
 extern void WalReceiverMain(char *startup_data, size_t startup_data_len) pg_attribute_noreturn();
 extern void ProcessWalRcvInterrupts(void);
 extern void WalRcvForceReply(void);
+
+extern const char *show_neon_storage_token(void);
 
 /* prototypes for functions in walreceiverfuncs.c */
 extern Size WalRcvShmemSize(void);
