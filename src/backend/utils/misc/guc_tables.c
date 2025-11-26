@@ -66,6 +66,7 @@
 #include "replication/logicallauncher.h"
 #include "replication/slot.h"
 #include "replication/syncrep.h"
+#include "replication/walreceiver.h"
 #include "storage/bufmgr.h"
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
@@ -4637,6 +4638,18 @@ struct config_string ConfigureNamesString[] =
 		&restrict_nonsystem_relation_kind_string,
 		"",
 		check_restrict_nonsystem_relation_kind, assign_restrict_nonsystem_relation_kind, NULL
+	},
+
+
+	{
+		{"neon_storage_token", PGC_POSTMASTER, REPLICATION_STANDBY,
+			"Authentication token for Neon storage",
+			NULL,
+			GUC_NO_SHOW_ALL | GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY
+		},
+		&neon_storage_token,
+		"",
+		NULL, NULL, show_neon_storage_token
 	},
 
 	/* End-of-list marker */

@@ -90,6 +90,7 @@
 int			wal_receiver_status_interval;
 int			wal_receiver_timeout;
 bool		hot_standby_feedback;
+char	   *neon_storage_token;
 
 /* libpqwalreceiver connection */
 static WalReceiverConn *wrconn = NULL;
@@ -1393,6 +1394,22 @@ WalRcvGetStateString(WalRcvState state)
 			return "stopping";
 	}
 	return "UNKNOWN";
+}
+
+/*
+ * We currently grant the privileged role pg_monitor, which implies
+ * pg_read_all_settings. Until we fix that, let's just redact the content unless
+ * the user requesting the value is a superuser.
+ *
+ * See: https://databricks.atlassian.net/browse/LKB-7128
+ */
+const char *
+show_neon_storage_token(void)
+{
+	if (superuser())
+		return neon_storage_token;
+
+	return "**********";
 }
 
 /*

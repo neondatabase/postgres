@@ -136,7 +136,6 @@ libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
 /* BEGIN_NEON */
 	const char *keys[7];
 	const char *vals[7];
-	char * neon_auth_token = NULL;
 /* END_NEON */
 	int			i = 0;
 
@@ -157,18 +156,21 @@ libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
 	vals[i] = conninfo;
 
 /* BEGIN_NEON */
+	/*
+	 * We use neon_storage_token for the password because conninfo strings are
+	 * limited to MAXCONNINFO in length. Our tokens encode Unity Catalog
+	 * permissions, so they can be quite lengthy.
+	 */
 	if (pg_strcasecmp(appname, "walreceiver") == 0)
 	{
-		neon_auth_token = getenv("NEON_AUTH_TOKEN");
-		if (neon_auth_token != NULL)
+		if (neon_storage_token[0] != '\0')
 		{
-			elog(LOG, "Use NEON_AUTH_TOKEN to connect");
 			keys[++i] = "password";
-			vals[i] = neon_auth_token;
+			vals[i] = neon_storage_token;
 		}
 		else
 		{
-			elog(LOG, "NEON_AUTH_TOKEN is undefined in the environment");
+			elog(LOG, "no storage token set");
 		}
 	}
 /* END_NEON */
