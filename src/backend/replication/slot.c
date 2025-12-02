@@ -59,6 +59,10 @@
 #include "utils/guc_hooks.h"
 #include "utils/injection_point.h"
 #include "utils/varlena.h"
+#include "replication/logical_slots_store.h"
+
+/* NEON: Hook for storing logical slot state - implemented by neon extension */
+logical_slots_store_hook_type logical_slots_store_hook = NULL;
 
 /*
  * Replication slot on-disk data structure.
@@ -2449,6 +2453,12 @@ SaveSlotToPath(ReplicationSlot *slot, const char *dir, int elevel)
 	slot->last_saved_confirmed_flush = cp.slotdata.confirmed_flush;
 	slot->last_saved_restart_lsn = cp.slotdata.restart_lsn;
 	SpinLockRelease(&slot->mutex);
+
+	/*
+	 * NEON: Store to external storage while holding io_in_progress_lock.
+	 */
+	if (logical_slots_store_hook != NULL)
+		logical_slots_store_hook(dir, &cp.slotdata);
 
 	LWLockRelease(&slot->io_in_progress_lock);
 }
