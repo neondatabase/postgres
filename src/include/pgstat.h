@@ -505,6 +505,27 @@ typedef struct PgStat_BackendPending
 	PgStat_PendingIO pending_io;
 } PgStat_BackendPending;
 
+/* -------
+ * PgStat_WaitEvent		Wait events statistics
+ * -------
+ */
+typedef struct PgStat_WaitEvent
+{
+	TimestampTz stat_reset_timestamp;
+	PgStat_Counter counts;
+	PgStat_Counter total_time;
+} PgStat_WaitEvent;
+
+/* ---------
+ * PgStat_PendingWaitEvent	Non-flushed wait events stats.
+ * ---------
+ */
+typedef struct PgStat_PendingWaitEvent
+{
+	PgStat_Counter counts[NB_WAITCLASSTABLE_SIZE];
+	PgStat_Counter total_time[NB_WAITCLASSTABLE_SIZE];
+} PgStat_PendingWaitevent;
+
 /*
  * Functions in pgstat.c
  */
@@ -784,6 +805,10 @@ struct xl_xact_stats_item;
 extern int	pgstat_get_transactional_drops(bool isCommit, struct xl_xact_stats_item **items);
 extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_item *items, bool is_redo);
 
+/*
+ * Functions in pgstat_waitevent.c
+ */
+extern PgStat_WaitEvent *pgstat_fetch_stat_wait_event(uint32 wait_event_info);
 
 /*
  * Functions in pgstat_wal.c
@@ -792,6 +817,11 @@ extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_
 extern void pgstat_report_wal(bool force);
 extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 
+/*
+ * Functions in pgstatfuncs.c
+ */
+
+// extern Datum pg_stat_get_wait_event(PG_FUNCTION_ARGS);
 
 /*
  * Variables in pgstat.c

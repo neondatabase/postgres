@@ -133,6 +133,28 @@ FROM prevstats AS pr;
 COMMIT;
 
 ----
+-- Basic tests for wait events statistics
+---
+
+-- ensure there is no wait events missing in pg_stat_wait_event
+select count(1) > 0 from pg_stat_wait_event
+  where name not in (select name from pg_wait_events
+                     where type <> 'InjectionPoint' or type <> 'Extension')
+  and  type <> 'Extension';
+
+-- Test that reset_shared with wait_event specified as the stats type works
+SELECT count(1) AS counts_wait_event FROM pg_stat_wait_event WHERE counts > 0 \gset
+SELECT :counts_wait_event > 0;
+SELECT pg_stat_reset_shared('wait_event');
+SELECT count(1) < :counts_wait_event FROM pg_stat_wait_event WHERE counts > 0;
+
+-- Test wait event counters are incremented
+CREATE TABLE wait_event_stats_test(id serial);
+INSERT INTO wait_event_stats_test DEFAULT VALUES;
+SELECT pg_stat_force_next_flush();
+SELECT counts > 0 FROM pg_stat_wait_event WHERE name = 'WalWrite' and type = 'IO';
+
+----
 -- Basic tests for track_functions
 ---
 CREATE FUNCTION stats_test_func1() RETURNS VOID LANGUAGE plpgsql AS $$BEGIN END;$$;

@@ -1538,7 +1538,15 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
-
+	{
+		{"track_wait_event_timing", PGC_SUSET, STATS_CUMULATIVE,
+			gettext_noop("Collects timing statistics for wait events."),
+			NULL
+		},
+		&track_wait_event_timing,
+		true,
+		NULL, NULL, NULL
+	},
 	{
 		{"update_process_title", PGC_SUSET, PROCESS_TITLE,
 			gettext_noop("Updates the process title to show the active SQL command."),
@@ -2355,6 +2363,15 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&MaxConnections,
 		100, 1, MAX_BACKENDS,
+		NULL, NULL, NULL
+	},
+	{
+		{"track_wait_event_pid", PGC_SIGHUP, STATS_CUMULATIVE,
+			gettext_noop("Collects timing statistics for wait events for the specified process only."),
+			NULL
+		},
+		&track_wait_event_pid,
+		-1, -1, INT_MAX,
 		NULL, NULL, NULL
 	},
 

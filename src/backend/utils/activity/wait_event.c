@@ -39,9 +39,6 @@ static const char *pgstat_get_wait_io(WaitEventIO w);
 static uint32 local_my_wait_event_info;
 uint32	   *my_wait_event_info = &local_my_wait_event_info;
 
-#define WAIT_EVENT_CLASS_MASK	0xFF000000
-#define WAIT_EVENT_ID_MASK		0x0000FFFF
-
 /*
  * Hash tables for storing custom wait event ids and their names in
  * shared memory.
@@ -89,9 +86,6 @@ typedef struct WaitEventCustomCounterData
 
 /* pointer to the shared memory */
 static WaitEventCustomCounterData *WaitEventCustomCounter;
-
-/* first event ID of custom wait events */
-#define WAIT_EVENT_CUSTOM_INITIAL_ID	1
 
 static uint32 WaitEventCustomNew(uint32 classId, const char *wait_event_name);
 static const char *GetWaitEventCustomIdentifier(uint32 wait_event_info);

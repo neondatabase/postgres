@@ -114,7 +114,7 @@ parser/gram.h: parser/gram.y
 storage/lmgr/lwlocknames.h: storage/lmgr/generate-lwlocknames.pl ../include/storage/lwlocklist.h utils/activity/wait_event_names.txt
 	$(MAKE) -C storage/lmgr lwlocknames.h
 
-utils/activity/wait_event_types.h: utils/activity/generate-wait_event_types.pl utils/activity/wait_event_names.txt
+utils/activity/wait_event_types.h: utils/activity/generate-wait_event_types.pl utils/activity/wait_event_names.txt ../include/storage/lwlocklist.h ../include/utils/wait_classes.h
 	$(MAKE) -C utils/activity wait_event_types.h pgstat_wait_event.c wait_event_funcs_data.c
 
 # run this unconditionally to avoid needing to know its dependencies here:

@@ -10,8 +10,12 @@
 #ifndef WAIT_EVENT_H
 #define WAIT_EVENT_H
 
+#include "storage/lwlock.h"
+
 /* enums for wait events */
 #include "utils/wait_event_types.h"
+#include "portability/instr_time.h"
+#include "miscadmin.h"
 
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
@@ -19,9 +23,17 @@ static inline void pgstat_report_wait_start(uint32 wait_event_info);
 static inline void pgstat_report_wait_end(void);
 extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
+extern void waitEventIncrementCounter(uint32 wait_event_info, instr_time start_time);
+extern const char *get_wait_event_name_from_index(int index);
 
 extern PGDLLIMPORT uint32 *my_wait_event_info;
+extern PGDLLIMPORT bool have_wait_event_stats;
+extern PGDLLIMPORT instr_time pgstat_wait_start_time;
+extern PGDLLIMPORT bool track_wait_event_timing;
+extern PGDLLIMPORT int track_wait_event_pid;
 
+/* first event ID of custom wait events */
+#define WAIT_EVENT_CUSTOM_INITIAL_ID    1
 
 /*
  * Wait Events - Extension, InjectionPoint
@@ -73,6 +85,14 @@ pgstat_report_wait_start(uint32 wait_event_info)
 	 * four-bytes, updates are atomic.
 	 */
 	*(volatile uint32 *) my_wait_event_info = wait_event_info;
+
+	if (unlikely(track_wait_event_timing))
+	{
+		if (MyProcPid == track_wait_event_pid || track_wait_event_pid == -1)
+		{
+			INSTR_TIME_SET_CURRENT(pgstat_wait_start_time);
+		}
+	}
 }
 
 /* ----------
@@ -84,6 +104,12 @@ pgstat_report_wait_start(uint32 wait_event_info)
 static inline void
 pgstat_report_wait_end(void)
 {
+	if (MyProcPid == track_wait_event_pid || track_wait_event_pid == -1)
+	{
+		/* Increment the wait event counter */
+		waitEventIncrementCounter(*(volatile uint32 *) my_wait_event_info, pgstat_wait_start_time);
+	}
+
 	/* see pgstat_report_wait_start() */
 	*(volatile uint32 *) my_wait_event_info = 0;
 }

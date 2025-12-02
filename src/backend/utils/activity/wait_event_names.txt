@@ -430,3 +430,24 @@ advisory	"Waiting to acquire an advisory user lock."
 applytransaction	"Waiting to acquire a lock on a remote transaction being applied by a logical replication subscriber."
 
 # No "ABI_compatibility" region here as WaitEventLock has its own C code.
+
+#
+# Wait Events - Neon
+#
+# Use this category when a process is waiting on neon extension code.
+#
+
+Section: ClassName - WaitEventNeon
+
+NEON_LFC_MAINTENANCE	"LFC maintainance."
+NEON_LFC_READ	"LFC read."
+NEON_LFC_TRUNCATE	"LFC truncate."
+NEON_LFC_WRITE	"LFC write."
+NEON_LFC_CV_WAIT	"LFC CV wait."
+NEON_PS_STARTING	"PS starting."
+NEON_PS_CONFIGURING	"PS configuring."
+NEON_PS_SEND	"PS SEND."
+NEON_PS_READ	"PS READ."
+NEON_WAL_DL	"WAL DL."
+
+ABI_compatibility:

@@ -2,7 +2,9 @@
 
 wait_event_output = ['wait_event_types.h', 'pgstat_wait_event.c', 'wait_event_funcs_data.c']
 wait_event_target = custom_target('wait_event_names',
-  input: files('../../backend/utils/activity/wait_event_names.txt'),
+  input: files('../../backend/utils/activity/wait_event_names.txt',
+               '../../include/storage/lwlocklist.h',
+               '../../include/utils/wait_classes.h'),
   output: wait_event_output,
   command: [
     perl, files('../../backend/utils/activity/generate-wait_event_types.pl'),
