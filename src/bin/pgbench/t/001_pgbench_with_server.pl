@@ -7,6 +7,7 @@ use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
 use Test::More;
+use Time::HiRes qw(usleep);
 
 # Check the initial state of the data generated.  Tables for tellers and
 # branches use NULL for their filler attribute.  The table accounts uses
@@ -1649,6 +1650,99 @@ $node->pgbench(
 
 # Clean up
 $node->safe_psql('postgres', 'DROP TABLE counter;');
+
+# Test --init-batch-size retry on backend termination
+# This test verifies that pgbench can recover from connection drops during
+# initialization when using the --init-batch-size option.
+#
+# We run pgbench in a separate process and monitor its activity.
+# When we detect that pgbench is actively loading data (COPY for client-side,
+# INSERT for server-side), we terminate the backend to simulate a connection
+# failure. We then verify that pgbench retries and succeeds.
+
+for my $method ('client', 'server')
+{
+	# Use larger scale to ensure we have time to catch and kill the backend.
+	# Client-side COPY is faster than server-side INSERT, so we need a larger
+	# scale for client-side to reliably catch it.
+	# Scale 200 = 20 million rows for accounts table.
+	my $scale = ($method eq 'client') ? 200 : 100;
+	my $init_steps = ($method eq 'client') ? 'dtg' : 'dtG';
+	my $target_query = ($method eq 'client') ? 'copy' : 'insert';
+	my $expected_rows = $scale * 100000;
+
+	my $pgbench_timeout = IPC::Run::timer(600);
+	my ($pgbench_stdout, $pgbench_stderr) = ('', '');
+
+	# Start pgbench with --init-batch-size in the background
+	my @pgbench_cmd = (
+		'pgbench', '-i', '-I', $init_steps,
+		'-s', $scale, '--init-batch-size=5',
+		$node->connstr('postgres')
+	);
+
+	my $pgbench = IPC::Run::start(
+		\@pgbench_cmd,
+		'>', \$pgbench_stdout,
+		'2>', \$pgbench_stderr,
+		$pgbench_timeout
+	);
+
+	# Pump to ensure process starts
+	$pgbench->pump_nb();
+
+	# Wait until pgbench is running COPY/INSERT on pgbench_accounts, then kill it.
+	my $killed = 0;
+	my $deadline = time() + 120;
+
+	while (time() < $deadline && !$killed && $pgbench->pumpable())
+	{
+		$pgbench->pump_nb();
+
+		# Look for pgbench backend running data loading (COPY/INSERT) on pgbench_accounts
+		# We need to match the specific data loading query, not DROP/CREATE TABLE
+		my $result = $node->safe_psql('postgres', qq{
+			SELECT pid FROM pg_stat_activity
+			WHERE pid != pg_backend_pid()
+			AND datname = 'postgres'
+			AND query ILIKE '%${target_query}%pgbench_accounts%'
+		});
+
+		if ($result ne '')
+		{
+			# Found the backend running data loading, terminate it
+			my ($pid) = split(/\n/, $result);
+			$node->safe_psql('postgres', "SELECT pg_terminate_backend($pid)");
+			$killed = 1;
+		}
+
+		usleep(10_000) unless $killed;  # 10ms
+	}
+
+	# Wait for pgbench to finish
+	$pgbench->finish;
+	my $pgbench_exit = $pgbench->result(0);
+
+	# Check results
+	is($pgbench_exit, 0,
+		"pgbench --init-batch-size $method-side succeeded after backend termination");
+
+	if ($killed)
+	{
+		like($pgbench_stderr, qr/initialization batch failed|initialization errors:/,
+			"pgbench --init-batch-size $method-side logged retry message");
+	}
+	else
+	{
+		diag("Warning: did not find pgbench backend to kill for $method-side test");
+	}
+
+	# Verify data count
+	my $count = $node->safe_psql('postgres',
+		'SELECT count(*) FROM pgbench_accounts');
+	is($count, $expected_rows,
+		"pgbench --init-batch-size $method-side correct row count");
+}
 
 # done
 $node->safe_psql('postgres', 'DROP TABLESPACE regress_pgbench_tap_1_ts');
