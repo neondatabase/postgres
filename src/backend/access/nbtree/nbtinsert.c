@@ -1317,7 +1317,6 @@ _bt_insertonpg(Relation rel,
 			uint8		xlinfo;
 			XLogRecPtr	recptr;
 			uint16		upostingoff;
-			uint8		bufflags;
 
 			xlrec.offnum = newitemoff;
 
@@ -1340,12 +1339,9 @@ _bt_insertonpg(Relation rel,
 			}
 			else
 			{
-				/* Internal page insert, which finishes a split on cbuf */
-				xlinfo = XLOG_BTREE_INSERT_UPPER;
-				bufflags = REGBUF_STANDARD;
-				if (RelationGetReduceFPI(rel))
-					bufflags |= REGBUF_REDUCE_FPI;
-				XLogRegisterBuffer(1, cbuf, bufflags);
+			    /* Internal page insert, which finishes a split on cbuf */
+			    xlinfo = XLOG_BTREE_INSERT_UPPER;
+			    XLogRegisterBufferForRelation(1, cbuf, REGBUF_STANDARD, rel);
 
 				if (BufferIsValid(metabuf))
 				{
@@ -1359,22 +1355,18 @@ _bt_insertonpg(Relation rel,
 					xlmeta.fastroot = metad->btm_fastroot;
 					xlmeta.fastlevel = metad->btm_fastlevel;
 					xlmeta.last_cleanup_num_delpages = metad->btm_last_cleanup_num_delpages;
-					xlmeta.allequalimage = metad->btm_allequalimage;
+				    xlmeta.allequalimage = metad->btm_allequalimage;
 
-					bufflags = REGBUF_WILL_INIT | REGBUF_STANDARD;
-					if (RelationGetReduceFPI(rel))
-						bufflags |= REGBUF_REDUCE_FPI;
-					XLogRegisterBuffer(2, metabuf, bufflags);
+				    XLogRegisterBufferForRelation(2, metabuf,
+											   REGBUF_WILL_INIT | REGBUF_STANDARD,
+											   rel);
 					XLogRegisterBufData(2, (char *) &xlmeta,
 										sizeof(xl_btree_metadata));
 				}
-			}
+		}
 
-			bufflags = REGBUF_STANDARD;
-			if (RelationGetReduceFPI(rel))
-				bufflags |= REGBUF_REDUCE_FPI;
-			XLogRegisterBuffer(0, buf, bufflags);
-			if (postingoff == 0)
+		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		if (postingoff == 0)
 			{
 				/* Just log itup from caller */
 				XLogRegisterBufData(0, (char *) itup, IndexTupleSize(itup));
@@ -2025,13 +2017,13 @@ _bt_split(Relation rel, Relation heaprel, BTScanInsert itup_key, Buffer buf,
 			bufflags |= REGBUF_FORCE_IMAGE;
 		}
 
-		XLogRegisterBuffer(0, buf, bufflags);
-		XLogRegisterBuffer(1, rbuf, REGBUF_WILL_INIT);
+		XLogRegisterBufferForRelation(0, buf, bufflags, rel);
+		XLogRegisterBufferForRelation(1, rbuf, REGBUF_WILL_INIT, rel);
 		/* Log original right sibling, since we've changed its prev-pointer */
 		if (!isrightmost)
-			XLogRegisterBuffer(2, sbuf, REGBUF_STANDARD);
+			XLogRegisterBufferForRelation(2, sbuf, REGBUF_STANDARD, rel);
 		if (!isleaf)
-			XLogRegisterBuffer(3, cbuf, REGBUF_STANDARD);
+			XLogRegisterBufferForRelation(3, cbuf, REGBUF_STANDARD, rel);
 
 		/*
 		 * Log the new item, if it was inserted on the left page. (If it was
@@ -2610,9 +2602,9 @@ _bt_newlevel(Relation rel, Relation heaprel, Buffer lbuf, Buffer rbuf)
 		XLogBeginInsert();
 		XLogRegisterData((char *) &xlrec, SizeOfBtreeNewroot);
 
-		XLogRegisterBuffer(0, rootbuf, REGBUF_WILL_INIT);
-		XLogRegisterBuffer(1, lbuf, REGBUF_STANDARD);
-		XLogRegisterBuffer(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
+		XLogRegisterBufferForRelation(0, rootbuf, REGBUF_WILL_INIT, rel);
+		XLogRegisterBufferForRelation(1, lbuf, REGBUF_STANDARD, rel);
+		XLogRegisterBufferForRelation(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
 
 		Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 		md.version = metad->btm_version;

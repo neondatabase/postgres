@@ -16,6 +16,7 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/relfilelocator.h"
+#include "utils/rel.h"
 #include "utils/relcache.h"
 
 /*
@@ -45,16 +46,16 @@ extern int max_replication_apply_lag;
 extern int max_replication_flush_lag;
 extern int max_replication_write_lag;
 
-/* NEON: Hook to control Full Page Image (FPI) writes 
- * Returns true to DISABLE FPI, false to keep FPI enabled 
+/* NEON: Hook to determine if FPI should be suppressed for a WAL record
+ * Returns true to suppress FPI, false to allow FPI
  * Parameters:
  *   rmid - Resource manager ID (e.g., RM_HEAP_ID, RM_BTREE_ID)
  */
-typedef bool (*xlog_fpi_control_hook_type)(RmgrId rmid);
-extern PGDLLIMPORT xlog_fpi_control_hook_type xlog_fpi_control_hook;
+typedef bool (*xlog_should_suppress_fpi_hook_type)(RmgrId rmid);
+extern PGDLLIMPORT xlog_should_suppress_fpi_hook_type xlog_should_suppress_fpi_hook;
 
-/* NEON: Flag set per-record to force disable FPI (set by neon_should_disable_fpi hook) */
-extern bool force_disable_full_page_write;
+/* NEON: Flag set per-record to suppress FPI (set by xlog_should_suppress_fpi_hook) */
+extern bool suppress_fpi;
 
 /* prototypes for public functions in xloginsert.c: */
 extern void XLogBeginInsert(void);
@@ -80,5 +81,22 @@ extern void log_newpage_range(Relation rel, ForkNumber forknum,
 extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void InitXLogInsert(void);
+
+/*
+ * XLogRegisterBufferForRelation
+ *		Convenience wrapper for XLogRegisterBuffer that automatically sets
+ *		REGBUF_REDUCE_FPI based on the relation's reduce_fpi setting.
+ *
+ * This helper simplifies the code by eliminating the need to manually 
+ * check RelationGetReduceFPI() at every call site.
+ */
+static inline void
+XLogRegisterBufferForRelation(uint8 block_id, Buffer buffer, uint8 flags,
+							   Relation rel)
+{
+	if (RelationGetReduceFPI(rel))
+		flags |= REGBUF_REDUCE_FPI;
+	XLogRegisterBuffer(block_id, buffer, flags);
+}
 
 #endif							/* XLOGINSERT_H */
