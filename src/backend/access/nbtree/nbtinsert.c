@@ -1337,13 +1337,13 @@ _bt_insertonpg(Relation rel,
 				Assert(isleaf);
 				xlinfo = XLOG_BTREE_INSERT_POST;
 			}
-			else
-			{
-			    /* Internal page insert, which finishes a split on cbuf */
-			    xlinfo = XLOG_BTREE_INSERT_UPPER;
-			    XLogRegisterBufferForRelation(1, cbuf, REGBUF_STANDARD, rel);
+		else
+		{
+			/* Internal page insert, which finishes a split on cbuf */
+			xlinfo = XLOG_BTREE_INSERT_UPPER;
+			XLogRegisterBufferForRelation(1, cbuf, REGBUF_STANDARD, rel);
 
-				if (BufferIsValid(metabuf))
+			if (BufferIsValid(metabuf))
 				{
 					/* Actually, it's an internal page insert + meta update */
 					xlinfo = XLOG_BTREE_INSERT_META;
@@ -1355,9 +1355,9 @@ _bt_insertonpg(Relation rel,
 					xlmeta.fastroot = metad->btm_fastroot;
 					xlmeta.fastlevel = metad->btm_fastlevel;
 					xlmeta.last_cleanup_num_delpages = metad->btm_last_cleanup_num_delpages;
-				    xlmeta.allequalimage = metad->btm_allequalimage;
+					xlmeta.allequalimage = metad->btm_allequalimage;
 
-				    XLogRegisterBufferForRelation(2, metabuf,
+					XLogRegisterBufferForRelation(2, metabuf,
 											   REGBUF_WILL_INIT | REGBUF_STANDARD,
 											   rel);
 					XLogRegisterBufData(2, (char *) &xlmeta,

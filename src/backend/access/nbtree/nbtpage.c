@@ -475,11 +475,11 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 			XLogRecPtr	recptr;
 			xl_btree_metadata md;
 
-		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, rootbuf, REGBUF_WILL_INIT, rel);
-		XLogRegisterBufferForRelation(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
+			XLogBeginInsert();
+			XLogRegisterBufferForRelation(0, rootbuf, REGBUF_WILL_INIT, rel);
+			XLogRegisterBufferForRelation(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
 
-		Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
+			Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 			md.version = metad->btm_version;
 			md.root = rootblkno;
 			md.level = 0;
@@ -1230,11 +1230,11 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 		xl_btree_vacuum xlrec_vacuum;
 
 		xlrec_vacuum.ndeleted = ndeletable;
-	xlrec_vacuum.nupdated = nupdatable;
+		xlrec_vacuum.nupdated = nupdatable;
 
-	XLogBeginInsert();
-	XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
-	XLogRegisterData((char *) &xlrec_vacuum, SizeOfBtreeVacuum);
+		XLogBeginInsert();
+		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		XLogRegisterData((char *) &xlrec_vacuum, SizeOfBtreeVacuum);
 
 		if (ndeletable > 0)
 			XLogRegisterBufData(0, (char *) deletable,
@@ -1349,11 +1349,11 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 		xlrec_delete.snapshotConflictHorizon = snapshotConflictHorizon;
 		xlrec_delete.ndeleted = ndeletable;
 		xlrec_delete.nupdated = nupdatable;
-	    xlrec_delete.isCatalogRel = isCatalogRel;
+		xlrec_delete.isCatalogRel = isCatalogRel;
 
-	    XLogBeginInsert();
-    	XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
-    	XLogRegisterData((char *) &xlrec_delete, SizeOfBtreeDelete);
+		XLogBeginInsert();
+		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		XLogRegisterData((char *) &xlrec_delete, SizeOfBtreeDelete);
 
 		if (ndeletable > 0)
 			XLogRegisterBufData(0, (char *) deletable,
@@ -2258,13 +2258,13 @@ _bt_mark_page_halfdead(Relation rel, Relation heaprel, Buffer leafbuf,
 		if (topparent != leafblkno)
 			xlrec.topparent = topparent;
 		else
-		xlrec.topparent = InvalidBlockNumber;
+			xlrec.topparent = InvalidBlockNumber;
 
-	    XLogBeginInsert();
-	    XLogRegisterBufferForRelation(0, leafbuf, REGBUF_WILL_INIT, rel);
-	    XLogRegisterBufferForRelation(1, subtreeparent, REGBUF_STANDARD, rel);
+		XLogBeginInsert();
+		XLogRegisterBufferForRelation(0, leafbuf, REGBUF_WILL_INIT, rel);
+		XLogRegisterBufferForRelation(1, subtreeparent, REGBUF_STANDARD, rel);
 
-	    page = BufferGetPage(leafbuf);
+		page = BufferGetPage(leafbuf);
 		opaque = BTPageGetOpaque(page);
 		xlrec.leftblk = opaque->btpo_prev;
 		xlrec.rightblk = opaque->btpo_next;
@@ -2674,17 +2674,17 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 		uint8		xlinfo;
 		XLogRecPtr	recptr;
 
-	    XLogBeginInsert();
+		XLogBeginInsert();
 
-	    XLogRegisterBufferForRelation(0, buf, REGBUF_WILL_INIT, rel);
-	    if (BufferIsValid(lbuf))
-	    	XLogRegisterBufferForRelation(1, lbuf, REGBUF_STANDARD, rel);
-	    XLogRegisterBufferForRelation(2, rbuf, REGBUF_STANDARD, rel);
-	    if (target != leafblkno)
-	    	XLogRegisterBufferForRelation(3, leafbuf, REGBUF_WILL_INIT, rel);
+		XLogRegisterBufferForRelation(0, buf, REGBUF_WILL_INIT, rel);
+		if (BufferIsValid(lbuf))
+			XLogRegisterBufferForRelation(1, lbuf, REGBUF_STANDARD, rel);
+		XLogRegisterBufferForRelation(2, rbuf, REGBUF_STANDARD, rel);
+		if (target != leafblkno)
+			XLogRegisterBufferForRelation(3, leafbuf, REGBUF_WILL_INIT, rel);
 
-	    /* information stored on the target/to-be-unlinked block */
-	    xlrec.leftsib = leftsib;
+		/* information stored on the target/to-be-unlinked block */
+		xlrec.leftsib = leftsib;
 		xlrec.rightsib = rightsib;
 		xlrec.level = targetlevel;
 		xlrec.safexid = safexid;
@@ -2696,11 +2696,11 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 
 		XLogRegisterData((char *) &xlrec, SizeOfBtreeUnlinkPage);
 
-	    if (BufferIsValid(metabuf))
-	    {
-		    XLogRegisterBufferForRelation(4, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
+		if (BufferIsValid(metabuf))
+		{
+			XLogRegisterBuffer(4, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
-		    Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
+			Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 			xlmeta.version = metad->btm_version;
 			xlmeta.root = metad->btm_root;
 			xlmeta.level = metad->btm_level;
