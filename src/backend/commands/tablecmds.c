@@ -612,7 +612,6 @@ static void ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel,
 								const char *tablespacename, LOCKMODE lockmode);
 static void ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode);
 static void ATExecSetTableSpaceNoStorage(Relation rel, Oid newTableSpace);
-static void InvalidateReduceFPIChildren(Relation rel);
 static void ATExecSetRelOptions(Relation rel, List *defList,
 								AlterTableType operation,
 								LOCKMODE lockmode);
@@ -15044,51 +15043,6 @@ ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, const char *tablespacen
 }
 
 /*
- * InvalidateReduceFPIChildren
- *
- * When reduce_fpi changes on a heap table, invalidate relcache entries for
- * all child relations (indexes and toast tables) so they re-derive the new
- * value from the parent.
- */
-static void
-InvalidateReduceFPIChildren(Relation rel)
-{
-	List	   *indexoidlist;
-	ListCell   *indexoidscan;
-
-	/* Invalidate all indexes on this relation */
-	indexoidlist = RelationGetIndexList(rel);
-	foreach(indexoidscan, indexoidlist)
-	{
-		Oid	indexoid = lfirst_oid(indexoidscan);
-
-		CacheInvalidateRelcacheByRelid(indexoid);
-	}
-	list_free(indexoidlist);
-
-	/* Invalidate toast table and its indexes */
-	if (OidIsValid(rel->rd_rel->reltoastrelid))
-	{
-		Oid	toastrelid = rel->rd_rel->reltoastrelid;
-		Relation toastrel;
-
-		CacheInvalidateRelcacheByRelid(toastrelid);
-
-		/* Also invalidate toast table's indexes */
-		toastrel = table_open(toastrelid, AccessShareLock);
-		indexoidlist = RelationGetIndexList(toastrel);
-		foreach(indexoidscan, indexoidlist)
-		{
-			Oid			indexoid = lfirst_oid(indexoidscan);
-
-			CacheInvalidateRelcacheByRelid(indexoid);
-		}
-		list_free(indexoidlist);
-		table_close(toastrel, AccessShareLock);
-	}
-}
-
-/*
  * Set, reset, or replace reloptions.
  */
 static void
@@ -15225,36 +15179,6 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	heap_freetuple(newtuple);
 
 	ReleaseSysCache(tuple);
-
-	/*
-	 * If this is a heap relation and reduce_fpi was changed, invalidate
-	 * relcache for all indexes and toast relations so they pick up the new
-	 * value in their rd_reduce_fpi field.
-	 */
-	/*
-	 * For regular tables, if reduce_fpi changed, we need to invalidate
-	 * child relations (indexes and toast) so they re-derive the new value.
-	 */
-	if (rel->rd_rel->relkind == RELKIND_RELATION)
-	{
-		ListCell   *cell;
-		bool		reduce_fpi_changed = false;
-
-		/* Check if reduce_fpi was in the ALTER statement */
-		foreach(cell, defList)
-		{
-			DefElem    *defel = (DefElem *) lfirst(cell);
-
-			if (strcmp(defel->defname, "reduce_fpi") == 0)
-			{
-				reduce_fpi_changed = true;
-				break;
-			}
-		}
-
-		if (reduce_fpi_changed)
-			InvalidateReduceFPIChildren(rel);
-	}
 
 	/* repeat the whole exercise for the toast table, if there's one */
 	if (OidIsValid(rel->rd_rel->reltoastrelid))

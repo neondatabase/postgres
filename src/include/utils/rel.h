@@ -175,14 +175,6 @@ typedef struct RelationData
 	bytea	   *rd_options;		/* parsed pg_class.reloptions */
 
 	/*
-	 * rd_reduce_fpi: derived flag for reduced full-page-image WAL logging.
-	 * For regular tables (RELKIND_RELATION): comes from StdRdOptions.reduce_fpi reloption.
-	 * For index: derived from parent table's rd_reduce_fpi.
-	 * For toast: derived from parent table's rd_reduce_fpi.
-	 */
-	bool		rd_reduce_fpi;	/* enable reduced FPI for this relation */
-
-	/*
 	 * Oid of the handler for this relation. For an index this is a function
 	 * returning IndexAmRoutine, for table like relations a function returning
 	 * TableAmRoutine.  This is stored separately from rd_indam, rd_tableam as
@@ -351,7 +343,6 @@ typedef struct StdRdOptions
 	int			parallel_workers;	/* max number of parallel workers */
 	StdRdOptIndexCleanup vacuum_index_cleanup;	/* controls index vacuuming */
 	bool		vacuum_truncate;	/* enables vacuum to truncate a relation */
-	bool		reduce_fpi;		/* reduce full page images in WAL */
 } StdRdOptions;
 
 #define HEAP_MIN_FILLFACTOR			10
@@ -406,14 +397,6 @@ typedef struct StdRdOptions
 #define RelationGetParallelWorkers(relation, defaultpw) \
 	((relation)->rd_options ? \
 	 ((StdRdOptions *) (relation)->rd_options)->parallel_workers : (defaultpw))
-
-/*
- * RelationGetReduceFPI
- *		Returns whether the relation has reduce_fpi enabled.
- *		For heap: comes from reloption.
- *		For index/toast: derived from parent heap.
- */
-#define RelationGetReduceFPI(relation) ((relation)->rd_reduce_fpi)
 
 /* ViewOptions->check_option values */
 typedef enum ViewOptCheckOption

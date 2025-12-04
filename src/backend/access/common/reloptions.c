@@ -166,15 +166,6 @@ static relopt_bool boolRelOpts[] =
 		},
 		true
 	},
-	{
-		{
-			"reduce_fpi",
-			"Reduces full page images in WAL for this table",
-			RELOPT_KIND_HEAP,		/* regular tables only - indexes/toast derive from parent */
-			ShareUpdateExclusiveLock	/* applies only to subsequent WAL writes, like fillfactor */
-		},
-		false
-	},
 	/* list terminator */
 	{{NULL}}
 };
@@ -1898,9 +1889,7 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, vacuum_truncate)},
-		{"reduce_fpi", RELOPT_TYPE_BOOL,
-		offsetof(StdRdOptions, reduce_fpi)}
+		offsetof(StdRdOptions, vacuum_truncate)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate, kind,

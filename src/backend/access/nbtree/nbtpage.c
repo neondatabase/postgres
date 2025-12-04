@@ -288,7 +288,7 @@ _bt_set_cleanup_info(Relation rel, BlockNumber num_delpages)
 		XLogRecPtr	recptr;
 
 		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
+		XLogRegisterBuffer(0, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
 		Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 		md.version = metad->btm_version;
@@ -476,8 +476,8 @@ _bt_getroot(Relation rel, Relation heaprel, int access)
 			xl_btree_metadata md;
 
 			XLogBeginInsert();
-			XLogRegisterBufferForRelation(0, rootbuf, REGBUF_WILL_INIT, rel);
-			XLogRegisterBufferForRelation(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD, rel);
+			XLogRegisterBuffer(0, rootbuf, REGBUF_WILL_INIT);
+			XLogRegisterBuffer(2, metabuf, REGBUF_WILL_INIT | REGBUF_STANDARD);
 
 			Assert(metad->btm_version >= BTREE_NOVAC_VERSION);
 			md.version = metad->btm_version;
@@ -1233,7 +1233,7 @@ _bt_delitems_vacuum(Relation rel, Buffer buf,
 		xlrec_vacuum.nupdated = nupdatable;
 
 		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
 		XLogRegisterData((char *) &xlrec_vacuum, SizeOfBtreeVacuum);
 
 		if (ndeletable > 0)
@@ -1352,7 +1352,7 @@ _bt_delitems_delete(Relation rel, Buffer buf,
 		xlrec_delete.isCatalogRel = isCatalogRel;
 
 		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
 		XLogRegisterData((char *) &xlrec_delete, SizeOfBtreeDelete);
 
 		if (ndeletable > 0)
@@ -2261,8 +2261,8 @@ _bt_mark_page_halfdead(Relation rel, Relation heaprel, Buffer leafbuf,
 			xlrec.topparent = InvalidBlockNumber;
 
 		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, leafbuf, REGBUF_WILL_INIT, rel);
-		XLogRegisterBufferForRelation(1, subtreeparent, REGBUF_STANDARD, rel);
+		XLogRegisterBuffer(0, leafbuf, REGBUF_WILL_INIT);
+		XLogRegisterBuffer(1, subtreeparent, REGBUF_STANDARD);
 
 		page = BufferGetPage(leafbuf);
 		opaque = BTPageGetOpaque(page);
@@ -2676,12 +2676,12 @@ _bt_unlink_halfdead_page(Relation rel, Buffer leafbuf, BlockNumber scanblkno,
 
 		XLogBeginInsert();
 
-		XLogRegisterBufferForRelation(0, buf, REGBUF_WILL_INIT, rel);
+		XLogRegisterBuffer(0, buf, REGBUF_WILL_INIT);
 		if (BufferIsValid(lbuf))
-			XLogRegisterBufferForRelation(1, lbuf, REGBUF_STANDARD, rel);
-		XLogRegisterBufferForRelation(2, rbuf, REGBUF_STANDARD, rel);
+			XLogRegisterBuffer(1, lbuf, REGBUF_STANDARD);
+		XLogRegisterBuffer(2, rbuf, REGBUF_STANDARD);
 		if (target != leafblkno)
-			XLogRegisterBufferForRelation(3, leafbuf, REGBUF_WILL_INIT, rel);
+			XLogRegisterBuffer(3, leafbuf, REGBUF_WILL_INIT);
 
 		/* information stored on the target/to-be-unlinked block */
 		xlrec.leftsib = leftsib;

@@ -16,7 +16,6 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/relfilelocator.h"
-#include "utils/rel.h"
 #include "utils/relcache.h"
 
 /*
@@ -39,8 +38,6 @@
 #define REGBUF_KEEP_DATA	0x10	/* include data even if a full-page image
 									 * is taken */
 #define REGBUF_NO_CHANGE	0x20	/* intentionally register clean buffer */
-#define REGBUF_REDUCE_FPI	0x40	/* relation has reduce_fpi enabled, suppress
-									 * full page images when possible */
 
 extern int max_replication_apply_lag;
 extern int max_replication_flush_lag;
@@ -81,22 +78,5 @@ extern void log_newpage_range(Relation rel, ForkNumber forknum,
 extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void InitXLogInsert(void);
-
-/*
- * XLogRegisterBufferForRelation
- *		Convenience wrapper for XLogRegisterBuffer that automatically sets
- *		REGBUF_REDUCE_FPI based on the relation's reduce_fpi setting.
- *
- * This helper simplifies the code by eliminating the need to manually 
- * check RelationGetReduceFPI() at every call site.
- */
-static inline void
-XLogRegisterBufferForRelation(uint8 block_id, Buffer buffer, uint8 flags,
-							   Relation rel)
-{
-	if (RelationGetReduceFPI(rel))
-		flags |= REGBUF_REDUCE_FPI;
-	XLogRegisterBuffer(block_id, buffer, flags);
-}
 
 #endif							/* XLOGINSERT_H */

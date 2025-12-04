@@ -645,7 +645,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			 */
 			XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
 
-			if (suppress_fpi && (regbuf->flags & REGBUF_REDUCE_FPI))
+			if (suppress_fpi)
 				needs_backup = false;
 			else
 				needs_backup = (page_lsn <= RedoRecPtr);

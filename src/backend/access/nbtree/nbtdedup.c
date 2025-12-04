@@ -251,7 +251,7 @@ _bt_dedup_pass(Relation rel, Buffer buf, IndexTuple newitem, Size newitemsz,
 		xlrec_dedup.nintervals = state->nintervals;
 
 		XLogBeginInsert();
-		XLogRegisterBufferForRelation(0, buf, REGBUF_STANDARD, rel);
+		XLogRegisterBuffer(0, buf, REGBUF_STANDARD);
 		XLogRegisterData((char *) &xlrec_dedup, SizeOfBtreeDedup);
 
 		/*

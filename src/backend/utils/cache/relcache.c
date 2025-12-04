@@ -512,112 +512,6 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 }
 
 /*
- * RelationInitReduceFPI
- *		Initialize rd_reduce_fpi flag for a relation
- *
- * For heap: reads from StdRdOptions.reduce_fpi reloption.
- * For index: derives from parent heap's rd_reduce_fpi.
- * For toast: derives from parent heap's rd_reduce_fpi.
- *
- * Must be called after rd_rel, rd_index, and rd_options are set.
- */
-static void
-RelationInitReduceFPI(Relation relation)
-{
-	relation->rd_reduce_fpi = false;
-
-	switch (relation->rd_rel->relkind)
-	{
-		case RELKIND_RELATION:
-		{
-			if (relation->rd_options)
-			{
-				StdRdOptions *opts = (StdRdOptions *) relation->rd_options;
-				relation->rd_reduce_fpi = opts->reduce_fpi;
-			}
-			break;
-		}
-
-		case RELKIND_INDEX:
-		{
-			/*
-			 * Index: derive from parent relation.
-			 *
-			 * This handles both:
-			 * 1. Main table's indexes: index->indrelid points to table,
-			 *    which already has rd_reduce_fpi set from its reloption.
-			 * 2. Toast table's indexes: index->indrelid points to toast table,
-			 *    which already has rd_reduce_fpi derived from its parent table
-			 *    (see RELKIND_TOASTVALUE case below).
-			 *
-			 * Safety: RelationIdGetRelation() will build the parent's relcache
-			 * entry if it doesn't exist yet (calling RelationBuildDesc() which
-			 * includes RelationInitReduceFPI()). Otherwise it returns the
-			 * already-built entry. Either way, by the time we read
-			 * parent->rd_reduce_fpi, it's guaranteed to be initialized.
-			 * Worst case: we read false (the safe default).
-			 */
-			if (relation->rd_index && OidIsValid(relation->rd_index->indrelid))
-			{
-				Relation parent = RelationIdGetRelation(relation->rd_index->indrelid);
-
-				if (RelationIsValid(parent))
-				{
-					relation->rd_reduce_fpi = parent->rd_reduce_fpi;
-					RelationClose(parent);
-				}
-			}
-			break;
-		}
-
-		case RELKIND_TOASTVALUE:
-		{
-			/*
-			 * Toast table: find parent heap via pg_class.reltoastrelid.
-			 * We search for the heap relation that has this toast table as its
-			 * reltoastrelid.
-			 */
-			Relation	pg_class;
-			SysScanDesc scan;
-			HeapTuple	tuple;
-			ScanKeyData key[1];
-
-			pg_class = table_open(RelationRelationId, AccessShareLock);
-
-			/* Scan for heap relation with this toast OID */
-			ScanKeyInit(&key[0],
-						Anum_pg_class_reltoastrelid,
-						BTEqualStrategyNumber, F_OIDEQ,
-						ObjectIdGetDatum(RelationGetRelid(relation)));
-
-			scan = systable_beginscan(pg_class, InvalidOid, false,
-									  NULL, 1, key);
-
-			tuple = systable_getnext(scan);
-			if (HeapTupleIsValid(tuple))
-			{
-				Form_pg_class classtup = (Form_pg_class) GETSTRUCT(tuple);
-				Relation	parent = RelationIdGetRelation(classtup->oid);
-
-				if (RelationIsValid(parent))
-				{
-					relation->rd_reduce_fpi = parent->rd_reduce_fpi;
-					RelationClose(parent);
-				}
-			}
-
-			systable_endscan(scan);
-			table_close(pg_class, AccessShareLock);
-			break;
-		}
-
-		default:
-			/* Other relkinds don't use reduce_fpi */
-			break;
-	}
-}
-
-/*
  *		RelationBuildTupleDesc
  *
  *		Form the relation's tuple descriptor from information in
@@ -1327,9 +1221,6 @@ retry:
 
 	/* extract reloptions if any */
 	RelationParseRelOptions(relation, pg_class_tuple);
-
-	/* initialize reduce_fpi flag */
-	RelationInitReduceFPI(relation);
 
 	/*
 	 * Fetch rules and triggers that affect this relation.
