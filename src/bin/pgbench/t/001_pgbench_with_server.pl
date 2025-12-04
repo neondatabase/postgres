@@ -1557,6 +1557,45 @@ $node->pgbench(
 		'001_copy' => q{ COPY pgbench_accounts FROM stdin }
 	});
 
+# Test --percentile output
+$node->pgbench(
+	'-n -t 100 -c 2 --percentile -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 90 = \d+\.\d+ ms},
+		qr{latency percentile 99 = \d+\.\d+ ms},
+		qr{latency percentile 99\.9 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench percentile output');
+
+# Test --percentile with multiple threads
+$node->pgbench(
+	'-n -t 50 -c 4 -j 2 --percentile -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 90 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench percentile with threads');
+
+# Test --percentile with per-script stats (multiple scripts)
+$node->pgbench(
+	'-n -t 50 -c 2 --percentile -b select-only@2 -b simple-update@1',
+	0,
+	[
+		qr{processed: 100/100},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{SQL script 1:.*\n.*- latency percentile 50 = \d+\.\d+ ms}s,
+		qr{SQL script 2:.*\n.*- latency percentile 50 = \d+\.\d+ ms}s
+	],
+	[qr{^$}],
+	'pgbench percentile with per-script stats');
+
 # done
 $node->safe_psql('postgres', 'DROP TABLESPACE regress_pgbench_tap_1_ts');
 $node->stop;
