@@ -540,9 +540,9 @@ XLogInsert(RmgrId rmid, uint8 info)
 		 */
 		suppress_fpi = false;
 		if (xlog_should_suppress_fpi_hook != NULL) {
-			suppress_fpi = xlog_should_suppress_fpi_hook(rmid);
-			elog(DEBUG1, "FPI suppress hook called: rmid=%u, suppress_fpi=%d, doPageWrites=%d",
-				rmid, suppress_fpi, doPageWrites);
+			suppress_fpi = xlog_should_suppress_fpi_hook();
+			elog(DEBUG1, "FPI suppress hook called: suppress_fpi=%d, doPageWrites=%d",
+				suppress_fpi, doPageWrites);
 		}
 
 		rdt = XLogRecordAssemble(rmid, info, RedoRecPtr, doPageWrites,

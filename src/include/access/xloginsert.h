@@ -45,10 +45,9 @@ extern int max_replication_write_lag;
 
 /* NEON: Hook to determine if FPI should be suppressed for a WAL record
  * Returns true to suppress FPI, false to allow FPI
- * Parameters:
- *   rmid - Resource manager ID (e.g., RM_HEAP_ID, RM_BTREE_ID)
+ * Applies to all resource managers for checkpoint-based FPI triggers.
  */
-typedef bool (*xlog_should_suppress_fpi_hook_type)(RmgrId rmid);
+typedef bool (*xlog_should_suppress_fpi_hook_type)(void);
 extern PGDLLIMPORT xlog_should_suppress_fpi_hook_type xlog_should_suppress_fpi_hook;
 
 /* NEON: Flag set per-record to suppress FPI (set by xlog_should_suppress_fpi_hook) */
