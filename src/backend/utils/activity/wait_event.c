@@ -43,6 +43,9 @@ uint32	   *my_wait_event_info = &local_my_wait_event_info;
 #define WAIT_EVENT_CLASS_MASK	0xFF000000
 #define WAIT_EVENT_ID_MASK		0x0000FFFF
 
+pgstat_report_wait_start_hook_type pgstat_report_wait_start_hook = NULL;
+pgstat_report_wait_end_hook_type pgstat_report_wait_end_hook = NULL;
+
 /*
  * Hash tables for storing custom wait event ids and their names in
  * shared memory.
