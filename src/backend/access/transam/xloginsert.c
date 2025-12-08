@@ -621,7 +621,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			needs_backup = true;
 		else if (regbuf->flags & REGBUF_NO_IMAGE)
 			needs_backup = false;
-		else if (!doPageWrites)
+		else if (!doPageWrites || suppress_fpi)
 			needs_backup = false;
 		else
 		{
@@ -632,10 +632,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			 */
 			XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
 
-			if (suppress_fpi)
-				needs_backup = false;
-			else
-				needs_backup = (page_lsn <= RedoRecPtr);
+			needs_backup = (page_lsn <= RedoRecPtr);
 
 			if (!needs_backup)
 			{
