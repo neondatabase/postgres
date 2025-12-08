@@ -834,6 +834,10 @@ XLogInsertRecord(XLogRecData *rdata,
 	 * but not force a recomputation.  (If doPageWrites was just turned off,
 	 * we could recompute the record without full pages, but we choose not to
 	 * bother.)
+	 *
+	 * However, if suppress_fpi is true, we skip the recomputation check
+	 * since we're deliberately suppressing full page images for this
+	 * record via the FPI control hook.
 	 */
 	if (RedoRecPtr != Insert->RedoRecPtr)
 	{
@@ -844,7 +848,8 @@ XLogInsertRecord(XLogRecData *rdata,
 
 	if (doPageWrites &&
 		(!prevDoPageWrites ||
-		 (fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
+		 (!suppress_fpi &&
+		  fpw_lsn != InvalidXLogRecPtr && fpw_lsn <= RedoRecPtr)))
 	{
 		/*
 		 * Oops, some buffer now needs to be backed up that the caller didn't

@@ -94,6 +94,12 @@ int			max_replication_apply_lag;
 int			max_replication_flush_lag;
 int			max_replication_write_lag;
 
+/* NEON: Hook to determine if FPI should be suppressed for a WAL record */
+xlog_should_suppress_fpi_hook_type xlog_should_suppress_fpi_hook = NULL;
+
+/* NEON: Global flag to suppress FPI for current WAL record */
+bool suppress_fpi = false;
+
 static registered_buffer *registered_buffers;
 static int	max_registered_buffers; /* allocated size */
 static int	max_registered_block_id = 0;	/* highest block_id + 1 currently
@@ -498,6 +504,16 @@ XLogInsert(RmgrId rmid, uint8 info)
 		 */
 		GetFullPageWriteInfo(&RedoRecPtr, &doPageWrites);
 
+		/*
+		 * NEON: Check if we should suppress FPI for this WAL record.
+		 */
+		suppress_fpi = false;
+		if (xlog_should_suppress_fpi_hook != NULL) {
+			suppress_fpi = xlog_should_suppress_fpi_hook();
+			elog(DEBUG1, "FPI suppress hook called: suppress_fpi=%d, doPageWrites=%d",
+				suppress_fpi, doPageWrites);
+		}
+
 		rdt = XLogRecordAssemble(rmid, info, RedoRecPtr, doPageWrites,
 								 &fpw_lsn, &num_fpi, &topxid_included);
 
@@ -587,7 +603,7 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			needs_backup = true;
 		else if (regbuf->flags & REGBUF_NO_IMAGE)
 			needs_backup = false;
-		else if (!doPageWrites)
+		else if (!doPageWrites || suppress_fpi)
 			needs_backup = false;
 		else
 		{
@@ -599,8 +615,13 @@ XLogRecordAssemble(RmgrId rmid, uint8 info,
 			XLogRecPtr	page_lsn = PageGetLSN(regbuf->page);
 
 			needs_backup = (page_lsn <= RedoRecPtr);
+
 			if (!needs_backup)
 			{
+				/*
+				 * Set fpw_lsn to signal that this record should be
+				 * recomputed if doPageWrites changes.
+				 */
 				if (*fpw_lsn == InvalidXLogRecPtr || page_lsn < *fpw_lsn)
 					*fpw_lsn = page_lsn;
 			}
