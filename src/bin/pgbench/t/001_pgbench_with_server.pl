@@ -1651,6 +1651,162 @@ $node->pgbench(
 # Clean up
 $node->safe_psql('postgres', 'DROP TABLE counter;');
 
+# Test --percentile output
+$node->pgbench(
+	'-n -t 100 -c 2 --percentile -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 90 = \d+\.\d+ ms},
+		qr{latency percentile 99 = \d+\.\d+ ms},
+		qr{latency percentile 99\.9 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench percentile output');
+
+# Test --percentile with multiple threads
+$node->pgbench(
+	'-n -t 50 -c 4 -j 2 --percentile -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 90 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench percentile with threads');
+
+# Test --percentile with per-script stats (multiple scripts)
+$node->pgbench(
+	'-n -t 50 -c 2 --percentile -b select-only@2 -b simple-update@1',
+	0,
+	[
+		qr{processed: 100/100},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{SQL script 1:.*\n.*- latency percentile 50 = \d+\.\d+ ms}s,
+		qr{SQL script 2:.*\n.*- latency percentile 50 = \d+\.\d+ ms}s
+	],
+	[qr{^$}],
+	'pgbench percentile with per-script stats');
+
+# Test --percentile with custom percentile list
+$node->pgbench(
+	'-n -t 100 -c 2 --percentile=25,75,95 -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 25 = \d+\.\d+ ms},
+		qr{latency percentile 75 = \d+\.\d+ ms},
+		qr{latency percentile 95 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench custom percentile list');
+
+# Test --percentile with fractional custom percentiles
+$node->pgbench(
+	'-n -t 100 -c 2 --percentile=50,99.5,99.95 -b select-only',
+	0,
+	[
+		qr{processed: 200/200},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 99\.5 = \d+\.\d+ ms},
+		qr{latency percentile 99\.95 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench custom fractional percentiles');
+
+# Test --percentile with invalid percentile value (out of range)
+$node->pgbench(
+	'-n -t 10 -c 1 --percentile=50,101 -b select-only',
+	1,
+	[qr{^$}],
+	[qr{percentile must be between 0 and 100}],
+	'pgbench invalid percentile value out of range');
+
+# Test --percentile with edge values 0 and 100
+$node->pgbench(
+	'-n -t 10 -c 1 --percentile=0,100 -b select-only',
+	0,
+	[
+		qr{latency percentile 0 = \d+\.\d+ ms},
+		qr{latency percentile 100 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench percentile edge values 0 and 100');
+
+# Test --percentile with invalid percentile value (non-numeric)
+$node->pgbench(
+	'-n -t 10 -c 1 --percentile=50,abc -b select-only',
+	1,
+	[qr{^$}],
+	[qr{invalid percentile value}],
+	'pgbench invalid percentile value non-numeric');
+
+# Test --percentile with -r (per-command percentiles)
+$node->pgbench(
+	'-n -t 50 -c 2 --percentile -r -b select-only',
+	0,
+	[
+		qr{processed: 100/100},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{statement latencies in milliseconds},
+		qr{p50: \d+\.\d+, p90: \d+\.\d+, p99: \d+\.\d+}
+	],
+	[qr{^$}],
+	'pgbench per-command percentiles');
+
+# Test --percentile with custom list and -r
+$node->pgbench(
+	'-n -t 50 -c 2 --percentile=25,50,75 -r -b select-only',
+	0,
+	[
+		qr{processed: 100/100},
+		qr{latency percentile 25 = \d+\.\d+ ms},
+		qr{p25: \d+\.\d+, p50: \d+\.\d+, p75: \d+\.\d+}
+	],
+	[qr{^$}],
+	'pgbench per-command custom percentiles');
+
+# Test --debug-latency-multiplier to simulate overflow (latencies > 20 min)
+# Using a multiplier of 1e9 will push even microsecond latencies into overflow
+$node->pgbench(
+	'-n -t 10 -c 1 --percentile=50,99 --debug-latency-multiplier=1e9 -b select-only',
+	0,
+	[
+		qr{processed: 10/10},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 99 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench latency multiplier for overflow testing');
+
+# Test high percentiles (99.99, 99.999) with overflow to exercise tail retrieval
+# With 100 transactions all in overflow, p99.99 should retrieve from sorted overflow array
+$node->pgbench(
+	'-n -t 100 -c 1 --percentile=50,90,99,99.9,99.99,99.999 --debug-latency-multiplier=1e9 -b select-only',
+	0,
+	[
+		qr{processed: 100/100},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{latency percentile 99\.9 = \d+\.\d+ ms},
+		qr{latency percentile 99\.99 = \d+\.\d+ ms},
+		qr{latency percentile 99\.999 = \d+\.\d+ ms}
+	],
+	[qr{^$}],
+	'pgbench overflow high percentile retrieval');
+
+# Test overflow with per-command stats to exercise command histogram overflow
+$node->pgbench(
+	'-n -t 50 -c 1 --percentile=50,99.9 -r --debug-latency-multiplier=1e9 -b select-only',
+	0,
+	[
+		qr{processed: 50/50},
+		qr{latency percentile 50 = \d+\.\d+ ms},
+		qr{p50: \d+\.\d+.*p99\.9: \d+\.\d+}
+	],
+	[qr{^$}],
+	'pgbench overflow with per-command percentiles');
 # Test --init-batch-size retry on backend termination
 # This test verifies that pgbench can recover from connection drops during
 # initialization when using the --init-batch-size option.
