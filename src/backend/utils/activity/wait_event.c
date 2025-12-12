@@ -37,6 +37,9 @@ static const char *pgstat_get_wait_io(WaitEventIO w);
 static uint32 local_my_wait_event_info;
 uint32	   *my_wait_event_info = &local_my_wait_event_info;
 
+pgstat_report_wait_start_hook_type pgstat_report_wait_start_hook = NULL;
+pgstat_report_wait_end_hook_type pgstat_report_wait_end_hook = NULL;
+
 
 /*
  * Configure wait event reporting to report wait events to *wait_event_info.
