@@ -502,9 +502,10 @@ SearchNamedReplicationSlot(const char *name, bool need_lock)
 	for (i = 0; i < max_replication_slots; i++)
 	{
 		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
-
+		elog(INFO, "ReplicationSlot: %s", NameStr(s->data.name));
 		if (s->in_use && strcmp(name, NameStr(s->data.name)) == 0)
 		{
+			elog(INFO, "ReplicationSlot: found %s", NameStr(s->data.name));
 			slot = s;
 			break;
 		}
