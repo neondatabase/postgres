@@ -667,9 +667,6 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 		PageInit((Page) page, BLCKSZ, 0);
 		PageSetChecksumInplace(page, vm_nblocks_now);
 		MarkBufferDirty(buffer);
-
-		smgrextend(reln, VISIBILITYMAP_FORKNUM, vm_nblocks_now, page, false);
-
 		UnlockReleaseBuffer(buffer);
 
 		vm_nblocks_now++;
