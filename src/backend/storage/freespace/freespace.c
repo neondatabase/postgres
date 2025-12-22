@@ -680,10 +680,6 @@ fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 		PageInit((Page) page, BLCKSZ, 0);
 		PageSetChecksumInplace(page, fsm_nblocks_now);
 		MarkBufferDirty(buffer);
-
-		smgrextend(reln, FSM_FORKNUM, fsm_nblocks_now,
-				   page, false);
-
 		UnlockReleaseBuffer(buffer);
 
 		fsm_nblocks_now++;
