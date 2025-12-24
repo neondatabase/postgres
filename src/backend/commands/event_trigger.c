@@ -74,6 +74,7 @@ typedef struct EventTriggerQueryState
 } EventTriggerQueryState;
 
 static EventTriggerQueryState *currentEventTriggerState = NULL;
+EventTrigger_hook_type EventTrigger_hook = NULL;
 
 /* Support for dropped objects */
 typedef struct SQLDropObject
@@ -921,7 +922,10 @@ EventTriggerInvoke(List *fn_oid_list, EventTriggerData *trigdata)
 		InitFunctionCallInfoData(*fcinfo, &flinfo, 0,
 								 InvalidOid, (Node *) trigdata, NULL);
 		pgstat_init_function_usage(fcinfo, &fcusage);
-		FunctionCallInvoke(fcinfo);
+		if (EventTrigger_hook)
+			EventTrigger_hook(fcinfo);
+		else
+			FunctionCallInvoke(fcinfo);
 		pgstat_end_function_usage(&fcusage, true);
 
 		/* Reclaim memory. */
