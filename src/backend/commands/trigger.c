@@ -70,6 +70,8 @@ int			SessionReplicationRole = SESSION_REPLICATION_ROLE_ORIGIN;
 /* How many levels deep into trigger execution are we? */
 static int	MyTriggerDepth = 0;
 
+DataTrigger_hook_type DataTrigger_hook = NULL;
+
 /* Local function prototypes */
 static void renametrig_internal(Relation tgrel, Relation targetrel,
 								HeapTuple trigtup, const char *newname,
@@ -2429,7 +2431,10 @@ ExecCallTriggerFunc(TriggerData *trigdata,
 	MyTriggerDepth++;
 	PG_TRY();
 	{
-		result = FunctionCallInvoke(fcinfo);
+		if (DataTrigger_hook)
+			result = DataTrigger_hook(fcinfo);
+		else
+			result = FunctionCallInvoke(fcinfo);
 	}
 	PG_FINALLY();
 	{
