@@ -1978,6 +1978,10 @@ PerformWalRecovery(void)
 				pfree(buf.data);
 			}
 #endif
+			/* Check replay progress */
+			if (ReportXLOGRecoveryProgress_hook != NULL)
+				ReportXLOGRecoveryProgress_hook();
+
 
 			/* Handle interrupt signals of startup process */
 			ProcessStartupProcInterrupts();

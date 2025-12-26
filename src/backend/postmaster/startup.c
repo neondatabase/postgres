@@ -75,6 +75,8 @@ static volatile sig_atomic_t startup_progress_timer_expired = false;
  */
 int			log_startup_progress_interval = 10000;	/* 10 sec */
 
+ReportXLOGRecoveryProgress_hook_type ReportXLOGRecoveryProgress_hook = NULL;
+
 /* Signal handlers */
 static void StartupProcTriggerHandler(SIGNAL_ARGS);
 static void StartupProcSigHupHandler(SIGNAL_ARGS);
