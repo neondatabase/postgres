@@ -5051,17 +5051,6 @@ struct config_string ConfigureNamesString[] =
 		check_log_connections, assign_log_connections, NULL
 	},
 
-	{
-		{"neon_storage_token", PGC_SUSET, REPLICATION_STANDBY,
-			"Authentication token for Neon storage",
-			NULL,
-			GUC_NO_SHOW_ALL | GUC_NO_RESET | GUC_NO_RESET_ALL | GUC_NOT_IN_SAMPLE | GUC_SUPERUSER_ONLY
-		},
-		&neon_storage_token,
-		"",
-		NULL, NULL, show_neon_storage_token,
-	},
-
 
 	/* End-of-list marker */
 	{
