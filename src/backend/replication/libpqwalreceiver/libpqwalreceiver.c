@@ -214,14 +214,10 @@ libpqrcv_connect(const char *conninfo, bool replication, bool logical,
 	 */
 	if (pg_strcasecmp(appname, "walreceiver") == 0)
 	{
-		if (neon_storage_token[0] != '\0')
+		if (neon_storage_token && neon_storage_token[0] != '\0')
 		{
 			keys[++i] = "password";
 			vals[i] = neon_storage_token;
-		}
-		else
-		{
-			elog(LOG, "no storage token set");
 		}
 	}
 /* END_NEON */

@@ -1402,22 +1402,6 @@ WalRcvGetStateString(WalRcvState state)
 }
 
 /*
- * We currently grant the privileged role pg_monitor, which implies
- * pg_read_all_settings. Until we fix that, let's just redact the content unless
- * the user requesting the value is a superuser.
- *
- * See: https://databricks.atlassian.net/browse/LKB-7128
- */
-const char *
-show_neon_storage_token(void)
-{
-	if (superuser())
-		return neon_storage_token;
-
-	return "**********";
-}
-
-/*
  * Returns activity of WAL receiver, including pid, state and xlog locations
  * received from the WAL sender of another server.
  */
