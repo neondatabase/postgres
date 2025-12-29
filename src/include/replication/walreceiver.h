@@ -455,8 +455,6 @@ walrcv_clear_result(WalRcvExecResult *walres)
 extern void WalReceiverMain(void) pg_attribute_noreturn();
 extern void ProcessWalRcvInterrupts(void);
 
-extern const char *show_neon_storage_token(void);
-
 /* prototypes for functions in walreceiverfuncs.c */
 extern Size WalRcvShmemSize(void);
 extern void WalRcvShmemInit(void);
