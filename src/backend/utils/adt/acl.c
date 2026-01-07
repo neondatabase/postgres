@@ -5336,6 +5336,16 @@ select_best_admin(Oid member, Oid role)
 		return InvalidOid;
 
 	(void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &admin_role);
+
+	if (!OidIsValid(admin_role))
+	{
+		// if member is a member of privileged role and role is the privilegd role, return the member.
+		Oid privileged_role_oid = get_role_oid("databricks_superuser", true);
+		if (is_member_of_role(member, privileged_role_oid) && role == privileged_role_oid)
+		{
+			return BOOTSTRAP_SUPERUSERID;
+		}
+	}
 	return admin_role;
 }
 

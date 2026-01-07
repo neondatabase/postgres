@@ -98,7 +98,7 @@ static void DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 						Oid grantorId, GrantRoleOptions *popt,
 						DropBehavior behavior);
 static void check_role_membership_authorization(Oid currentUserId, Oid roleid,
-												bool is_grant);
+												bool is_grant, GrantRoleOptions * popt);
 static Oid	check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId,
 							   bool is_grant);
 static RevokeRoleGrantAction *initialize_revoke_actions(CatCList *memlist);
@@ -517,7 +517,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 			char	   *oldrolename = NameStr(oldroleform->rolname);
 
 			/* can only add this role to roles for which you have rights */
-			check_role_membership_authorization(currentUserId, oldroleid, true);
+			check_role_membership_authorization(currentUserId, oldroleid, true, &popt);
 			AddRoleMems(currentUserId, oldrolename, oldroleid,
 						thisrole_list,
 						thisrole_oidlist,
@@ -1557,7 +1557,7 @@ GrantRole(ParseState *pstate, GrantRoleStmt *stmt)
 
 		roleid = get_role_oid(rolename, false);
 		check_role_membership_authorization(currentUserId,
-											roleid, stmt->is_grant);
+											roleid, stmt->is_grant, &popt);
 		if (stmt->is_grant)
 			AddRoleMems(currentUserId, rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
@@ -2108,7 +2108,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
  */
 static void
 check_role_membership_authorization(Oid currentUserId, Oid roleid,
-									bool is_grant)
+									bool is_grant, GrantRoleOptions * popt)
 {
 	/*
 	 * The charter of pg_database_owner is to have exactly one, implicit,
@@ -2147,6 +2147,37 @@ check_role_membership_authorization(Oid currentUserId, Oid roleid,
 	}
 	else
 	{
+
+		// if currentUserId is a member of privileged role and roleid is the privilegd role, allow it.
+		Oid privileged_role_oid = get_role_oid("databricks_superuser", true);
+		if (is_member_of_role(currentUserId, privileged_role_oid) && roleid == privileged_role_oid)
+		{
+			if (is_grant)
+			{
+				if (!popt->admin && !popt->set)
+				{
+					return;
+				}
+			}
+			else
+			{
+				// revoke is allowed.
+				return;
+			}
+			// if privilege role has only one member with LOGIN but it's a revoke, deny it.
+			// MemList *memlist = SearchSysCacheList1(AUTHMEMROLEMEM, ObjectIdGetDatum(roleid));
+			// if (memlist->n_members == 1 && memlist->members[0]->tuple.t_data[Anum_pg_auth_members_login - 1] == BoolGetDatum(true))
+			// {
+			// 	ereport(ERROR,
+			// 			(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+			// 			 errmsg("permission denied to revoke role \"%s\"",
+			// 					GetUserNameFromId(roleid, false)),
+			// 			 errdetail("Only roles with the %s option on role \"%s\" may revoke this role.",
+			// 					   "ADMIN", GetUserNameFromId(roleid, false))));
+			// }
+			// return;
+		}
+
 		/*
 		 * Otherwise, must have admin option on the role to be changed.
 		 */
