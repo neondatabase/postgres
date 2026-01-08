@@ -134,6 +134,7 @@ static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue
  * Generally neon_superuser on neon.com
  */
 char *privileged_role_name = NULL;
+SelectBestAdmin_hook_type SelectBestAdmin_hook = NULL;
 
 bool
 is_privileged_role(void)
@@ -5337,14 +5338,9 @@ select_best_admin(Oid member, Oid role)
 
 	(void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &admin_role);
 
-	if (!OidIsValid(admin_role))
+	if (SelectBestAdmin_hook)
 	{
-		// if member is a member of privileged role and role is the privilegd role, return the member.
-		Oid privileged_role_oid = get_role_oid("databricks_superuser", true);
-		if (is_member_of_role(member, privileged_role_oid) && role == privileged_role_oid)
-		{
-			return BOOTSTRAP_SUPERUSERID;
-		}
+		SelectBestAdmin_hook(&admin_role, member, role);
 	}
 	return admin_role;
 }

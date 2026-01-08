@@ -17,6 +17,14 @@
 #include "parser/parse_node.h"
 #include "utils/guc.h"
 
+typedef struct
+{
+	unsigned	specified;
+	bool		admin;
+	bool		inherit;
+	bool		set;
+} GrantRoleOptions;
+
 /* GUCs */
 extern PGDLLIMPORT int Password_encryption; /* values from enum PasswordType */
 extern PGDLLIMPORT char *createrole_self_grant;
@@ -25,6 +33,9 @@ extern PGDLLIMPORT char *createrole_self_grant;
 typedef void (*check_password_hook_type) (const char *username, const char *shadow_pass, PasswordType password_type, Datum validuntil_time, bool validuntil_null);
 
 extern PGDLLIMPORT check_password_hook_type check_password_hook;
+
+typedef bool (*CheckRoleMembershipAuthorization_hook_type) (Oid currentUserId, Oid roleid, bool is_grant, List *memberIds, GrantRoleOptions * popt);
+extern PGDLLIMPORT CheckRoleMembershipAuthorization_hook_type CheckRoleMembershipAuthorization_hook;
 
 extern Oid	CreateRole(ParseState *pstate, CreateRoleStmt *stmt);
 extern Oid	AlterRole(ParseState *pstate, AlterRoleStmt *stmt);
