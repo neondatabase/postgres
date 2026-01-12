@@ -580,8 +580,7 @@ pg_settings_get_flags(PG_FUNCTION_ARGS)
 bool
 ConfigOptionIsVisible(struct config_generic *conf)
 {
-	if ((conf->flags & GUC_SUPERUSER_ONLY) &&
-		!has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_SETTINGS))
+	if ((conf->flags & GUC_SUPERUSER_ONLY) && !superuser())
 		return false;
 	else
 		return true;
