@@ -153,6 +153,9 @@ set_lwlsn_db_hook_type set_lwlsn_db_hook = NULL;
 set_lwlsn_relation_hook_type set_lwlsn_relation_hook = NULL;
 set_max_lwlsn_hook_type set_max_lwlsn_hook = NULL;
 
+/* NEON: Hook to control checkpoint buffer flushing */
+checkpoint_buffers_hook_type checkpoint_buffers_hook = NULL;
+
 /*
  * Number of WAL insertion locks to use. A higher value allows more insertions
  * to happen concurrently, but adds some CPU overhead to flushing the WAL,
@@ -7685,7 +7688,10 @@ PreCheckPointGuts(int flags)
 	if (flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY))
 	{
 		CheckPointReplicationState(flags);
-		CheckPointBuffers(flags);
+		
+		/* NEON: Allow extension to control checkpoint buffer flushing */
+		if (!checkpoint_buffers_hook || checkpoint_buffers_hook())
+			CheckPointBuffers(flags);
 
 		/*
 		 * pgstat_write_statsfile will be called later by before_shmem_exit() hook, but by then it's too late
@@ -7721,8 +7727,13 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	 * wallog FSM/VM pages to persist them at page server.
 	 * Writing to the WAL during shutdown checkpoint cause Postgres panic.
 	 * So do it before in PreCheckPointGuts.
+	 *
+	 * The checkpoint_buffers_hook allows extensions (e.g., Neon) to control
+	 * whether buffer flushing should proceed, as bgwriter and buffer eviction
+	 * also handle FSM/VM flushing.
 	 */
-	if (!(flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY)))
+	if ((!(flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY))) &&
+		(!checkpoint_buffers_hook || checkpoint_buffers_hook()))
 		CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */
