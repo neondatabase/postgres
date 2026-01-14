@@ -7822,8 +7822,6 @@ main(int argc, char **argv)
 	 */
 	if (report_percentiles && report_per_command)
 	{
-		int			total_commands = 0;
-
 		for (i = 0; i < num_scripts; i++)
 		{
 			Command   **commands = sql_script[i].commands;
@@ -7832,7 +7830,6 @@ main(int argc, char **argv)
 			{
 				commands[j]->latency_hist = (LatencyHistogram *) pg_malloc(sizeof(LatencyHistogram));
 				initLatencyHistogram(commands[j]->latency_hist);
-				total_commands++;
 			}
 		}
 	}
