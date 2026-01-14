@@ -1634,7 +1634,7 @@ addOverflowValue(LatencyHistogram *hist, double latency_us)
 static void
 addToLatencyHistogram(LatencyHistogram *hist, double latency_us)
 {
-	int			bucket;
+	int			bucket = 0;
 	int			tier_offset = 0;
 	int64		range_start = 0;
 	int			t;
@@ -7495,8 +7495,6 @@ main(int argc, char **argv)
 	 */
 	if (report_percentiles && report_per_command)
 	{
-		int			total_commands = 0;
-
 		for (i = 0; i < num_scripts; i++)
 		{
 			Command   **commands = sql_script[i].commands;
@@ -7505,7 +7503,6 @@ main(int argc, char **argv)
 			{
 				commands[j]->latency_hist = (LatencyHistogram *) pg_malloc(sizeof(LatencyHistogram));
 				initLatencyHistogram(commands[j]->latency_hist);
-				total_commands++;
 			}
 		}
 	}
