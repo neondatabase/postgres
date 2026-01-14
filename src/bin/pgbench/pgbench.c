@@ -1670,7 +1670,7 @@ addOverflowValue(LatencyHistogram *hist, double latency_us)
 static void
 addToLatencyHistogram(LatencyHistogram *hist, double latency_us)
 {
-	int			bucket;
+	int			bucket = 0;
 	int			tier_offset = 0;
 	int64		range_start = 0;
 	int			t;
