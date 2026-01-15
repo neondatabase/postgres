@@ -3275,7 +3275,7 @@ ProcessInterrupts(void)
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
-#ifdef INJECTION_POINTS
+#ifdef USE_INJECTION_POINTS
 	if (inside_smgr_api > 0)
 	{
 		INJECTION_POINT("SMGR_API");
