@@ -24,11 +24,13 @@
 #include "storage/spin.h"
 #include "utils/tuplestore.h"
 
+typedef char *(*GetWalRcvPassword_hook_type) (void);
+extern PGDLLIMPORT GetWalRcvPassword_hook_type GetWalRcvPassword_hook;
+
 /* user-settable parameters */
 extern int	wal_receiver_status_interval;
 extern int	wal_receiver_timeout;
 extern bool hot_standby_feedback;
-extern PGDLLIMPORT char *neon_storage_token;
 
 /*
  * MAXCONNINFO: maximum size of a connection string.
