@@ -87,11 +87,12 @@
 int			wal_receiver_status_interval;
 int			wal_receiver_timeout;
 bool		hot_standby_feedback;
-char	   *neon_storage_token;
 
 /* libpqwalreceiver connection */
 static WalReceiverConn *wrconn = NULL;
 WalReceiverFunctionsType *WalReceiverFunctions = NULL;
+
+GetWalRcvPassword_hook_type GetWalRcvPassword_hook = NULL;
 
 /*
  * These variables are used similarly to openLogFile/SegNo,

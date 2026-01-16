@@ -146,6 +146,7 @@ libpqrcv_connect(const char *conninfo, bool replication, bool logical,
 	WalReceiverConn *conn;
 	PostgresPollingStatusType status;
 /* BEGIN_NEON */
+	char	   *password = NULL;
 	const char *keys[7];
 	const char *vals[7];
 /* END_NEON */
@@ -208,16 +209,17 @@ libpqrcv_connect(const char *conninfo, bool replication, bool logical,
 
 /* BEGIN_NEON */
 	/*
-	 * We use neon_storage_token for the password because conninfo strings are
-	 * limited to MAXCONNINFO in length. Our tokens encode Unity Catalog
-	 * permissions, so they can be quite lengthy.
+	 * We use the output GetWalRcvPassword_hook for the password because
+	 * conninfo strings are limited to MAXCONNINFO in length. Our tokens can
+	 * make the connection info larger than the limit.
 	 */
-	if (pg_strcasecmp(appname, "walreceiver") == 0)
+	if (pg_strcasecmp(appname, "walreceiver") == 0 && GetWalRcvPassword_hook)
 	{
-		if (neon_storage_token && neon_storage_token[0] != '\0')
+		password = GetWalRcvPassword_hook();
+		if (password && password[0] != '\0')
 		{
 			keys[++i] = "password";
-			vals[i] = neon_storage_token;
+			vals[i] = password;
 		}
 	}
 /* END_NEON */
@@ -230,6 +232,8 @@ libpqrcv_connect(const char *conninfo, bool replication, bool logical,
 	conn = palloc0(sizeof(WalReceiverConn));
 	conn->streamConn = PQconnectStartParams(keys, vals,
 											 /* expand_dbname = */ true);
+	if (password)
+		pfree(password);
 	if (PQstatus(conn->streamConn) == CONNECTION_BAD)
 		goto bad_connection_errmsg;
 
