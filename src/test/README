@@ -15,6 +15,9 @@ examples/
   Demonstration programs for libpq that double as regression tests via
   "make check"
 
+buffermgr/
+  Tests for resizing buffer pool without restarting the server
+
 isolation/
   Tests for concurrent behavior at the SQL level
 

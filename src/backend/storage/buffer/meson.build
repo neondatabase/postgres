@@ -6,4 +6,5 @@ backend_sources += files(
   'bufmgr.c',
   'freelist.c',
   'localbuf.c',
+  'buf_resize.c',
 )

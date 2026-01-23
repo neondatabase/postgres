@@ -641,9 +641,12 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 static void
 ProcessCheckpointerInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
-		ProcessProcSignalBarrier();
-
+	/*
+	 * Reloading config can trigger further signals, complicating interrupts
+	 * processing -- so let it run first.
+	 *
+	 * XXX: Is there any need in memory barrier after ProcessConfigFile?
+	 */
 	if (ConfigReloadPending)
 	{
 		ConfigReloadPending = false;
@@ -662,6 +665,9 @@ ProcessCheckpointerInterrupts(void)
 		 */
 		UpdateSharedMemoryConfig();
 	}
+
+	if (ProcSignalBarrierPending)
+		ProcessProcSignalBarrier();
 
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)

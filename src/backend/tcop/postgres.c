@@ -62,6 +62,7 @@
 #include "rewrite/rewriteHandler.h"
 #include "storage/bufmgr.h"
 #include "storage/ipc.h"
+#include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
@@ -4129,6 +4130,9 @@ PostgresSingleUserMain(int argc, char *argv[],
 	/* Initialize size of fast-path lock cache. */
 	InitializeFastPathLocks();
 
+	/* Initialize MaxNBuffers for buffer pool resizing. */
+	InitializeMaxNBuffers();
+
 	/*
 	 * Give preloaded libraries a chance to request additional shared memory.
 	 */
@@ -4318,6 +4322,13 @@ PostgresMain(const char *dbname, const char *username)
 	 * appropriate.
 	 */
 	BeginReportingGUCOptions();
+
+	/*
+	 * TODO: The new backend should fetch the shared buffers status. If the
+	 * resizing is going on, it should bring itself upto speed with it. If not,
+	 * simply fetch the latest pointers are sizes. Is this the right place to do
+	 * that?
+	 */
 
 	/*
 	 * Also set up handler to log session end; we have to wait till now to be

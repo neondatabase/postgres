@@ -24,9 +24,11 @@
 #include "port/pg_bitutils.h"
 #include "replication/logicalworker.h"
 #include "replication/walsender.h"
+#include "storage/bufmgr.h"
 #include "storage/condition_variable.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
+#include "storage/pg_shmem.h"
 #include "storage/shmem.h"
 #include "storage/sinval.h"
 #include "storage/smgr.h"
@@ -109,6 +111,10 @@ static bool CheckProcSignal(ProcSignalReason reason);
 static void CleanupProcSignalState(int status, Datum arg);
 static void ResetProcSignalBarrierBits(uint32 flags);
 
+#ifdef DEBUG_SHMEM_RESIZE
+bool delay_proc_signal_init = false;
+#endif
+
 /*
  * ProcSignalShmemSize
  *		Compute space needed for ProcSignal's shared memory
@@ -170,6 +176,43 @@ ProcSignalInit(const uint8 *cancel_key, int cancel_key_len)
 	uint32		old_pss_pid;
 
 	Assert(cancel_key_len >= 0 && cancel_key_len <= MAX_CANCEL_KEY_LENGTH);
+
+#ifdef DEBUG_SHMEM_RESIZE
+	/*
+	 * Introduced for debugging purposes. You can change the variable at
+	 * runtime using gdb, then start new backends with delayed ProcSignal
+	 * initialization. Simple pg_usleep wont work here due to SIGHUP interrupt
+	 * needed for testing. Taken from pg_sleep;
+	 */
+	if (delay_proc_signal_init)
+	{
+#define GetNowFloat()	((float8) GetCurrentTimestamp() / 1000000.0)
+		float8		endtime = GetNowFloat() + 5;
+
+		for (;;)
+		{
+			float8		delay;
+			long		delay_ms;
+
+			CHECK_FOR_INTERRUPTS();
+
+			delay = endtime - GetNowFloat();
+			if (delay >= 600.0)
+				delay_ms = 600000;
+			else if (delay > 0.0)
+				delay_ms = (long) (delay * 1000.0);
+			else
+				break;
+
+			(void) WaitLatch(MyLatch,
+							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 delay_ms,
+							 WAIT_EVENT_PG_SLEEP);
+			ResetLatch(MyLatch);
+		}
+	}
+#endif
+
 	if (MyProcNumber < 0)
 		elog(ERROR, "MyProcNumber not set");
 	if (MyProcNumber >= NumProcSignalSlots)
@@ -575,6 +618,18 @@ ProcessProcSignalBarrier(void)
 				{
 					case PROCSIGNAL_BARRIER_SMGRRELEASE:
 						processed = ProcessBarrierSmgrRelease();
+						break;
+					case PROCSIGNAL_BARRIER_SHBUF_SHRINK:
+						processed = ProcessBarrierShmemShrink();
+						break;
+					case PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM:
+						processed = ProcessBarrierShmemResizeMapAndMem();
+						break;
+					case PROCSIGNAL_BARRIER_SHBUF_EXPAND:
+						processed = ProcessBarrierShmemExpand();
+						break;
+					case PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED:
+						processed = ProcessBarrierShmemResizeFailed();
 						break;
 				}
 

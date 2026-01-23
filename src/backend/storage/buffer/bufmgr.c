@@ -57,6 +57,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/read_stream.h"
 #include "storage/smgr.h"
@@ -67,6 +68,7 @@
 #include "utils/rel.h"
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
+#include "utils/injection_point.h"
 
 
 /* Note: these two macros only work on shared buffers, not local ones! */
@@ -3463,6 +3465,9 @@ BufferSync(int flags)
 			ProcessProcSignalBarrier();
 	}
 
+	/* Injection point after scanning all buffers for dirty pages */
+	INJECTION_POINT("buffer-sync-dirty-buffer-scan", NULL);
+
 	if (num_to_scan == 0)
 		return;					/* nothing to do */
 
@@ -3656,6 +3661,32 @@ BufferSync(int flags)
 }
 
 /*
+ * Information saved between BgBufferSync() calls so we can determine the
+ * strategy point's advance rate and avoid scanning already-cleaned buffers. The
+ * variables are global instead of static local so that BgBufferSyncReset() can
+ * adjust it when resizing shared buffers.
+ */
+static bool saved_info_valid = false;
+static int	prev_strategy_buf_id;
+static uint32 prev_strategy_passes;
+static int	next_to_clean;
+static uint32 next_passes;
+
+/* Moving averages of allocation rate and clean-buffer density */
+static float smoothed_alloc = 0;
+static float smoothed_density = 10.0;
+
+void
+BgBufferSyncReset(int currentNBuffers, int targetNBuffers)
+{
+	saved_info_valid = false;
+#ifdef BGW_DEBUG
+	elog(DEBUG2, "invalidated background writer status after resizing buffers from %d to %d",
+		 currentNBuffers, targetNBuffers);
+#endif
+}
+
+/*
  * BgBufferSync -- Write out some dirty buffers in the pool.
  *
  * This is called periodically by the background writer process.
@@ -3673,20 +3704,6 @@ BgBufferSync(WritebackContext *wb_context)
 	int			strategy_buf_id;
 	uint32		strategy_passes;
 	uint32		recent_alloc;
-
-	/*
-	 * Information saved between calls so we can determine the strategy
-	 * point's advance rate and avoid scanning already-cleaned buffers.
-	 */
-	static bool saved_info_valid = false;
-	static int	prev_strategy_buf_id;
-	static uint32 prev_strategy_passes;
-	static int	next_to_clean;
-	static uint32 next_passes;
-
-	/* Moving averages of allocation rate and clean-buffer density */
-	static float smoothed_alloc = 0;
-	static float smoothed_density = 10.0;
 
 	/* Potentially these could be tunables, but for now, not */
 	float		smoothing_samples = 16;
@@ -3711,6 +3728,25 @@ BgBufferSync(WritebackContext *wb_context)
 	uint32		new_recent_alloc;
 
 	/*
+	 * If buffer pool is being shrunk the buffer being written out may not remain
+	 * valid. If the buffer pool is being expanded, more buffers will become
+	 * available without even this function writing out any. Hence wait till
+	 * buffer resizing finishes i.e. go into hibernation mode.
+	 *
+	 * TODO: We may not need this synchronization if background worker itself
+	 * becomes the coordinator.
+	 */
+	if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		return true;
+
+	/*
+	 * Resizing shared buffers while this function is performing an LRU scan on
+	 * them may lead to wrong results. Indicate that the resizing should wait for
+	 * the LRU scan to complete.
+	 */
+	delay_shmem_resize = true;
+
+	/*
 	 * Find out where the freelist clock sweep currently is, and how many
 	 * buffer allocations have happened since our last call.
 	 */
@@ -3727,6 +3763,7 @@ BgBufferSync(WritebackContext *wb_context)
 	if (bgwriter_lru_maxpages <= 0)
 	{
 		saved_info_valid = false;
+		delay_shmem_resize = false;
 		return true;
 	}
 
@@ -3886,8 +3923,17 @@ BgBufferSync(WritebackContext *wb_context)
 	num_written = 0;
 	reusable_buffers = reusable_buffers_est;
 
-	/* Execute the LRU scan */
-	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est)
+	/*
+	 * Execute the LRU scan.
+	 *
+	 * If buffer pool is being shrunk, the buffer being written may not remain
+	 * valid. If the buffer pool is being expanded, more buffers will become
+	 * available without even this function writing any. Hence stop what we are doing. This
+	 * also unblocks other processes that are waiting for buffer resizing to
+	 * finish.
+	 */
+	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est &&
+			!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
 	{
 		int			sync_state = SyncOneBuffer(next_to_clean, true,
 											   wb_context);
@@ -3945,6 +3991,9 @@ BgBufferSync(WritebackContext *wb_context)
 			 scans_per_alloc, smoothed_density);
 #endif
 	}
+
+	/* Let the resizing commence. */
+	delay_shmem_resize = false;
 
 	/* Return true if OK to hibernate */
 	return (bufs_to_lap == 0 && recent_alloc == 0);
@@ -4259,7 +4308,23 @@ DebugPrintBufferRefcount(Buffer buffer)
 void
 CheckPointBuffers(int flags)
 {
+	/* Mark that buffer sync is in progress - delay any shared memory resizing. */
+	/*
+	 * TODO: We need to assess whether we should allow checkpoint and buffer
+	 * resizing to run in parallel. When expanding buffers it may be fine to let
+	 * the checkpointer run in RESIZE_MAP_AND_MEM phase but delay phase EXPAND
+	 * phase till the checkpoint finishes, at the same time not allow checkpoint
+	 * to run during expansion phase. When shrinking the buffers, we should
+	 * delay SHRINK phase till checkpoint finishes and not allow to start
+	 * checkpoint till SHRINK phase is done, but allow it to run in
+	 * RESIZE_MAP_AND_MEM phase. This needs careful analysis and testing.
+	 */
+	delay_shmem_resize = true;
+
 	BufferSync(flags);
+
+	/* Mark that buffer sync is no longer in progress - allow shared memory resizing */
+	delay_shmem_resize = false;
 }
 
 /*
@@ -7528,3 +7593,70 @@ const PgAioHandleCallbacks aio_local_buffer_readv_cb = {
 	.complete_local = local_buffer_readv_complete,
 	.report = buffer_readv_report,
 };
+
+/*
+ * When shrinking shared buffers pool, evict the buffers which will not be part
+ * of the shrunk buffer pool.
+ */
+bool
+EvictExtraBuffers(int targetNBuffers, int currentNBuffers)
+{
+	bool result = true;
+
+	Assert(targetNBuffers < currentNBuffers);
+
+	/*
+	 * If the buffer being evicated is locked, this function will need to wait.
+	 * This function should not be called from a Postmaster since it can not wait on a lock.
+	 */
+	Assert(IsUnderPostmaster);
+
+	/*
+	 * TODO: Before evicting any buffer, we should check whether any of the
+	 * buffers are pinned. If we find that a buffer is pinned after evicting
+	 * most of them, that will impact performance since all those evicted
+	 * buffers might need to be read again.
+	 */
+	for (Buffer buf = targetNBuffers + 1; buf <= currentNBuffers; buf++)
+	{
+		BufferDesc *desc = GetBufferDescriptor(buf - 1);
+		uint32		buf_state;
+		bool		buffer_flushed;
+
+		buf_state = pg_atomic_read_u32(&desc->state);
+
+		/*
+		 * Nobody is expected to touch the buffers while resizing is
+		 * going one hence unlocked precheck should be safe and saves
+		 * some cycles.
+		 */
+		if (!(buf_state & BM_VALID))
+			continue;
+
+		/*
+		 * XXX: Looks like CurrentResourceOwner can be NULL here, find
+		 * another one in that case?
+		 * */
+		if (CurrentResourceOwner)
+			ResourceOwnerEnlarge(CurrentResourceOwner);
+
+		ReservePrivateRefCountEntry();
+
+		LockBufHdr(desc);
+
+		/*
+		 * Now that we have locked buffer descriptor, make sure that the
+		 * buffer without valid data has been skipped above.
+		 */
+		Assert(buf_state & BM_VALID);
+
+		if (!EvictUnpinnedBufferInternal(desc, &buffer_flushed))
+		{
+			elog(WARNING, "could not remove buffer %u, it is pinned", buf);
+			result = false;
+			break;
+		}
+	}
+
+	return result;
+}

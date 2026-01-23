@@ -16,6 +16,7 @@
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
+#include "utils/tuplestore.h"
 
 
 #define NUM_BUFFERCACHE_PAGES_MIN_ELEM	8
@@ -100,6 +101,7 @@ PG_FUNCTION_INFO_V1(pg_buffercache_usage_counts);
 PG_FUNCTION_INFO_V1(pg_buffercache_evict);
 PG_FUNCTION_INFO_V1(pg_buffercache_evict_relation);
 PG_FUNCTION_INFO_V1(pg_buffercache_evict_all);
+PG_FUNCTION_INFO_V1(pg_buffercache_lookup_table_entries);
 
 
 /* Only need to touch memory once per backend process lifetime */
@@ -116,6 +118,7 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 	TupleDesc	tupledesc;
 	TupleDesc	expected_tupledesc;
 	HeapTuple	tuple;
+	int			currentNBuffers = pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
 
 	if (SRF_IS_FIRSTCALL())
 	{
@@ -172,10 +175,10 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		/* Allocate NBuffers worth of BufferCachePagesRec records. */
 		fctx->record = (BufferCachePagesRec *)
 			MemoryContextAllocHuge(CurrentMemoryContext,
-								   sizeof(BufferCachePagesRec) * NBuffers);
+								   sizeof(BufferCachePagesRec) * currentNBuffers);
 
 		/* Set max calls and remember the user function context. */
-		funcctx->max_calls = NBuffers;
+		funcctx->max_calls = currentNBuffers;
 		funcctx->user_fctx = fctx;
 
 		/* Return to original context when allocating transient memory */
@@ -189,12 +192,23 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		 * snapshot across all buffers, but we do grab the buffer header
 		 * locks, so the information of each buffer is self-consistent.
 		 */
-		for (i = 0; i < NBuffers; i++)
+		for (i = 0; i < currentNBuffers; i++)
 		{
 			BufferDesc *bufHdr;
 			uint32		buf_state;
 
 			CHECK_FOR_INTERRUPTS();
+
+			/*
+			 * TODO: We should just scan the entire buffer descriptor
+			 * array instead of relying on curent buffer pool size. But that can
+			 * happen if only we setup the descriptor array large enough at the
+			 * server startup time.
+			 */
+			if (currentNBuffers != pg_atomic_read_u32(&ShmemCtrl->currentNBuffers))
+				ereport(ERROR,
+						(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						 errmsg("number of shared buffers changed during scan of buffer cache")));
 
 			bufHdr = GetBufferDescriptor(i);
 			/* Lock each buffer header before inspecting. */
@@ -776,4 +790,20 @@ pg_buffercache_evict_all(PG_FUNCTION_ARGS)
 	result = HeapTupleGetDatum(tuple);
 
 	PG_RETURN_DATUM(result);
+}
+
+/*
+ * Return lookup table content as a set of records.
+ */
+Datum
+pg_buffercache_lookup_table_entries(PG_FUNCTION_ARGS)
+{
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+
+	InitMaterializedSRF(fcinfo, 0);
+
+	/* Fill the tuplestore */
+	BufTableGetContents(rsinfo->setResult, rsinfo->setDesc);
+
+	return (Datum) 0;
 }

@@ -204,7 +204,7 @@ EnableLockPagesPrivilege(int elevel)
  * standard header.
  */
 PGShmemHeader *
-PGSharedMemoryCreate(Size size,
+PGSharedMemoryCreate(MemoryMappingSizes *mapping_sizes, int segment_id,
 					 PGShmemHeader **shim)
 {
 	void	   *memAddress;
@@ -216,9 +216,10 @@ PGSharedMemoryCreate(Size size,
 	DWORD		size_high;
 	DWORD		size_low;
 	SIZE_T		largePageSize = 0;
-	Size		orig_size = size;
+	Size		size = mapping_sizes->shmem_req_size;
 	DWORD		flProtect = PAGE_READWRITE;
 	DWORD		desiredAccess;
+	ShmemSegment *segment = &Segments[segment_id]
 
 	ShmemProtectiveRegion = VirtualAlloc(NULL, PROTECTIVE_REGION_SIZE,
 										 MEM_RESERVE, PAGE_NOACCESS);
@@ -304,7 +305,7 @@ retry:
 				 * Use the original size, not the rounded-up value, when
 				 * falling back to non-huge pages.
 				 */
-				size = orig_size;
+				size = mapping_sizes->shmem_req_size;
 				flProtect = PAGE_READWRITE;
 				goto retry;
 			}
@@ -393,6 +394,11 @@ retry:
 	hdr->dsm_control = 0;
 
 	/* Save info for possible future use */
+	segment->shmem_size = size;
+	segment->seg_addr = memAddress;
+	segment->shmem = (Pointer) hdr;
+	segment->seg_id = (unsigned long) hmap2;
+
 	UsedShmemSegAddr = memAddress;
 	UsedShmemSegSize = size;
 	UsedShmemSegID = hmap2;
@@ -627,7 +633,7 @@ pgwin32_ReserveSharedMemoryRegion(HANDLE hChild)
  * use GetLargePageMinimum() instead.
  */
 void
-GetHugePageSize(Size *hugepagesize, int *mmap_flags)
+GetHugePageSize(Size *hugepagesize, int *mmap_flags, int *memfd_flags)
 {
 	if (hugepagesize)
 		*hugepagesize = 0;
