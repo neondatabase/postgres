@@ -35,7 +35,6 @@
 #include "common/pg_lzcompress.h"
 #include "miscadmin.h"
 #include "pg_trace.h"
-#include "storage/buf_internals.h"
 #include "replication/origin.h"
 #include "replication/walsender.h"
 #include "storage/bufmgr.h"
@@ -1359,23 +1358,7 @@ log_newpage_range(Relation rel, ForkNumber forknum,
 			if (!PageIsNew(BufferGetPage(buf)))
 				bufpack[nbufs++] = buf;
 			else
-			{
-				BufferDesc *bufdesc;
-
-				bufdesc = GetBufferDescriptor(buf);
-
-				/* only operate on  operations on non-permanent buffers */
-				if ((pg_atomic_read_u32(&bufdesc->state) & BM_PERMANENT) == 0)
-				{
-					/* We have the exclusive content lock on the page, so no concurrent
-					 * writer can be accessing this page */
-					uint32 buf_state = LockBufHdr(bufdesc);
-					buf_state |= BM_PERMANENT;
-					UnlockBufHdr(bufdesc, buf_state);
-				}
-
 				UnlockReleaseBuffer(buf);
-			}
 			blkno++;
 		}
 
@@ -1394,31 +1377,6 @@ log_newpage_range(Relation rel, ForkNumber forknum,
 		}
 
 		recptr = XLogInsert(RM_XLOG_ID, XLOG_FPI);
-
-		/*
-		 * Mark the buffers as permanent, if they weren't already marked PERMANENT.
-		 *
-		 * Note that this does not race with concurrent writes, because those
-		 * can not start while the page is exclusively locked by this backend.
-		 */
-		for (i = 0; i < nbufs; i++)
-		{
-			BufferDesc *bufdesc;
-			uint32		buf_state;
-
-			bufdesc = GetBufferDescriptor(bufpack[i] - 1);
-
-			/* skip operations on already-permanent buffers */
-			if (pg_atomic_read_u32(&bufdesc->state) & BM_PERMANENT)
-				continue;
-
-			/* we have the exclusive content lock on the page, so this is safe */
-			buf_state = LockBufHdr(bufdesc);
-			buf_state |= BM_PERMANENT;
-			UnlockBufHdr(bufdesc, buf_state);
-
-			Assert(pg_atomic_read_u32(&bufdesc->state) & BM_PERMANENT);
-		}
 
 		for (i = 0; i < nbufs; i++)
 		{
