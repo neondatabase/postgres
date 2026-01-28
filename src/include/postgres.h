@@ -577,3 +577,8 @@ extern Datum Float8GetDatum(float8 X);
 #endif
 
 #endif							/* POSTGRES_H */
+
+/* Declare for neon use */
+#ifdef USE_INJECTION_POINTS
+extern int inside_smgr_api;
+#endif
