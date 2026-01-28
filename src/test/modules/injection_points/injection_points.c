@@ -16,6 +16,7 @@
  */
 
 #include "postgres.h"
+#include <time.h>
 
 #include "fmgr.h"
 #include "miscadmin.h"
@@ -87,6 +88,8 @@ typedef struct InjectionPointSharedState
 static InjectionPointSharedState *inj_state = NULL;
 
 extern PGDLLEXPORT void injection_error(const char *name,
+										const void *private_data);
+extern PGDLLEXPORT void injection_error_prob_0_01(const char *name,
 										const void *private_data);
 extern PGDLLEXPORT void injection_notice(const char *name,
 										 const void *private_data);
@@ -184,7 +187,20 @@ injection_error(const char *name, const void *private_data)
 
 	elog(ERROR, "error triggered for injection point %s", name);
 }
+void
+injection_error_prob_0_01(const char *name, const void *private_data)
+{
+	InjectionPointCondition *condition = (InjectionPointCondition *) private_data;
 
+	if (!injection_point_allowed(condition))
+		return;
+	
+	srand((unsigned int)time(NULL));
+	if ( rand() % 10000 > 0)
+		return;
+
+	elog(ERROR, "error triggered for injection point %s", name);
+}
 void
 injection_notice(const char *name, const void *private_data)
 {
@@ -278,6 +294,8 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
+	else if (strcmp(action, "error-prob-0-01") == 0)
+		function = "injection_error_prob_0_01";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 
