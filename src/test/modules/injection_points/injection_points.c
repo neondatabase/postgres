@@ -100,6 +100,7 @@ extern PGDLLEXPORT void injection_wait(const char *name,
 
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
+static double action2prob(const char *action, int pos);
 
 /*
  * Callback for shared memory area initialization.
@@ -429,7 +430,7 @@ injection_points_detach(PG_FUNCTION_ARGS)
 /*
  * Coverts the action name into probability
  */
-double action2prob(const char *action, const int pos)
+static double action2prob(const char *action, const int pos)
 {
 	/*
 	 * Simple parser: convert "0-01" -> "0.01" then strtod().
