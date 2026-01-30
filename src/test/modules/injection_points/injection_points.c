@@ -298,22 +298,7 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_wait";
 	else if (strncmp(action, "error-prob-", 11) == 0)
 		{
-		const char *p = action + 11; /* points to "0-01" */
-
-		/*
-		* Simple parser: convert "0-01" -> "0.01" then strtod().
-		* You can make this stricter if you like.
-		*/
-		char buf[32];
-		int  i, j;
-
-		for (i = 0, j = 0; p[i] != '\0' && j < (int) sizeof(buf) - 1; i++)
-		{
-			buf[j++] = (p[i] == '-') ? '.' : p[i];
-		}
-		buf[j] = '\0';
-
-		condition.prob = strtod(buf, NULL);
+		condition.prob = action2prob(action, 11);
 		function = "injection_error_prob";
 		}
 	else
@@ -439,4 +424,30 @@ injection_points_detach(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Coverts the action name into probability
+ */
+double action2prob(const char *action, const int pos)
+{
+	/*
+	 * Simple parser: convert "0-01" -> "0.01" then strtod().
+	 */
+	const char *p = action + pos; /* points to "0-01" */
+	double prob;
+	char *endptr;
+	char buf[32];
+	int  i, j;
+
+	for (i = 0, j = 0; p[i] != '\0' && j < (int) sizeof(buf) - 1; i++)
+	{
+		buf[j++] = (p[i] == '-') ? '.' : p[i];
+	}
+	buf[j] = '\0';
+	errno = 0;
+	prob = strtod(buf, &endptr);
+	if (errno != 0 || endptr == buf || prob < 0.0 || prob > 1.0)
+		elog(ERROR, "invalid probability in action \"%s\"", action);
+	return prob;
 }
