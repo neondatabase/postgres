@@ -60,6 +60,8 @@ typedef struct InjectionPointCondition
 
 	/* ID of the process where the injection point is allowed to run */
 	int			pid;
+	/* probability in [0,1], 1.0 = always */
+	double		prob;
 } InjectionPointCondition;
 
 /*
@@ -89,7 +91,7 @@ static InjectionPointSharedState *inj_state = NULL;
 
 extern PGDLLEXPORT void injection_error(const char *name,
 										const void *private_data);
-extern PGDLLEXPORT void injection_error_prob_0_01(const char *name,
+extern PGDLLEXPORT void injection_error_prob(const char *name,
 										const void *private_data);
 extern PGDLLEXPORT void injection_notice(const char *name,
 										 const void *private_data);
@@ -188,15 +190,16 @@ injection_error(const char *name, const void *private_data)
 	elog(ERROR, "error triggered for injection point %s", name);
 }
 void
-injection_error_prob_0_01(const char *name, const void *private_data)
+injection_error_prob(const char *name, const void *private_data)
 {
 	InjectionPointCondition *condition = (InjectionPointCondition *) private_data;
 
 	if (!injection_point_allowed(condition))
 		return;
 	
-	srand((unsigned int)time(NULL));
-	if ( rand() % 10000 > 0)
+	/* Use the probability stored in the condition. */
+	double r = (double) rand() / (double) RAND_MAX;
+	if ( r > condition->prob)
 		return;
 
 	elog(ERROR, "error triggered for injection point %s", name);
@@ -294,8 +297,26 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
-	else if (strcmp(action, "error-prob-0-01") == 0)
-		function = "injection_error_prob_0_01";
+	else if (strncmp(action, "error-prob-", 11) == 0)
+		{
+		const char *p = action + 11; /* points to "0-01" */
+
+		/*
+		* Simple parser: convert "0-01" -> "0.01" then strtod().
+		* You can make this stricter if you like.
+		*/
+		char buf[32];
+		int  i, j;
+
+		for (i = 0, j = 0; p[i] != '\0' && j < (int) sizeof(buf) - 1; i++)
+		{
+			buf[j++] = (p[i] == '-') ? '.' : p[i];
+		}
+		buf[j] = '\0';
+
+		condition.prob = strtod(buf, NULL);
+		function = "injection_error_prob";
+		}
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 
