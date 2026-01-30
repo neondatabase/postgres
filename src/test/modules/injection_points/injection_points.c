@@ -198,8 +198,7 @@ injection_error_prob(const char *name, const void *private_data)
 		return;
 	
 	/* Use the probability stored in the condition. */
-	double r = (double) rand() / (double) RAND_MAX;
-	if ( r > condition->prob)
+	if ((double) rand() / (double) RAND_MAX > condition->prob)
 		return;
 
 	elog(ERROR, "error triggered for injection point %s", name);
