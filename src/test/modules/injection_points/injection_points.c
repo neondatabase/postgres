@@ -92,7 +92,7 @@ static InjectionPointSharedState *inj_state = NULL;
 extern PGDLLEXPORT void injection_error(const char *name,
 										const void *private_data);
 extern PGDLLEXPORT void injection_error_prob(const char *name,
-										const void *private_data);
+											 const void *private_data);
 extern PGDLLEXPORT void injection_notice(const char *name,
 										 const void *private_data);
 extern PGDLLEXPORT void injection_wait(const char *name,
