@@ -17,7 +17,7 @@
 /*
  * Buffer identifiers.
  *
- * Zero is invalid, positive is the index of a shared buffer (1..NBuffers),
+ * Zero is invalid, positive is the index of a shared buffer (1..{size of shared buffer pool}),
  * negative is the index of a local buffer (-1 .. -NLocBuffer).
  */
 typedef int Buffer;

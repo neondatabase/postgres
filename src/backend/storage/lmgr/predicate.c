@@ -207,6 +207,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_lfind.h"
+#include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/predicate_internals.h"
 #include "storage/proc.h"
@@ -595,7 +596,7 @@ CreatePredXact(void)
 static void
 ReleasePredXact(SERIALIZABLEXACT *sxact)
 {
-	Assert(ShmemAddrIsValid(sxact));
+	Assert(ShmemAddrIsValid(MAIN_SHMEM_SEGMENT, sxact));
 
 	dlist_delete(&sxact->xactLink);
 	dlist_push_tail(&PredXact->availableList, &sxact->xactLink);

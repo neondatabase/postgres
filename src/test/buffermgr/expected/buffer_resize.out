@@ -1,0 +1,330 @@
+-- Test buffer pool resizing and shared memory allocation tracking
+-- This test resizes the buffer pool multiple times and monitors
+-- shared memory allocations related to buffer management
+-- TODO: The test sets shared_buffers values in MBs. Instead it could use values
+-- in kBs so that the test runs on very small machines.
+-- TODO: test the actual memory allocated in the shared memory segments.
+-- Create a view for buffer-related shared memory allocations
+CREATE VIEW buffer_allocations AS
+SELECT name, segment, size, allocated_size
+FROM pg_shmem_allocations
+WHERE name IN ('Buffer Blocks', 'Buffer Descriptors', 'Buffer IO Condition Variables',
+               'Checkpoint BufferIds')
+ORDER BY name;
+-- Note: We exclude the 'main' segment even if it contains the shared buffer
+-- lookup table because it contains other shared structures whose total sizes
+-- may vary as the code changes.
+CREATE VIEW buffer_segments AS
+SELECT name, size, reserved_size
+FROM pg_shmem_segments
+WHERE name <> 'main'
+ORDER BY name;
+-- Enable pg_buffercache for buffer count verification
+CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+-- Test 1: Default shared_buffers
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 128MB
+(1 row)
+
+SHOW max_shared_buffers;
+ max_shared_buffers 
+--------------------
+ 300MB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |   size    | allocated_size 
+-------------------------------+-------------+-----------+----------------
+ Buffer Blocks                 | buffers     | 134221824 |      134221824
+ Buffer Descriptors            | descriptors |   1048576 |        1048576
+ Buffer IO Condition Variables | iocv        |    262144 |         262144
+ Checkpoint BufferIds          | checkpoint  |    327680 |         327680
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |   size    | reserved_size 
+-------------+-----------+---------------
+ buffers     | 134225920 |     314580992
+ checkpoint  |    335872 |        770048
+ descriptors |   1056768 |       2465792
+ iocv        |    270336 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+        16384
+(1 row)
+
+-- Calling pg_resize_shared_buffers() without changing shared_buffers should be a no-op.
+SELECT pg_resize_shared_buffers();
+ pg_resize_shared_buffers 
+--------------------------
+ t
+(1 row)
+
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 128MB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |   size    | allocated_size 
+-------------------------------+-------------+-----------+----------------
+ Buffer Blocks                 | buffers     | 134221824 |      134221824
+ Buffer Descriptors            | descriptors |   1048576 |        1048576
+ Buffer IO Condition Variables | iocv        |    262144 |         262144
+ Checkpoint BufferIds          | checkpoint  |    327680 |         327680
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |   size    | reserved_size 
+-------------+-----------+---------------
+ buffers     | 134225920 |     314580992
+ checkpoint  |    335872 |        770048
+ descriptors |   1056768 |       2465792
+ iocv        |    270336 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+        16384
+(1 row)
+
+-- Test 2: Set to 64MB
+ALTER SYSTEM SET shared_buffers = '64MB';
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- reconnect to ensure new setting is loaded
+\c
+SHOW shared_buffers;
+    shared_buffers     
+-----------------------
+ 128MB (pending: 64MB)
+(1 row)
+
+SELECT pg_resize_shared_buffers();
+ pg_resize_shared_buffers 
+--------------------------
+ t
+(1 row)
+
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 64MB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |   size   | allocated_size 
+-------------------------------+-------------+----------+----------------
+ Buffer Blocks                 | buffers     | 67112960 |       67112960
+ Buffer Descriptors            | descriptors |   524288 |         524288
+ Buffer IO Condition Variables | iocv        |   131072 |         131072
+ Checkpoint BufferIds          | checkpoint  |   163840 |         163840
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |   size   | reserved_size 
+-------------+----------+---------------
+ buffers     | 67117056 |     314580992
+ checkpoint  |   172032 |        770048
+ descriptors |   532480 |       2465792
+ iocv        |   139264 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+         8192
+(1 row)
+
+-- Test 3: Set to 256MB
+ALTER SYSTEM SET shared_buffers = '256MB';
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- reconnect to ensure new setting is loaded
+\c
+SHOW shared_buffers;
+    shared_buffers     
+-----------------------
+ 64MB (pending: 256MB)
+(1 row)
+
+SELECT pg_resize_shared_buffers();
+ pg_resize_shared_buffers 
+--------------------------
+ t
+(1 row)
+
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 256MB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |   size    | allocated_size 
+-------------------------------+-------------+-----------+----------------
+ Buffer Blocks                 | buffers     | 268439552 |      268439552
+ Buffer Descriptors            | descriptors |   2097152 |        2097152
+ Buffer IO Condition Variables | iocv        |    524288 |         524288
+ Checkpoint BufferIds          | checkpoint  |    655360 |         655360
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |   size    | reserved_size 
+-------------+-----------+---------------
+ buffers     | 268443648 |     314580992
+ checkpoint  |    663552 |        770048
+ descriptors |   2105344 |       2465792
+ iocv        |    532480 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+        32768
+(1 row)
+
+-- Test 4: Set to 100MB (non-power-of-two)
+ALTER SYSTEM SET shared_buffers = '100MB';
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- reconnect to ensure new setting is loaded
+\c
+SHOW shared_buffers;
+     shared_buffers     
+------------------------
+ 256MB (pending: 100MB)
+(1 row)
+
+SELECT pg_resize_shared_buffers();
+ pg_resize_shared_buffers 
+--------------------------
+ t
+(1 row)
+
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 100MB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |   size    | allocated_size 
+-------------------------------+-------------+-----------+----------------
+ Buffer Blocks                 | buffers     | 104861696 |      104861696
+ Buffer Descriptors            | descriptors |    819200 |         819200
+ Buffer IO Condition Variables | iocv        |    204800 |         204800
+ Checkpoint BufferIds          | checkpoint  |    256000 |         256000
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |   size    | reserved_size 
+-------------+-----------+---------------
+ buffers     | 104865792 |     314580992
+ checkpoint  |    262144 |        770048
+ descriptors |    827392 |       2465792
+ iocv        |    212992 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+        12800
+(1 row)
+
+-- Test 5: Set to minimum 128kB
+ALTER SYSTEM SET shared_buffers = '128kB';
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- reconnect to ensure new setting is loaded
+\c
+SHOW shared_buffers;
+     shared_buffers     
+------------------------
+ 100MB (pending: 128kB)
+(1 row)
+
+SELECT pg_resize_shared_buffers();
+ pg_resize_shared_buffers 
+--------------------------
+ t
+(1 row)
+
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 128kB
+(1 row)
+
+SELECT * FROM buffer_allocations;
+             name              |   segment   |  size  | allocated_size 
+-------------------------------+-------------+--------+----------------
+ Buffer Blocks                 | buffers     | 135168 |         135168
+ Buffer Descriptors            | descriptors |   1024 |           1024
+ Buffer IO Condition Variables | iocv        |    256 |            256
+ Checkpoint BufferIds          | checkpoint  |    320 |            384
+(4 rows)
+
+SELECT * FROM buffer_segments;
+    name     |  size  | reserved_size 
+-------------+--------+---------------
+ buffers     | 139264 |     314580992
+ checkpoint  |   8192 |        770048
+ descriptors |   8192 |       2465792
+ iocv        |   8192 |        622592
+(4 rows)
+
+SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
+ buffer_count 
+--------------
+           16
+(1 row)
+
+-- Test 6: Try to set shared_buffers higher than max_shared_buffers (should fail)
+ALTER SYSTEM SET shared_buffers = '400MB';
+ERROR:  invalid value for parameter "shared_buffers": 51200
+DETAIL:  "shared_buffers" must be less than "max_shared_buffers".
+SELECT pg_reload_conf();
+ pg_reload_conf 
+----------------
+ t
+(1 row)
+
+-- reconnect to ensure new setting is loaded
+\c
+-- This should show the old value since the configuration was rejected
+SHOW shared_buffers;
+ shared_buffers 
+----------------
+ 128kB
+(1 row)
+
+SHOW max_shared_buffers;
+ max_shared_buffers 
+--------------------
+ 300MB
+(1 row)
+

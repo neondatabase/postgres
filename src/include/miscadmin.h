@@ -177,7 +177,14 @@ extern PGDLLIMPORT bool ExitOnAnyError;
 extern PGDLLIMPORT char *DataDir;
 extern PGDLLIMPORT int data_directory_mode;
 
+/*
+ * TODO: This is no more a GUC variable and does not track the size of the shared
+ * buffer pool; should be removed.
+ */
 extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NBuffersPending;
+extern PGDLLIMPORT bool finalMaxNBuffers;
+extern PGDLLIMPORT int MaxNBuffers;
 extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
@@ -510,6 +517,7 @@ extern PGDLLIMPORT ProcessingMode Mode;
 extern void pg_split_opts(char **argv, int *argcp, const char *optstr);
 extern void InitializeMaxBackends(void);
 extern void InitializeFastPathLocks(void);
+extern void InitializeMaxNBuffers(void);
 extern void InitPostgres(const char *in_dbname, Oid dboid,
 						 const char *username, Oid useroid,
 						 bits32 flags,

@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "pgstat.h"
+#include "storage/pg_shmem.h"
 #include "storage/shmem.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
@@ -227,7 +228,7 @@ StatsShmemInit(void)
 				int			idx = kind - PGSTAT_KIND_CUSTOM_MIN;
 
 				Assert(kind_info->shared_size != 0);
-				ctl->custom_data[idx] = ShmemAlloc(kind_info->shared_size);
+				ctl->custom_data[idx] = ShmemAlloc(MAIN_SHMEM_SEGMENT, kind_info->shared_size);
 				ptr = ctl->custom_data[idx];
 			}
 

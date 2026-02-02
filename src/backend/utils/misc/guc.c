@@ -2725,7 +2725,7 @@ convert_to_base_unit(double value, const char *unit,
  * the value without loss.  For example, if the base unit is GUC_UNIT_KB, 1024
  * is converted to 1 MB, but 1025 is represented as 1025 kB.
  */
-static void
+void
 convert_int_from_base_unit(int64 base_value, int base_unit,
 						   int64 *value, const char **unit)
 {

@@ -601,6 +601,55 @@ InitializeFastPathLocks(void)
 }
 
 /*
+ * Initialize MaxNBuffers variable with validation.
+ *
+ * This must be called after GUCs have been loaded but before shared memory size
+ * is determined.
+ *
+ * Since MaxNBuffers limits the size of the buffer pool, it must be at least as
+ * much as NBuffersPending. If MaxNBuffers is 0 (default), set it to
+ * NBuffersPending. Otherwise, validate that MaxNBuffers is not less than
+ * NBuffersPending.
+ */
+void
+InitializeMaxNBuffers(void)
+{
+	if (MaxNBuffers == 0)		/* default/boot value */
+	{
+		char		buf[32];
+
+		snprintf(buf, sizeof(buf), "%d", NBuffersPending);
+		SetConfigOption("max_shared_buffers", buf, PGC_POSTMASTER,
+						PGC_S_DYNAMIC_DEFAULT);
+
+		/*
+		 * We prefer to report this value's source as PGC_S_DYNAMIC_DEFAULT.
+		 * However, if the DBA explicitly set max_shared_buffers = 0 in the
+		 * config file, then PGC_S_DYNAMIC_DEFAULT will fail to override that
+		 * and we must force the matter with PGC_S_OVERRIDE.
+		 */
+		if (MaxNBuffers == 0)	/* failed to apply it? */
+			SetConfigOption("max_shared_buffers", buf, PGC_POSTMASTER,
+							PGC_S_OVERRIDE);
+	}
+	else
+	{
+		if (MaxNBuffers < NBuffersPending)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("max_shared_buffers (%d) cannot be less than current shared_buffers (%d)",
+							MaxNBuffers, NBuffersPending),
+					 errhint("Increase max_shared_buffers or decrease shared_buffers.")));
+		}
+	}
+
+	Assert(MaxNBuffers > 0);
+	Assert(!finalMaxNBuffers);
+	finalMaxNBuffers = true;
+}
+
+/*
  * Early initialization of a backend (either standalone or under postmaster).
  * This happens even before InitPostgres.
  *

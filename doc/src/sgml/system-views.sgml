@@ -72,6 +72,11 @@
      </row>
 
      <row>
+      <entry><link linkend="view-pg-buffer-lookup-table"><structname>pg_buffer_lookup_table</structname></link></entry>
+      <entry>shared buffer lookup table</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-config"><structname>pg_config</structname></link></entry>
       <entry>compile-time configuration parameters</entry>
      </row>
@@ -888,6 +893,90 @@ AND c1.path[c2.level] = c2.path[c2.level];
    The <link linkend="queries-with">Common Table Expression</link> is used
    to ensure the context IDs in the <structfield>path</structfield> column
    match between both evaluations of the view.
+  </para>
+ </sect1>
+
+ <sect1 id="view-pg-buffer-lookup-table">
+  <title><structname>pg_buffer_lookup_table</structname></title>
+  <indexterm>
+   <primary>pg_buffer_lookup_table</primary>
+  </indexterm>
+  <para>
+   The <structname>pg_buffer_lookup_table</structname> view exposes the current
+   contents of the shared buffer lookup table. Each row represents an entry in
+   the lookup table mapping a relation page to the ID of buffer in which it is
+   cached. The shared buffer lookup table is locked for a short duration while
+   reading so as to ensure consistency. This may affect performance if this view
+   is queried very frequently.
+  </para>
+  <table id="pg-buffer-lookup-table-view" xreflabel="pg_buffer_lookup_table">
+   <title><structname>pg_buffer_lookup_table</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>tablespace</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the tablespace containing the relation
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>database</structfield> <type>oid</type>
+      </para>
+      <para>
+       OID of the database containing the relation (zero for shared relations)
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>relfilenode</structfield> <type>oid</type>
+      </para>
+      <para>
+       relfilenode identifying the relation
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>forknum</structfield> <type>int2</type>
+      </para>
+      <para>
+       Fork number within the relation (see <xref linkend="storage-file-layout"/>)
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>blocknum</structfield> <type>int8</type>
+      </para>
+      <para>
+       Block number within the relation
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>bufferid</structfield> <type>int4</type>
+      </para>
+      <para>
+       ID of the buffer caching the page
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+  <para>
+   Access to this view is restricted to members of the
+   <literal>pg_read_all_stats</literal> role by default.
   </para>
  </sect1>
 
@@ -4001,6 +4090,15 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
        The name of the shared memory allocation. NULL for unused memory
        and <literal>&lt;anonymous&gt;</literal> for anonymous
        allocations.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>segment</structfield> <type>text</type>
+      </para>
+      <para>
+       The name of the shared memory segment concerning the allocation.
       </para></entry>
      </row>
 

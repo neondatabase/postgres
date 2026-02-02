@@ -54,6 +54,15 @@ typedef enum
 typedef enum
 {
 	PROCSIGNAL_BARRIER_SMGRRELEASE, /* ask smgr to close files */
+	PROCSIGNAL_BARRIER_SHBUF_SHRINK,	/* shrink buffer pool - restrict
+										 * allocations to new size */
+	PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM,	/* remap shared memory
+													 * segments and update
+													 * structure pointers */
+	PROCSIGNAL_BARRIER_SHBUF_EXPAND,	/* expand buffer pool - enable
+										 * allocations in new range */
+	PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED, /* signal backends that the shared
+											 * buffer resizing failed. */
 } ProcSignalBarrierType;
 
 /*

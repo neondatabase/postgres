@@ -641,9 +641,12 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 static void
 ProcessCheckpointerInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
-		ProcessProcSignalBarrier();
-
+	/*
+	 * Reloading config can trigger further signals, complicating interrupts
+	 * processing -- so let it run first.
+	 *
+	 * XXX: Is there any need in memory barrier after ProcessConfigFile?
+	 */
 	if (ConfigReloadPending)
 	{
 		ConfigReloadPending = false;
@@ -662,6 +665,9 @@ ProcessCheckpointerInterrupts(void)
 		 */
 		UpdateSharedMemoryConfig();
 	}
+
+	if (ProcSignalBarrierPending)
+		ProcessProcSignalBarrier();
 
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
@@ -940,12 +946,13 @@ CheckpointerShmemSize(void)
 	Size		size;
 
 	/*
-	 * The size of the requests[] array is arbitrarily set equal to NBuffers.
-	 * But there is a cap of MAX_CHECKPOINT_REQUESTS to prevent accumulating
-	 * too many checkpoint requests in the ring buffer.
+	 * The size of the requests[] array is arbitrarily set equal to the
+	 * initial size of buffer pool.  But there is a cap of
+	 * MAX_CHECKPOINT_REQUESTS to prevent accumulating too many checkpoint
+	 * requests in the ring buffer.
 	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(Min(NBuffers,
+	size = add_size(size, mul_size(Min(NBuffersPending,
 									   MAX_CHECKPOINT_REQUESTS),
 								   sizeof(CheckpointerRequest)));
 

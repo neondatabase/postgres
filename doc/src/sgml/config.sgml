@@ -1724,7 +1724,6 @@ include_dir 'conf.d'
         that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
         (Non-default values of <symbol>BLCKSZ</symbol> change the minimum
         value.)
-        This parameter can only be set at server start.
        </para>
 
        <para>
@@ -1747,6 +1746,50 @@ include_dir 'conf.d'
         appropriate, so as to leave adequate space for the operating system.
        </para>
 
+       <para>
+        The shared memory consumed by the buffer pool is allocated and
+        initialized according to the value of the GUC at the time of starting
+        the server. A desired new value of GUC can be loaded while the server is
+        running using <systemitem>SIGHUP</systemitem>. But the buffer pool will
+        not be resized immediately. Use
+        <function>pg_resize_shared_buffers()</function> to dynamically resize
+        the shared buffer pool (see <xref linkend="functions-admin"/> for details).
+        <command>SHOW shared_buffers</command> shows the current number of
+        shared buffers and pending number, if any. Please note that when the GUC
+        is changed, the other GUCS which use this GUCs value to set their
+        defaults will not be changed. They may still require a server restart to
+        consider new value.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-max-shared-buffers" xreflabel="max_shared_buffers">
+      <term><varname>max_shared_buffers</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>max_shared_buffers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Sets the upper limit for the <varname>shared_buffers</varname> value.
+        The default value is <literal>0</literal>,
+        which means no explicit limit is set and <varname>max_shared_buffers</varname>
+        will be automatically set to the value of <varname>shared_buffers</varname>
+        at server startup.
+        If this value is specified without units, it is taken as blocks,
+        that is <symbol>BLCKSZ</symbol> bytes, typically 8kB.
+        This parameter can only be set at server start.
+       </para>
+
+       <para>
+        This parameter determines the amount of memory address space to reserve
+        in each backend for expanding the buffer pool in future. While the
+        memory for buffer pool is allocated on demand as it is resized, the
+        memory required to hold the buffer manager metadata is allocated
+        statically at the server start accounting for the largest buffer pool
+        size allowed by this parameter.
+        <!-- TODO: Provide a numeric example of how much extra memory say max_shared_buffers = 1GB consume. -->
+       </para>
       </listitem>
      </varlistentry>
 

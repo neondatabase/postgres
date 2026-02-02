@@ -89,14 +89,7 @@ typedef int InheritableSocket;
 typedef struct
 {
 	char		DataDir[MAXPGPATH];
-#ifndef WIN32
-	unsigned long UsedShmemSegID;
-#else
-	void	   *ShmemProtectiveRegion;
-	HANDLE		UsedShmemSegID;
-#endif
-	void	   *UsedShmemSegAddr;
-	slock_t    *ShmemLock;
+	PGInhShmemSeg InhShmemSegs[NUM_MEMORY_MAPPINGS];
 #ifdef USE_INJECTION_POINTS
 	struct InjectionPointsCtl *ActiveInjectionPoints;
 #endif
@@ -704,8 +697,13 @@ SubPostmasterMain(int argc, char *argv[])
 	process_shared_preload_libraries();
 
 	/* Restore basic shared memory pointers */
-	if (UsedShmemSegAddr != NULL)
-		InitShmemAccess(UsedShmemSegAddr);
+	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
+
+		if (inhseg->UsedShmemSegAddr != NULL)
+			InitShmemAccess(i, inhseg->UsedShmemSegAddr, inhseg->ShmemLock);
+	}
 
 	/*
 	 * Run the appropriate Main function
@@ -746,14 +744,7 @@ save_backend_variables(BackendParameters *param,
 	strlcpy(param->DataDir, DataDir, MAXPGPATH);
 
 	param->MyPMChildSlot = child_slot;
-
-#ifdef WIN32
-	param->ShmemProtectiveRegion = ShmemProtectiveRegion;
-#endif
-	param->UsedShmemSegID = UsedShmemSegID;
-	param->UsedShmemSegAddr = UsedShmemSegAddr;
-
-	param->ShmemLock = ShmemLock;
+	memcpy(param->InhShmemSegs, InhShmemSegs, sizeof(InhShmemSegs));
 
 #ifdef USE_INJECTION_POINTS
 	param->ActiveInjectionPoints = ActiveInjectionPoints;
@@ -1006,14 +997,7 @@ restore_backend_variables(BackendParameters *param)
 	SetDataDir(param->DataDir);
 
 	MyPMChildSlot = param->MyPMChildSlot;
-
-#ifdef WIN32
-	ShmemProtectiveRegion = param->ShmemProtectiveRegion;
-#endif
-	UsedShmemSegID = param->UsedShmemSegID;
-	UsedShmemSegAddr = param->UsedShmemSegAddr;
-
-	ShmemLock = param->ShmemLock;
+	memcpy(InhShmemSegs, param->InhShmemSegs, sizeof(InhShmemSegs));
 
 #ifdef USE_INJECTION_POINTS
 	ActiveInjectionPoints = param->ActiveInjectionPoints;

@@ -435,6 +435,8 @@ extern config_handle *get_config_handle(const char *name);
 extern void AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt);
 extern char *GetConfigOptionByName(const char *name, const char **varname,
 								   bool missing_ok);
+extern void convert_int_from_base_unit(int64 base_value, int base_unit,
+									   int64 *value, const char **unit);
 
 extern void TransformGUCArray(ArrayType *array, List **names,
 							  List **values);

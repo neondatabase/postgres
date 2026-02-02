@@ -12,6 +12,18 @@ from pg_buffercache_summary();
 
 SELECT count(*) > 0 FROM pg_buffercache_usage_counts() WHERE buffers >= 0;
 
+-- Test the buffer lookup table function and count is <= shared_buffers
+select count(*) <= (select setting::bigint
+                    from pg_settings
+                    where name = 'shared_buffers')
+from pg_buffercache_lookup_table_entries();
+
+-- Check that pg_buffercache_lookup_table view works and count is <= shared_buffers
+select count(*) <= (select setting::bigint
+                    from pg_settings
+                    where name = 'shared_buffers')
+from pg_buffercache_lookup_table;
+
 -- Check that the functions / views can't be accessed by default. To avoid
 -- having to create a dedicated user, use the pg_database_owner pseudo-role.
 SET ROLE pg_database_owner;
@@ -19,6 +31,8 @@ SELECT * FROM pg_buffercache;
 SELECT * FROM pg_buffercache_pages() AS p (wrong int);
 SELECT * FROM pg_buffercache_summary();
 SELECT * FROM pg_buffercache_usage_counts();
+SELECT * FROM pg_buffercache_lookup_table_entries();
+SELECT * FROM pg_buffercache_lookup_table;
 RESET role;
 
 -- Check that pg_monitor is allowed to query view / function
@@ -26,6 +40,12 @@ SET ROLE pg_monitor;
 SELECT count(*) > 0 FROM pg_buffercache;
 SELECT buffers_used + buffers_unused > 0 FROM pg_buffercache_summary();
 SELECT count(*) > 0 FROM pg_buffercache_usage_counts();
+RESET role;
+
+-- Check that pg_read_all_stats is allowed to query buffer lookup table
+SET ROLE pg_read_all_stats;
+SELECT count(*) >= 0 FROM pg_buffercache_lookup_table_entries();
+SELECT count(*) >= 0 FROM pg_buffercache_lookup_table;
 RESET role;
 
 
