@@ -5307,7 +5307,7 @@ ExplainXMLTag(const char *tagname, int flags, ExplainState *es)
  * data for a parallel worker there might already be data on the current line
  * (cf. ExplainOpenWorker); in that case, don't indent any more.
  */
-static void
+void
 ExplainIndentText(ExplainState *es)
 {
 	Assert(es->format == EXPLAIN_FORMAT_TEXT);

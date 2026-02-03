@@ -131,6 +131,7 @@ extern void ExplainQueryParameters(ExplainState *es, ParamListInfo params, int m
 extern void ExplainBeginOutput(ExplainState *es);
 extern void ExplainEndOutput(ExplainState *es);
 extern void ExplainSeparatePlans(ExplainState *es);
+extern void ExplainIndentText(ExplainState *es);
 
 extern void ExplainPropertyList(const char *qlabel, List *data,
 								ExplainState *es);
