@@ -48,6 +48,9 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
+/* Hook for EXPLAIN plugins to print extra information for each plan */
+explain_per_plan_hook_type explain_per_plan_hook = NULL;
+
 
 /* Instrumentation data for SERIALIZE option */
 typedef struct SerializeMetrics
@@ -773,6 +776,11 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	/* Print info about serialization of output */
 	if (es->serialize != EXPLAIN_SERIALIZE_NONE)
 		ExplainPrintSerialize(es, &serializeMetrics);
+
+	/* Allow plugins to print additional information */
+	if (explain_per_plan_hook)
+		(*explain_per_plan_hook) (plannedstmt, into, es, queryString,
+								  params, queryEnv);
 
 	/*
 	 * Close down the query and free resources.  Include time for this in the
