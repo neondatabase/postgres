@@ -536,6 +536,10 @@ Float8GetDatum(float8 X)
 extern Datum Float8GetDatum(float8 X);
 #endif
 
+/* Declare for neon use */
+#ifdef USE_INJECTION_POINTS
+extern int inside_smgr_api;
+#endif
 
 /*
  * Int64GetDatumFast

@@ -103,6 +103,10 @@ int			client_connection_check_interval = 0;
 
 /* flags for non-system relation kinds to restrict use */
 int			restrict_nonsystem_relation_kind;
+#ifdef USE_INJECTION_POINTS
+/* Counter which can show us if we are in SMGR */
+int         inside_smgr_api = 0;
+#endif
 
 /* ----------------
  *		private typedefs etc
@@ -3303,6 +3307,12 @@ ProcessInterrupts(void)
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 	InterruptPending = false;
+#ifdef USE_INJECTION_POINTS
+	if (inside_smgr_api > 0)
+		{
+		INJECTION_POINT("SMGR_API");
+		}
+#endif
 
 retry:
 	if (ProcDiePending)
