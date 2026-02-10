@@ -18,6 +18,43 @@
 # Be sure to replace "<ADD JUSTIFICATION HERE>" with details of your change and
 # why it is deemed acceptable.
 
+4dac22aa10d2882c2e6fb465d7c314cc2d8fb754
+#
+# Add file_extend_method=posix_fallocate,write_zeros.
+# 2026-02-06 17:41:42 +1300
+#
+# Modifying GUC tables isn't really an ABI break: the relevant object has
+# incomplete type so its layout is inaccessible from other C translation units.
+#
+# Discussion: https://www.postgresql.org/message-id/flat/e1f0cd3b-0164-45f5-9705-e922e59df90f%40dunslane.net#8a350b54012c0042f9869d288e978cfe
+
+c5fc17ddaccff14bc22217df2b06ed43a5af16ba
+#
+# Fix trigger transition table capture for MERGE in CTE queries.
+# 2026-01-24 11:30:49 +0000
+#
+# This commit changed the TransitionCaptureState structure, replacing
+# the "tcs_private" field with 3 separate fields. This structure can
+# only be built using MakeTransitionCaptureState(), and PGXN contained
+# no calls to MakeTransitionCaptureState() or uses of the
+# TransitionCaptureState structure.
+
+0f69beddea113dd1d6c5b6f6d82df577ef3c21f2
+#
+# For inplace update, send nontransactional invalidations.
+# 2025-12-16 16:13:54 -0800
+#
+# This changed PrepareToInvalidateCacheTuple() parameters.  PGXN contained no
+# calls to that function.
+
+e2fb3dfa817fbe89494a62c100e9cb442f4d6b15
+#
+# Check for CREATE privilege on the schema in CREATE STATISTICS.
+# 2025-11-10 09:00:00 -0600
+#
+# This commit added a parameter to CreateStatistics().  We are unaware of any
+# impacted third-party code.
+
 24f6c1bd41d0631a04cc956cc8cafa0b117ab625
 #
 # Fix the handling of two GUCs during upgrade.

@@ -1055,11 +1055,40 @@ RehashCatCacheLists(CatCache *cp)
 }
 
 /*
+ *		ConditionalCatalogCacheInitializeCache
+ *
+ * Call CatalogCacheInitializeCache() if not yet done.
+ */
+pg_attribute_always_inline
+static void
+ConditionalCatalogCacheInitializeCache(CatCache *cache)
+{
+#ifdef USE_ASSERT_CHECKING
+	/*
+	 * TypeCacheRelCallback() runs outside transactions and relies on TYPEOID
+	 * for hashing.  This isn't ideal.  Since lookup_type_cache() both
+	 * registers the callback and searches TYPEOID, reaching trouble likely
+	 * requires OOM at an unlucky moment.
+	 *
+	 * InvalidateAttoptCacheCallback() runs outside transactions and likewise
+	 * relies on ATTNUM.  InitPostgres() initializes ATTNUM, so it's reliable.
+	 */
+	if (!(cache->id == TYPEOID || cache->id == ATTNUM) ||
+		IsTransactionState())
+		AssertCouldGetRelation();
+	else
+		Assert(cache->cc_tupdesc != NULL);
+#endif
+
+	if (unlikely(cache->cc_tupdesc == NULL))
+		CatalogCacheInitializeCache(cache);
+}
+
+/*
  *		CatalogCacheInitializeCache
  *
  * This function does final initialization of a catcache: obtain the tuple
- * descriptor and set up the hash and equality function links.  We assume
- * that the relcache entry can be opened at this point!
+ * descriptor and set up the hash and equality function links.
  */
 #ifdef CACHEDEBUG
 #define CatalogCacheInitializeCache_DEBUG1 \
@@ -1194,8 +1223,7 @@ CatalogCacheInitializeCache(CatCache *cache)
 void
 InitCatCachePhase2(CatCache *cache, bool touch_index)
 {
-	if (cache->cc_tupdesc == NULL)
-		CatalogCacheInitializeCache(cache);
+	ConditionalCatalogCacheInitializeCache(cache);
 
 	if (touch_index &&
 		cache->id != AMOID &&
@@ -1374,16 +1402,12 @@ SearchCatCacheInternal(CatCache *cache,
 	dlist_head *bucket;
 	CatCTup    *ct;
 
-	/* Make sure we're in an xact, even if this ends up being a cache hit */
-	Assert(IsTransactionState());
-
 	Assert(cache->cc_nkeys == nkeys);
 
 	/*
 	 * one-time startup overhead for each cache
 	 */
-	if (unlikely(cache->cc_tupdesc == NULL))
-		CatalogCacheInitializeCache(cache);
+	ConditionalCatalogCacheInitializeCache(cache);
 
 #ifdef CATCACHE_STATS
 	cache->cc_searches++;
@@ -1638,7 +1662,7 @@ ReleaseCatCacheWithOwner(HeapTuple tuple, ResourceOwner resowner)
 
 	ct->refcount--;
 	if (resowner)
-		ResourceOwnerForgetCatCacheRef(CurrentResourceOwner, &ct->tuple);
+		ResourceOwnerForgetCatCacheRef(resowner, &ct->tuple);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -1669,8 +1693,7 @@ GetCatCacheHashValue(CatCache *cache,
 	/*
 	 * one-time startup overhead for each cache
 	 */
-	if (cache->cc_tupdesc == NULL)
-		CatalogCacheInitializeCache(cache);
+	ConditionalCatalogCacheInitializeCache(cache);
 
 	/*
 	 * calculate the hash value
@@ -1721,8 +1744,7 @@ SearchCatCacheList(CatCache *cache,
 	/*
 	 * one-time startup overhead for each cache
 	 */
-	if (unlikely(cache->cc_tupdesc == NULL))
-		CatalogCacheInitializeCache(cache);
+	ConditionalCatalogCacheInitializeCache(cache);
 
 	Assert(nkeys > 0 && nkeys < cache->cc_nkeys);
 
@@ -2083,7 +2105,7 @@ ReleaseCatCacheListWithOwner(CatCList *list, ResourceOwner resowner)
 	Assert(list->refcount > 0);
 	list->refcount--;
 	if (resowner)
-		ResourceOwnerForgetCatCacheListRef(CurrentResourceOwner, list);
+		ResourceOwnerForgetCatCacheListRef(resowner, list);
 
 	if (
 #ifndef CATCACHE_FORCE_RELEASE
@@ -2356,7 +2378,8 @@ void
 PrepareToInvalidateCacheTuple(Relation relation,
 							  HeapTuple tuple,
 							  HeapTuple newtuple,
-							  void (*function) (int, uint32, Oid))
+							  void (*function) (int, uint32, Oid, void *),
+							  void *context)
 {
 	slist_iter	iter;
 	Oid			reloid;
@@ -2391,13 +2414,12 @@ PrepareToInvalidateCacheTuple(Relation relation,
 			continue;
 
 		/* Just in case cache hasn't finished initialization yet... */
-		if (ccp->cc_tupdesc == NULL)
-			CatalogCacheInitializeCache(ccp);
+		ConditionalCatalogCacheInitializeCache(ccp);
 
 		hashvalue = CatalogCacheComputeTupleHashValue(ccp, ccp->cc_nkeys, tuple);
 		dbid = ccp->cc_relisshared ? (Oid) 0 : MyDatabaseId;
 
-		(*function) (ccp->id, hashvalue, dbid);
+		(*function) (ccp->id, hashvalue, dbid, context);
 
 		if (newtuple)
 		{
@@ -2406,7 +2428,7 @@ PrepareToInvalidateCacheTuple(Relation relation,
 			newhashvalue = CatalogCacheComputeTupleHashValue(ccp, ccp->cc_nkeys, newtuple);
 
 			if (newhashvalue != hashvalue)
-				(*function) (ccp->id, newhashvalue, dbid);
+				(*function) (ccp->id, newhashvalue, dbid, context);
 		}
 	}
 }
