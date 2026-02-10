@@ -3310,7 +3310,7 @@ ProcessInterrupts(void)
 #ifdef USE_INJECTION_POINTS
 	if (inside_smgr_api > 0)
 		{
-		INJECTION_POINT("SMGR_API");
+		INJECTION_POINT("SMGR_API", NULL);
 		}
 #endif
 
