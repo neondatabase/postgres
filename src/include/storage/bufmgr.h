@@ -325,6 +325,7 @@ extern int	GetAccessStrategyPinLimit(BufferAccessStrategy strategy);
 
 extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
+extern uint32 (*get_pin_limit_hook)(void);
 
 /* inline functions */
 

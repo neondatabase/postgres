@@ -66,6 +66,7 @@
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
 
+uint32 (*get_pin_limit_hook)(void);
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -2131,7 +2132,7 @@ LimitAdditionalPins(uint32 *additional_pins)
 		return;
 
 	max_backends = MaxBackends + NUM_AUXILIARY_PROCS;
-	max_proportional_pins = NBuffers / max_backends;
+	max_proportional_pins = get_pin_limit_hook ? get_pin_limit_hook() : NBuffers / max_backends;
 
 	/*
 	 * Subtract the approximate number of buffers already pinned by this
