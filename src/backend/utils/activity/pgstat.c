@@ -265,6 +265,8 @@ static bool pgstat_is_initialized = false;
 static bool pgstat_is_shutdown = false;
 #endif
 
+pgstat_report_stat_hook_type pgstat_report_stat_hook = NULL;
+
 
 /*
  * The different kinds of built-in statistics.
@@ -802,6 +804,8 @@ pgstat_report_stat(bool force)
 	pending_since = 0;
 	pgstat_report_fixed = false;
 
+	if (pgstat_report_stat_hook)
+		pgstat_report_stat_hook(force);
 	return 0;
 }
 

@@ -21,6 +21,12 @@ use Getopt::Long;
 my $output_path = '.';
 my $gen_docs = 0;
 my $gen_code = 0;
+my $nb_waitclass_table_entries = 0;
+my $nb_wait_events_with_null = 0;
+my $nb_wait_events_per_class = 0;
+my %waitclass_values;
+my $wait_event_class_mask = 0xFF000000;
+my $wait_event_id_mask = 0x0000FFFF;
 
 my $continue = "\n";
 my %hashwe;
@@ -38,10 +44,49 @@ die "Not possible to specify --docs and --code simultaneously"
 
 open my $wait_event_names, '<', $ARGV[0] or die;
 
+# When generating code, we need lwlocklist.h as the second argument
+my $lwlocklist_file = $ARGV[1] if $gen_code;
+
+# When generating code, we need wait_classes.h as the third argument
+my $wait_classes_file = $ARGV[2] if $gen_code;
+
 my @abi_compatibility_lines;
 my @lines;
 my $abi_compatibility = 0;
 my $section_name;
+
+# Function to parse wait_classes.h and extract wait class definitions
+sub parse_wait_classes_header
+{
+
+	open my $wait_classes_header, '<', $wait_classes_file
+	  or die "Could not open $wait_classes_file: $!";
+
+	while (<$wait_classes_header>)
+	{
+		chomp;
+		if (/^\s*#define\s+(PG_WAIT_\w+)\s+(0x[0-9A-Fa-f]+)U?\s*$/)
+		{
+			my ($macro_name, $value) = ($1, $2);
+
+			$waitclass_values{$macro_name} = $value;
+		}
+	}
+
+	close $wait_classes_header;
+}
+
+# Function to get the macro from the wait class name
+sub waitclass_to_macro
+{
+
+	my $waitclass = shift;
+	my $last = $waitclass;
+	$last =~ s/^WaitEvent//;
+	my $lastuc = uc $last;
+
+	return "PG_WAIT_" . $lastuc;
+}
 
 # Remove comments and empty lines and add waitclassname based on the section
 while (<$wait_event_names>)
@@ -84,8 +129,39 @@ while (<$wait_event_names>)
 
 # Sort the lines based on the second column.
 # uc() is being used to force the comparison to be case-insensitive.
-my @lines_sorted =
-  sort { uc((split(/\t/, $a))[1]) cmp uc((split(/\t/, $b))[1]) } @lines;
+
+my @lines_sorted;
+if ($gen_code)
+{
+	my @lwlock_lines;
+
+	# Separate LWLock lines from others
+	foreach my $line (@lines)
+	{
+		if ($line =~ /^WaitEventLWLock\t/)
+		{
+			push(@lwlock_lines, $line);
+		}
+		else
+		{
+			push(@lines_sorted, $line);
+		}
+	}
+
+	# Sort only non-LWLock lines
+	@lines_sorted =
+	  sort { uc((split(/\t/, $a))[1]) cmp uc((split(/\t/, $b))[1]) }
+	  @lines_sorted;
+
+	# Add LWLock lines back in their original order
+	push(@lines_sorted, @lwlock_lines);
+}
+else
+{
+	# For docs, use original alphabetical sorting for all
+	@lines_sorted =
+	  sort { uc((split(/\t/, $a))[1]) cmp uc((split(/\t/, $b))[1]) } @lines;
+}
 
 # If we are generating code, concat @lines_sorted and then
 # @abi_compatibility_lines.
@@ -165,9 +241,22 @@ if ($gen_code)
 
 ';
 
+	my $wait_event_class_shift = 0;
+	my $temp_mask = $wait_event_class_mask;
+	while (($temp_mask & 1) == 0 && $temp_mask != 0)
+	{
+		$wait_event_class_shift++;
+		$temp_mask >>= 1;
+	}
+
 	printf $h $header_comment, 'wait_event_types.h';
 	printf $h "#ifndef WAIT_EVENT_TYPES_H\n";
 	printf $h "#define WAIT_EVENT_TYPES_H\n\n";
+	printf $h "#define WAIT_EVENT_CLASS_MASK   0x%08X\n",
+	  $wait_event_class_mask;
+	printf $h "#define WAIT_EVENT_ID_MASK      0x%08X\n", $wait_event_id_mask;
+	printf $h "#define WAIT_EVENT_CLASS_SHIFT  %d\n\n",
+	  $wait_event_class_shift;
 	printf $h "#include \"utils/wait_classes.h\"\n\n";
 
 	printf $c $header_comment, 'pgstat_wait_event.c';
@@ -269,6 +358,170 @@ if ($gen_code)
 		}
 	}
 
+	printf $h "
+
+/* To represent wait_event_info as integers */
+typedef struct DecodedWaitInfo
+{
+        int classId;
+        int eventId;
+} DecodedWaitInfo;
+
+/* To extract classId and eventId as integers from wait_event_info */
+#define WAIT_EVENT_INFO_DECODE(d, i) \\
+    d.classId = ((i) & WAIT_EVENT_CLASS_MASK) / (WAIT_EVENT_CLASS_MASK & (-WAIT_EVENT_CLASS_MASK)), \\
+    d.eventId = (i) & WAIT_EVENT_ID_MASK
+
+/* To encode wait_event_info from classId and eventId as integers */
+#define ENCODE_WAIT_EVENT_INFO(classId, eventId) \\
+	(((classId) << WAIT_EVENT_CLASS_SHIFT) | ((eventId) & WAIT_EVENT_ID_MASK))
+
+/* To map wait event classes into the WaitClassTable */
+typedef struct
+{
+	const int classId;
+	const int numberOfEvents;
+	const int offSet;
+	const char *className;
+	const char *const *eventNames;
+} WaitClassTableEntry;
+
+extern WaitClassTableEntry WaitClassTable[];\n\n";
+
+	printf $c "
+/*
+ * Lookup table that is used by the wait events statistics.
+ * Indexed by classId (derived from the PG_WAIT_* constants), handle gaps
+ * in the class ID numbering and provide metadata for wait events.
+ */
+WaitClassTableEntry WaitClassTable[] = {\n";
+
+	parse_wait_classes_header();
+	my $next_index = 0;
+	my $class_divisor = $wait_event_class_mask & (-$wait_event_class_mask);
+
+	foreach my $waitclass (
+		sort {
+			my $macro_a = waitclass_to_macro($a);
+			my $macro_b = waitclass_to_macro($b);
+			hex($waitclass_values{$macro_a}) <=>
+			  hex($waitclass_values{$macro_b})
+		} keys %hashwe)
+	{
+		my $event_names_array;
+		my $array_size;
+		my $last = $waitclass;
+		$last =~ s/^WaitEvent//;
+
+		$nb_waitclass_table_entries++;
+
+		# The LWLocks need to be handled differently than the other classes when
+		# building the WaitClassTable. We need to take care of the prefedined
+		# LWLocks as well as the additional ones.
+		if ($waitclass eq 'WaitEventLWLock')
+		{
+			# Parse lwlocklist.h to get LWLock definitions
+			open my $lwlocklist, '<', $lwlocklist_file
+			  or die "Could not open $lwlocklist_file: $!";
+
+			my %predefined_lwlock_indices;
+			my $max_lwlock_index = -1;
+
+			while (<$lwlocklist>)
+			{
+				if (/^PG_LWLOCK\((\d+),\s+(\w+)\)$/)
+				{
+					my ($lockidx, $lockname) = ($1, $2);
+					$predefined_lwlock_indices{$lockname} = $lockidx;
+					$max_lwlock_index = $lockidx
+					  if $lockidx > $max_lwlock_index;
+				}
+			}
+
+			close $lwlocklist;
+
+			# Iterates through wait_event_names.txt order
+			my @event_names_sparse;
+			my $next_additional_index = $max_lwlock_index + 1;
+
+			foreach my $wev (@{ $hashwe{$waitclass} })
+			{
+				my $lockname = $wev->[1];
+
+				if (exists $predefined_lwlock_indices{$lockname})
+				{
+					# This is a predefined one, place it at its specific index
+					my $index = $predefined_lwlock_indices{$lockname};
+					$event_names_sparse[$index] = "\"$lockname\"";
+				}
+				else
+				{
+					# This is an additional one, append it after predefined ones
+					$event_names_sparse[$next_additional_index] =
+					  "\"$lockname\"";
+					$next_additional_index++;
+				}
+			}
+
+			# Fill gaps with NULL for missing predefined locks
+			for my $i (0 .. $max_lwlock_index)
+			{
+				$event_names_sparse[$i] = "NULL"
+				  unless defined $event_names_sparse[$i];
+			}
+
+			# Build the array literal
+			$event_names_array = "(const char *const []){"
+			  . join(", ", @event_names_sparse) . "}";
+			$array_size = scalar(@event_names_sparse);
+		}
+		else
+		{
+			# Construct a simple string array literal for this class
+			$event_names_array = "(const char *const []){";
+
+			# For each wait event in this class, add its name to the array
+			foreach my $wev (@{ $hashwe{$waitclass} })
+			{
+				$event_names_array .= "\"$wev->[1]\", ";
+			}
+
+			$event_names_array .= "}";
+			$array_size = scalar(@{ $hashwe{$waitclass} });
+		}
+
+		my $lastuc = uc $last;
+		my $pg_wait_class = "PG_WAIT_" . $lastuc;
+
+		my $index = hex($waitclass_values{$pg_wait_class}) / $class_divisor;
+
+		# Fill any holes with {0, 0, 0, NULL, NULL}
+		while ($next_index < $index)
+		{
+			printf $c "{0, 0, 0, NULL, NULL},\n";
+			$next_index++;
+			$nb_waitclass_table_entries++;
+		}
+
+		my $offset = $nb_wait_events_with_null;
+		$nb_wait_events_with_null += $array_size;
+
+		# Generate the entry
+		printf $c "{$pg_wait_class, $array_size, $offset, \"%s\", %s},\n",
+		  $last, $event_names_array;
+
+		$next_index = $index + 1;
+	}
+
+	printf $c "};\n\n";
+
+	printf $h "#define NB_WAITCLASSTABLE_SIZE $nb_wait_events_with_null\n";
+	printf $h
+	  "#define NB_WAITCLASSTABLE_ENTRIES $nb_waitclass_table_entries\n\n";
+	printf $h
+	  "StaticAssertDecl(NB_WAITCLASSTABLE_SIZE > 0, \"Wait class table must have entries\");\n";
+	printf $h
+	  "StaticAssertDecl(NB_WAITCLASSTABLE_ENTRIES > 0, \"Must have at least one wait class\");\n";
 	printf $h "#endif                          /* WAIT_EVENT_TYPES_H */\n";
 	close $h;
 	close $c;

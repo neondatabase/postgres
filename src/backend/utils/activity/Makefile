@@ -45,8 +45,8 @@ wait_event.o: pgstat_wait_event.c
 pgstat_wait_event.c: wait_event_types.h
 	touch $@
 
-wait_event_types.h: $(top_srcdir)/src/backend/utils/activity/wait_event_names.txt generate-wait_event_types.pl
-	$(PERL) $(srcdir)/generate-wait_event_types.pl --code $<
+wait_event_types.h: $(top_srcdir)/src/backend/utils/activity/wait_event_names.txt $(top_srcdir)/src/include/storage/lwlocklist.h $(top_srcdir)/src/include/utils/wait_classes.h generate-wait_event_types.pl
+	$(PERL) $(srcdir)/generate-wait_event_types.pl --code $(wordlist 1,3,$^)
 
 clean:
 	rm -f wait_event_types.h pgstat_wait_event.c wait_event_funcs_data.c
