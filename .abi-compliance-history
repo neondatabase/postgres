@@ -18,6 +18,43 @@
 # Be sure to replace "<ADD JUSTIFICATION HERE>" with details of your change and
 # why it is deemed acceptable.
 
+e37b598028469d260650e5e1671c8275d30e22b6
+#
+# Add file_extend_method=posix_fallocate,write_zeros.
+# 2026-02-06 17:43:49 +1300
+#
+# Modifying GUC tables isn't really an ABI break: the relevant object has
+# incomplete type so its layout is unknown to other C translation units.
+#
+# Discussion: https://www.postgresql.org/message-id/flat/e1f0cd3b-0164-45f5-9705-e922e59df90f%40dunslane.net#8a350b54012c0042f9869d288e978cfe
+
+e7391bbf14db94afee1fd3c011314f7b8ee493e9
+#
+# Fix trigger transition table capture for MERGE in CTE queries.
+# 2026-01-24 11:30:50 +0000
+#
+# This commit changed the TransitionCaptureState structure, replacing
+# the "tcs_private" field with 3 separate fields. This structure can
+# only be built using MakeTransitionCaptureState(), and PGXN contained
+# no calls to MakeTransitionCaptureState() or uses of the
+# TransitionCaptureState structure.
+
+1d7b02711f70f1ae87be562bca11ea2a9c43e85b
+#
+# For inplace update, send nontransactional invalidations.
+# 2025-12-16 16:13:55 -0800
+#
+# This changed PrepareToInvalidateCacheTuple() parameters.  PGXN contained no
+# calls to that function.
+
+d20abb5876ab61a627d80131b2cb78d9652557e3
+#
+# Check for CREATE privilege on the schema in CREATE STATISTICS.
+# 2025-11-10 09:00:00 -0600
+#
+# This commit added a parameter to CreateStatistics().  We are unaware of any
+# impacted third-party code.
+
 b2ae077205e18ac3e6d7bc5f7a6fa25a39323ec0
 #
 # Fix re-distributing previously distributed invalidation messages during logical decoding.
