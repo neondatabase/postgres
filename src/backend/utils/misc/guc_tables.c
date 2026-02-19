@@ -2183,6 +2183,15 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"prohibit_superuser_overrides", PGC_SUSET, CLIENT_CONN_STATEMENT,
+		 gettext_noop("Prevent overriding of functions defined by superuser by non-superuser candidates."),
+		},
+		&prohibit_superuser_overrides,
+		false,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, false, NULL, NULL, NULL
