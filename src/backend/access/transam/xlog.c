@@ -692,7 +692,6 @@ static XLogRecPtr CreateOverwriteContrecordRecord(XLogRecPtr aborted_lsn,
 static void PreCheckPointGuts(int flags);
 static void CheckPointGuts(XLogRecPtr checkPointRedo, int flags);
 static void KeepLogSeg(XLogRecPtr recptr, XLogSegNo *logSegNo);
-static XLogRecPtr XLogGetReplicationSlotMinimumLSN(void);
 
 static void AdvanceXLInsertBuffer(XLogRecPtr upto, TimeLineID tli,
 								  bool opportunistic);
@@ -2707,7 +2706,7 @@ XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn)
  * Return the oldest LSN we must retain to satisfy the needs of some
  * replication slot.
  */
-static XLogRecPtr
+XLogRecPtr
 XLogGetReplicationSlotMinimumLSN(void)
 {
 	XLogRecPtr	retval;
@@ -8028,6 +8027,9 @@ CreateRestartPoint(int flags)
 	replayPtr = GetXLogReplayRecPtr(&replayTLI);
 	endptr = (receivePtr < replayPtr) ? replayPtr : receivePtr;
 	KeepLogSeg(endptr, &_logSegNo);
+
+	INJECTION_POINT("restartpoint-before-slot-invalidation", NULL);
+
 	if (InvalidateObsoleteReplicationSlots(RS_INVAL_WAL_REMOVED | RS_INVAL_IDLE_TIMEOUT,
 										   _logSegNo, InvalidOid,
 										   InvalidTransactionId))
