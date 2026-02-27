@@ -28,6 +28,10 @@
 #include "datatype/timestamp.h" /* for TimestampTz */
 #include "pgtime.h"				/* for pg_time_t */
 
+#ifdef USE_INJECTION_POINTS
+#include "utils/injection_point.h"
+#endif
+
 
 #define InvalidPid				(-1)
 
@@ -123,9 +127,21 @@ extern process_interrupts_callback_t ProcessInterruptsCallback;
 	 unlikely(InterruptPending))
 #endif
 
+#ifdef USE_INJECTION_POINTS
+/* Run injection point when inside smgr API; used by CHECK_FOR_INTERRUPTS */
+#define CHECK_FOR_INTERRUPTS_SMGR_INJECTION() \
+	do { \
+		if (INTERRUPTS_CAN_BE_PROCESSED() && inside_smgr_api > 0) \
+			INJECTION_POINT("SMGR_API"); \
+	} while(0)
+#else
+#define CHECK_FOR_INTERRUPTS_SMGR_INJECTION()  ((void)0)
+#endif
+
 /* Service interrupt, if one is pending and it's safe to service it now */
 #define CHECK_FOR_INTERRUPTS() \
 do { \
+	CHECK_FOR_INTERRUPTS_SMGR_INJECTION(); \
 	if (INTERRUPTS_PENDING_CONDITION()) \
 		ProcessInterrupts(); \
 } while(0)
