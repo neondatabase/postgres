@@ -69,6 +69,7 @@
 #include "utils/resowner.h"
 #include "utils/timestamp.h"
 
+uint32 (*get_pin_limit_hook)(void);
 
 /* Note: these two macros only work on shared buffers, not local ones! */
 #define BufHdrGetBlock(bufHdr)	((Block) (BufferBlocks + ((Size) (bufHdr)->buf_id) * BLCKSZ))
@@ -2527,7 +2528,7 @@ again:
 uint32
 GetPinLimit(void)
 {
-	return MaxProportionalPins;
+	return get_pin_limit_hook ? get_pin_limit_hook() : MaxProportionalPins;
 }
 
 /*
