@@ -3307,12 +3307,6 @@ ProcessInterrupts(void)
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
 	InterruptPending = false;
-#ifdef USE_INJECTION_POINTS
-	if (inside_smgr_api > 0)
-		{
-		INJECTION_POINT("SMGR_API", NULL);
-		}
-#endif
 
 retry:
 	if (ProcDiePending)
