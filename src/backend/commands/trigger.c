@@ -355,7 +355,8 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		}
 
 		// We also prevent users from creating triggers on tables in the anon schema
-		if (strcmp(get_namespace_name(get_rel_namespace(relOid)), "anon") == 0) {
+		char* namespace_name = get_namespace_name(get_rel_namespace(RelationGetRelid(rel)));
+		if (namespace_name != NULL && (strcmp(namespace_name, "anon") == 0)) {
 			aclcheck_error(ACLCHECK_NO_PRIV, get_relkind_objtype(rel->rd_rel->relkind),
 						   RelationGetRelationName(rel));
 		}
