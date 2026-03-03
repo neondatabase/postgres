@@ -451,7 +451,7 @@ SELECT wal_bytes > :backend_wal_bytes_before FROM pg_stat_get_backend_wal(pg_bac
 -- Test pg_stat_get_backend_idset() and some allied functions.
 -- In particular, verify that their notion of backend ID matches
 -- our temp schema index.
-SELECT (current_schemas(true))[1] = ('pg_temp_' || beid::text) AS match
+SELECT (current_schemas(true))[2] = ('pg_temp_' || beid::text) AS match
 FROM pg_stat_get_backend_idset() beid
 WHERE pg_stat_get_backend_pid(beid) = pg_backend_pid();
 
