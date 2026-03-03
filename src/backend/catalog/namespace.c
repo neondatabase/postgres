@@ -210,7 +210,7 @@ static SubTransactionId myTempNamespaceSubID = InvalidSubTransactionId;
  * of the GUC variable 'search_path'.
  */
 char	   *namespace_search_path = NULL;
-bool		prohibit_superuser_overrides;
+bool		prohibit_superuser_overrides = true;
 
 /* Local functions */
 static bool RelationIsVisibleExt(Oid relid, bool *is_missing);
