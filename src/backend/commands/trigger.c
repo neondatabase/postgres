@@ -206,6 +206,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 	Oid			existing_constraint_oid = InvalidOid;
 	bool		existing_isInternal = false;
 	bool		existing_isClone = false;
+	char* 	   *namespace_name = NULL;
 
 	if (OidIsValid(relOid))
 		rel = table_open(relOid, ShareRowExclusiveLock);
@@ -355,7 +356,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		}
 
 		// We also prevent users from creating triggers on tables in the anon schema
-		char* namespace_name = get_namespace_name(get_rel_namespace(RelationGetRelid(rel)));
+		namespace_name = get_namespace_name(get_rel_namespace(RelationGetRelid(rel)));
 		if (namespace_name != NULL && (strcmp(namespace_name, "anon") == 0)) {
 			ereport(ERROR,
               (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
