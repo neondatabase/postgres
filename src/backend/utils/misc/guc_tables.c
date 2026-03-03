@@ -2188,7 +2188,7 @@ struct config_bool ConfigureNamesBool[] =
 		 gettext_noop("Prevent overriding of functions defined by superuser by non-superuser candidates."),
 		},
 		&prohibit_superuser_overrides,
-		false,
+		true,
 		NULL, NULL, NULL
 	},
 
