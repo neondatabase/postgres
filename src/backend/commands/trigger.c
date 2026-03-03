@@ -206,7 +206,7 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 	Oid			existing_constraint_oid = InvalidOid;
 	bool		existing_isInternal = false;
 	bool		existing_isClone = false;
-	char* 	   *namespace_name = NULL;
+	char 	   *namespace_name = NULL;
 
 	if (OidIsValid(relOid))
 		rel = table_open(relOid, ShareRowExclusiveLock);
