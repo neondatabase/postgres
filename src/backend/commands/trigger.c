@@ -353,6 +353,12 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 				aclcheck_error(aclresult, get_relkind_objtype(get_rel_relkind(constrrelid)),
 							   get_rel_name(constrrelid));
 		}
+
+		// We also prevent users from creating triggers on tables in the anon schema
+		if (strcmp(get_namespace_name(get_rel_namespace(relOid)), "anon") == 0) {
+			aclcheck_error(ACLCHECK_NO_PRIV, get_relkind_objtype(rel->rd_rel->relkind),
+						   RelationGetRelationName(rel));
+		}
 	}
 
 	/*
