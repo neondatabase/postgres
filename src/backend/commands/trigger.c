@@ -357,8 +357,11 @@ CreateTriggerFiringOn(CreateTrigStmt *stmt, const char *queryString,
 		// We also prevent users from creating triggers on tables in the anon schema
 		char* namespace_name = get_namespace_name(get_rel_namespace(RelationGetRelid(rel)));
 		if (namespace_name != NULL && (strcmp(namespace_name, "anon") == 0)) {
-			aclcheck_error(ACLCHECK_NO_PRIV, get_relkind_objtype(rel->rd_rel->relkind),
-						   RelationGetRelationName(rel));
+			ereport(ERROR,
+              (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+               errmsg("cannot create trigger on relation \"%s\": "
+                      "triggers on the anon schema are not permitted",
+                      RelationGetRelationName(rel))));
 		}
 	}
 
