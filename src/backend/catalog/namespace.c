@@ -4262,12 +4262,16 @@ finalNamespacePath(List *oidlist, Oid *firstNS)
 	 * the front, not the back; also notice that we do not check USAGE
 	 * permissions for these.
 	 */
-	if (!list_member_oid(finalPath, PG_CATALOG_NAMESPACE) || prohibit_superuser_overrides)
+	if (!list_member_oid(finalPath, PG_CATALOG_NAMESPACE))
 		finalPath = lcons_oid(PG_CATALOG_NAMESPACE, finalPath);
 
 	if (OidIsValid(myTempNamespace) &&
 		!list_member_oid(finalPath, myTempNamespace))
 		finalPath = lcons_oid(myTempNamespace, finalPath);
+
+	/* Always place pg_catalog at the beginning of search path */
+	if (prohibit_superuser_overrides && superuser())
+		finalPath = lcons_oid(PG_CATALOG_NAMESPACE, finalPath);
 
 	return finalPath;
 }
