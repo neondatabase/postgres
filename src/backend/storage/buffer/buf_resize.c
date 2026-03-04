@@ -29,6 +29,7 @@
 #include "storage/pmsignal.h"
 #include "storage/procsignal.h"
 #include "storage/shmem.h"
+#include "utils/fmgrprotos.h"
 #include "utils/injection_point.h"
 
 
@@ -219,13 +220,14 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 
 		/* Evict buffers in the area being shrunk */
 		elog(LOG, "evicting buffers %u..%u", targetNBuffers + 1, currentNBuffers);
-		if (!EvictExtraBuffers(targetNBuffers, currentNBuffers))
+		while (!EvictExtraBuffers(targetNBuffers, currentNBuffers))
 		{
-			elog(WARNING, "failed to evict extra buffers during shrinking");
-			SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED));
-			MarkBufferResizingEnd(currentNBuffers);
-			pg_atomic_clear_flag(&ShmemCtrl->resize_in_progress);
-			PG_RETURN_BOOL(false);
+			pg_usleep(1000);
+			// elog(WARNING, "failed to evict extra buffers during shrinking");
+			// SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED));
+			// MarkBufferResizingEnd(currentNBuffers);
+			// pg_atomic_clear_flag(&ShmemCtrl->resize_in_progress);
+			// PG_RETURN_BOOL(false);
 		}
 
 		/*
@@ -337,6 +339,19 @@ ProcessBarrierShmemResizeMapAndMem(void)
 	int			currentNBuffers = pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
 
 	Assert(!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
+
+	/*
+	 * If this process is in the middle of BufferSync (e.g. checkpointer), do
+	 * not process the barrier yet.  The coordinator has already remapped;
+	 * if we validated or used buffer pointers now we could touch memory that
+	 * was unmapped/remapped and get SIGBUS.  Defer until BufferSync completes.
+	 */
+	if (delay_shmem_resize)
+	{
+		elog(LOG, "Phase 2: Delaying SHBUF_RESIZE_MAP_AND_MEM barrier - checkpoint/buffer sync in progress, coordinator is %d",
+			 ShmemCtrl->coordinator);
+		return false;
+	}
 
 	/*
 	 * If buffer pool is being shrunk, we are already working with a smaller
