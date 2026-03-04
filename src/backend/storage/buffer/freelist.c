@@ -187,10 +187,11 @@ ClockSweepTick(void)
 bool
 have_free_buffer(void)
 {
-	if (StrategyControl->firstFreeBuffer >= 0)
-		return true;
-	else
-		return false;
+	return false;
+	// if (StrategyControl->firstFreeBuffer >= 0)
+	// 	return true;
+	// else
+	// 	return false;
 }
 
 /*
@@ -278,51 +279,51 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	 * buffer_strategy_lock not the individual buffer spinlocks, so it's OK to
 	 * manipulate them without holding the spinlock.
 	 */
-	if (StrategyControl->firstFreeBuffer >= 0)
-	{
-		while (true)
-		{
-			/* Acquire the spinlock to remove element from the freelist */
-			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	// if (StrategyControl->firstFreeBuffer >= 0)
+	// {
+	// 	while (true)
+	// 	{
+	// 		/* Acquire the spinlock to remove element from the freelist */
+	// 		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-			if (StrategyControl->firstFreeBuffer < 0)
-			{
-				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-				break;
-			}
+	// 		if (StrategyControl->firstFreeBuffer < 0)
+	// 		{
+	// 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	// 			break;
+	// 		}
 
-			buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
-			Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+	// 		buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
+	// 		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 
-			/* Unconditionally remove buffer from freelist */
-			StrategyControl->firstFreeBuffer = buf->freeNext;
-			buf->freeNext = FREENEXT_NOT_IN_LIST;
+	// 		/* Unconditionally remove buffer from freelist */
+	// 		StrategyControl->firstFreeBuffer = buf->freeNext;
+	// 		buf->freeNext = FREENEXT_NOT_IN_LIST;
 
-			/*
-			 * Release the lock so someone else can access the freelist while
-			 * we check out this buffer.
-			 */
-			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	// 		/*
+	// 		 * Release the lock so someone else can access the freelist while
+	// 		 * we check out this buffer.
+	// 		 */
+	// 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 
-			/*
-			 * If the buffer is pinned or has a nonzero usage_count, we cannot
-			 * use it; discard it and retry.  (This can only happen if VACUUM
-			 * put a valid buffer in the freelist and then someone else used
-			 * it before we got to it.  It's probably impossible altogether as
-			 * of 8.3, but we'd better check anyway.)
-			 */
-			local_buf_state = LockBufHdr(buf);
-			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
-			{
-				if (strategy != NULL)
-					AddBufferToRing(strategy, buf);
-				*buf_state = local_buf_state;
-				return buf;
-			}
-			UnlockBufHdr(buf, local_buf_state);
-		}
-	}
+	// 		/*
+	// 		 * If the buffer is pinned or has a nonzero usage_count, we cannot
+	// 		 * use it; discard it and retry.  (This can only happen if VACUUM
+	// 		 * put a valid buffer in the freelist and then someone else used
+	// 		 * it before we got to it.  It's probably impossible altogether as
+	// 		 * of 8.3, but we'd better check anyway.)
+	// 		 */
+	// 		local_buf_state = LockBufHdr(buf);
+	// 		if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
+	// 			&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
+	// 		{
+	// 			if (strategy != NULL)
+	// 				AddBufferToRing(strategy, buf);
+	// 			*buf_state = local_buf_state;
+	// 			return buf;
+	// 		}
+	// 		UnlockBufHdr(buf, local_buf_state);
+	// 	}
+	// }
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
 	trycounter = NBuffers;
@@ -375,21 +376,21 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 void
 StrategyFreeBuffer(BufferDesc *buf)
 {
-	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	// SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-	/*
-	 * It is possible that we are told to put something in the freelist that
-	 * is already in it; don't screw up the list if so.
-	 */
-	if (buf->freeNext == FREENEXT_NOT_IN_LIST)
-	{
-		buf->freeNext = StrategyControl->firstFreeBuffer;
-		if (buf->freeNext < 0)
-			StrategyControl->lastFreeBuffer = buf->buf_id;
-		StrategyControl->firstFreeBuffer = buf->buf_id;
-	}
+	// /*
+	//  * It is possible that we are told to put something in the freelist that
+	//  * is already in it; don't screw up the list if so.
+	//  */
+	// if (buf->freeNext == FREENEXT_NOT_IN_LIST)
+	// {
+	// 	buf->freeNext = StrategyControl->firstFreeBuffer;
+	// 	if (buf->freeNext < 0)
+	// 		StrategyControl->lastFreeBuffer = buf->buf_id;
+	// 	StrategyControl->firstFreeBuffer = buf->buf_id;
+	// }
 
-	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	// SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /*

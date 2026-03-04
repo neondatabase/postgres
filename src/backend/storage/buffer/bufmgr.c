@@ -3676,6 +3676,7 @@ static float smoothed_density = 10.0;
 void
 BgBufferSyncReset(int currentNBuffers, int targetNBuffers)
 {
+	elog(LOG, "BgBufferSyncReset: currentNBuffers=%d, targetNBuffers=%d", currentNBuffers, targetNBuffers);
 	saved_info_valid = false;
 #ifdef BGW_DEBUG
 	elog(DEBUG2, "invalidated background writer status after resizing buffers from %d to %d",
@@ -3779,6 +3780,12 @@ BgBufferSync(WritebackContext *wb_context)
 		strategy_delta = strategy_buf_id - prev_strategy_buf_id;
 		strategy_delta += (long) passes_delta * NBuffers;
 
+		if (strategy_delta < 0)
+		{
+			elog(LOG, "strategy_delta < 0: strategy_delta=%ld, prev_strategy_buf_id=%d, strategy_buf_id=%d, passes_delta=%d, strategy_passes=%u, prev_strategy_passes=%u, NBuffers=%d",
+				 strategy_delta, prev_strategy_buf_id, strategy_buf_id, passes_delta, strategy_passes, prev_strategy_passes, NBuffers);
+		}
+
 		Assert(strategy_delta >= 0);
 
 		if ((int32) (next_passes - strategy_passes) > 0)
@@ -3840,7 +3847,7 @@ BgBufferSync(WritebackContext *wb_context)
 	/* Update saved info for next time */
 	prev_strategy_buf_id = strategy_buf_id;
 	prev_strategy_passes = strategy_passes;
-	saved_info_valid = true;
+	saved_info_valid = false;
 
 	/*
 	 * Compute how many buffers had to be scanned for each new allocation, ie,
