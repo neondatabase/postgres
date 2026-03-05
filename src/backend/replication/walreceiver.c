@@ -995,6 +995,13 @@ XLogWalRcvFlush(bool dying, TimeLineID tli)
 {
 	Assert(tli != 0);
 
+	if (dying)
+	{
+		ereport(LOG,
+				(errmsg("stop streaming WAL from primary at %X/%X on timeline %u",
+						LSN_FORMAT_ARGS(LogstreamResult.Write), tli)));
+	}
+
 	if (LogstreamResult.Flush < LogstreamResult.Write)
 	{
 		WalRcvData *walrcv = WalRcv;
