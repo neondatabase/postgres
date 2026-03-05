@@ -967,6 +967,13 @@ XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr)
 static void
 XLogWalRcvFlush(bool dying)
 {
+	if (dying)
+	{
+		ereport(LOG,
+				(errmsg("stop streaming WAL from primary at %X/%X on timeline %u",
+						LSN_FORMAT_ARGS(LogstreamResult.Write), ThisTimeLineID)));
+	}
+
 	if (LogstreamResult.Flush < LogstreamResult.Write)
 	{
 		WalRcvData *walrcv = WalRcv;
