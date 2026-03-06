@@ -59,10 +59,10 @@ SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
 (1 row)
 
 -- Calling pg_resize_shared_buffers() without changing shared_buffers should be a no-op.
-SELECT pg_resize_shared_buffers();
- pg_resize_shared_buffers 
---------------------------
- t
+SELECT * FROM pg_resize_shared_buffers();
+       phase        | elapsed_time 
+--------------------+--------------
+ no resize          |         0.00
 (1 row)
 
 SHOW shared_buffers;
@@ -111,11 +111,12 @@ SHOW shared_buffers;
  128MB (pending: 64MB)
 (1 row)
 
-SELECT pg_resize_shared_buffers();
- pg_resize_shared_buffers 
---------------------------
- t
-(1 row)
+SELECT * FROM pg_resize_shared_buffers();
+       phase        | elapsed_time 
+--------------------+--------------
+ Phase 1: Shrinking |         0.00
+ Phase 2: Remapping |         0.00
+(2 rows)
 
 SHOW shared_buffers;
  shared_buffers 
@@ -163,11 +164,12 @@ SHOW shared_buffers;
  64MB (pending: 256MB)
 (1 row)
 
-SELECT pg_resize_shared_buffers();
- pg_resize_shared_buffers 
---------------------------
- t
-(1 row)
+SELECT * FROM pg_resize_shared_buffers();
+       phase        | elapsed_time 
+--------------------+--------------
+ Phase 2: Remapping |         0.00
+ Phase 3: Expanding|         0.00
+(2 rows)
 
 SHOW shared_buffers;
  shared_buffers 
@@ -215,11 +217,12 @@ SHOW shared_buffers;
  256MB (pending: 100MB)
 (1 row)
 
-SELECT pg_resize_shared_buffers();
- pg_resize_shared_buffers 
---------------------------
- t
-(1 row)
+SELECT * FROM pg_resize_shared_buffers();
+       phase        | elapsed_time 
+--------------------+--------------
+ Phase 1: Shrinking |         0.00
+ Phase 2: Remapping |         0.00
+(2 rows)
 
 SHOW shared_buffers;
  shared_buffers 
@@ -267,11 +270,12 @@ SHOW shared_buffers;
  100MB (pending: 128kB)
 (1 row)
 
-SELECT pg_resize_shared_buffers();
- pg_resize_shared_buffers 
---------------------------
- t
-(1 row)
+SELECT * FROM pg_resize_shared_buffers();
+       phase        | elapsed_time 
+--------------------+--------------
+ Phase 1: Shrinking |         0.00
+ Phase 2: Remapping |         0.00
+(2 rows)
 
 SHOW shared_buffers;
  shared_buffers 

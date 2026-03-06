@@ -23,8 +23,9 @@ sub apply_and_verify_buffer_change
 	my $retry_delay = 1; # seconds
 	my $success = 0;
 	for my $attempt (1..$max_retries) {
-		my $result = $node->safe_psql('postgres', "SELECT pg_resize_shared_buffers()");
-		if ($result eq 't') {
+		my $result = $node->safe_psql('postgres', "SELECT * FROM pg_resize_shared_buffers()");
+		# Success: got phase rows and no "resize already in progress"
+		if ($result !~ /resize already in progress/ && $result =~ /phase|Phase|no resize/) {
 			$success = 1;
 			last;
 		}

@@ -12556,9 +12556,9 @@
   prosrc => 'pg_get_aios' },
 
 { oid => '9999', descr => 'resize shared buffers according to the value of GUC `shared_buffers`',
-  proname => 'pg_resize_shared_buffers',
-  provolatile => 'v',
-  prorettype => 'bool',
-  proargtypes => '',
+  proname => 'pg_resize_shared_buffers', prorows => '10', proretset => 't',
+  provolatile => 'v', prorettype => 'record', proargtypes => '',
+  proallargtypes => '{text,float8}', proargmodes => '{o,o}',
+  proargnames => '{phase,elapsed_time}',
   prosrc => 'pg_resize_shared_buffers'},
 ]

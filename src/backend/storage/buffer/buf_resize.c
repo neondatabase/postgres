@@ -19,8 +19,12 @@
 
 #include "postgres.h"
 
+#include <math.h>
+
 #include "fmgr.h"
+#include "funcapi.h"
 #include "miscadmin.h"
+#include "portability/instr_time.h"
 #include "postmaster/bgwriter.h"
 #include "storage/bufmgr.h"
 #include "storage/buf_internals.h"
@@ -31,7 +35,36 @@
 #include "storage/shmem.h"
 #include "utils/fmgrprotos.h"
 #include "utils/injection_point.h"
+#include "utils/builtins.h"
 
+#define PG_RESIZE_SHMEM_BUFFERS_COLS 2
+
+/*
+ * Emit one (phase, elapsed_sec) row into the result set.
+ * elapsed_sec is in seconds; set elapsed_null true to emit NULL for elapsed time.
+ */
+static void
+EmitResizePhaseRow(ReturnSetInfo *rsinfo, const char *phase, double elapsed_sec,
+				   bool elapsed_null)
+{
+	Datum		values[PG_RESIZE_SHMEM_BUFFERS_COLS];
+	bool		nulls[PG_RESIZE_SHMEM_BUFFERS_COLS];
+
+	values[0] = CStringGetTextDatum(phase);
+	nulls[0] = false;
+	if (elapsed_null)
+	{
+		nulls[1] = true;
+		values[1] = (Datum) 0;
+	}
+	else
+	{
+		nulls[1] = false;
+		/* Round to 2 decimal places for stable regression output */
+		values[1] = Float8GetDatum(round(elapsed_sec * 100.0) / 100.0);
+	}
+	tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+}
 
 /*
  * Prepare ShmemCtrl for resizing the shared buffer pool.
@@ -106,6 +139,129 @@ SharedBufferResizeBarrier(ProcSignalBarrierType barrier, const char *barrier_nam
 }
 
 /*
+ * Perform the entire shrink path: Phase 1 (SHBUF_SHRINK, evict, shrink
+ * structures) then Phase 2 (remap shared memory segments). Emits phase rows
+ * with elapsed time for each.
+ */
+static void
+DoShrink(ReturnSetInfo *rsinfo, int currentNBuffers, int targetNBuffers,
+		 MemoryMappingSizes *mapping_sizes)
+{
+	instr_time	shrink_start;
+	instr_time	shrink_end;
+
+	instr_time	phase_start;
+	instr_time	phase_end;
+	int			i;
+
+	/* Phase 1: Shrinking */
+	elog(LOG, "Phase 1: Shrinking buffer pool, restricting allocations to %d buffers", targetNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	INSTR_TIME_SET_CURRENT(shrink_start);
+	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_SHRINK, CppAsString(PROCSIGNAL_BARRIER_SHBUF_SHRINK));
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 1: Barrier-1", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	elog(LOG, "evicting buffers %u..%u", targetNBuffers + 1, currentNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	while (!EvictExtraBuffers(targetNBuffers, currentNBuffers))
+	{
+		pg_usleep(1000);
+		// elog(WARNING, "failed to evict extra buffers during shrinking");
+		// SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED));
+		// MarkBufferResizingEnd(currentNBuffers);
+		// pg_atomic_clear_flag(&ShmemCtrl->resize_in_progress);
+		// PG_RETURN_BOOL(false);
+	}
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 1: Evicting", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	INSTR_TIME_SET_CURRENT(phase_start);
+	BufferManagerShmemResize(currentNBuffers, targetNBuffers);
+	pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 1: ShmemResize", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	/* Phase 2: Remapping */
+	elog(LOG, "Phase 2: Remapping shared memory segments and updating structures");
+	INSTR_TIME_SET_CURRENT(phase_start);
+	for (i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		if (i == MAIN_SHMEM_SEGMENT)
+			continue;
+		if (!PGSharedMemoryResize(i, &mapping_sizes[i]))
+			elog(PANIC, "failed to resize anonymous shared memory");
+	}
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 2: ftruncate", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	INJECTION_POINT("pgrsb-after-shmem-resize", NULL);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM));
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 2: barrier-2", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	INSTR_TIME_SET_CURRENT(shrink_end);
+	INSTR_TIME_SUBTRACT(shrink_end, shrink_start);
+	EmitResizePhaseRow(rsinfo, "Total Shrink", INSTR_TIME_GET_DOUBLE(shrink_end), false);
+}
+
+/*
+ * Perform the entire expand path: Phase 1 (remap shared memory segments) then
+ * Phase 2 (expand structures, SHBUF_EXPAND). Emits phase rows with elapsed
+ * time for each.
+ */
+static void
+DoExpand(ReturnSetInfo *rsinfo, int currentNBuffers, int targetNBuffers,
+		 MemoryMappingSizes *mapping_sizes)
+{
+	instr_time	phase_start;
+	instr_time	phase_end;
+	int			i;
+
+	/* Phase 1: Remapping */
+	elog(LOG, "Phase 1: Remapping shared memory segments and updating structures");
+	INSTR_TIME_SET_CURRENT(phase_start);
+	for (i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		if (i == MAIN_SHMEM_SEGMENT)
+			continue;
+		if (!PGSharedMemoryResize(i, &mapping_sizes[i]))
+			elog(PANIC, "failed to resize anonymous shared memory");
+	}
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 1: fallocate", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	INJECTION_POINT("pgrsb-after-shmem-resize", NULL);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM));
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 2: barrier-1", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	/* Phase 2: Expanding */
+	elog(LOG, "Phase 2: Expanding buffer pool, enabling allocations up to %d buffers", targetNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	BufferManagerShmemResize(currentNBuffers, targetNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 2: ShmemResize", INSTR_TIME_GET_DOUBLE(phase_end), false);
+	
+	pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
+	INSTR_TIME_SET_CURRENT(phase_start);
+	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_EXPAND, CppAsString(PROCSIGNAL_BARRIER_SHBUF_EXPAND));
+	INSTR_TIME_SET_CURRENT(phase_end);
+	INSTR_TIME_SUBTRACT(phase_end, phase_start);
+	EmitResizePhaseRow(rsinfo, "Phase 2: barrier-2", INSTR_TIME_GET_DOUBLE(phase_end), false);
+}
+
+/*
  * C implementation of SQL interface to update the shared buffers according to
  * the current values of shared_buffers GUCs.
  *
@@ -163,21 +319,25 @@ SharedBufferResizeBarrier(ProcSignalBarrierType barrier, const char *barrier_nam
 Datum
 pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 {
-	bool		result = true;
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	int			currentNBuffers = pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
 	int			targetNBuffers = NBuffersPending;
 	MemoryMappingSizes mapping_sizes[NUM_MEMORY_MAPPINGS];
 
+	InitMaterializedSRF(fcinfo, 0);
+
 	if (currentNBuffers == targetNBuffers)
 	{
 		elog(LOG, "shared buffers are already at %d, no need to resize", currentNBuffers);
-		PG_RETURN_BOOL(true);
+		EmitResizePhaseRow(rsinfo, "no resize", 0.0, false);
+		return (Datum) 0;
 	}
 
 	if (!pg_atomic_test_set_flag(&ShmemCtrl->resize_in_progress))
 	{
 		elog(LOG, "shared buffer resizing already in progress");
-		PG_RETURN_BOOL(false);
+		EmitResizePhaseRow(rsinfo, "resize already in progress", 0.0, true);
+		return (Datum) 0;
 	}
 
 	/*
@@ -206,84 +366,10 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 
 	INJECTION_POINT("pg-resize-shared-buffers-flag-set", NULL);
 
-	/* Phase 1: SHBUF_SHRINK - Only for shrinking buffer pool */
 	if (targetNBuffers < currentNBuffers)
-	{
-		/*
-		 * Phase 1: Shrinking - send SHBUF_SHRINK barrier Every backend sets
-		 * activeNBuffers = NewNBuffers to restrict buffer pool allocations to
-		 * the new size
-		 */
-		elog(LOG, "Phase 1: Shrinking buffer pool, restricting allocations to %d buffers", targetNBuffers);
-
-		SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_SHRINK, CppAsString(PROCSIGNAL_BARRIER_SHBUF_SHRINK));
-
-		/* Evict buffers in the area being shrunk */
-		elog(LOG, "evicting buffers %u..%u", targetNBuffers + 1, currentNBuffers);
-		while (!EvictExtraBuffers(targetNBuffers, currentNBuffers))
-		{
-			pg_usleep(1000);
-			// elog(WARNING, "failed to evict extra buffers during shrinking");
-			// SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_FAILED));
-			// MarkBufferResizingEnd(currentNBuffers);
-			// pg_atomic_clear_flag(&ShmemCtrl->resize_in_progress);
-			// PG_RETURN_BOOL(false);
-		}
-
-		/*
-		 * Shrink buffer manager structures before shrinking the shared
-		 * memory.
-		 */
-		BufferManagerShmemResize(currentNBuffers, targetNBuffers);
-
-		/* Update the current NBuffers. */
-		pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
-	}
-
-	/*
-	 * Phase 2: Wait until no backend is in BufferSync (e.g. checkpointer
-	 * delays until checkpoint done), then remap.  The checkpointer must not
-	 * start a new checkpoint until resize is done (see checkpointer.c).
-	 */
-	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM));
-
-	elog(LOG, "Phase 2: Remapping shared memory segments and updating structures");
-	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
-	{
-		/* Structures in the main memory segment are never resized. */
-		if (i == MAIN_SHMEM_SEGMENT)
-			continue;
-
-		if (!PGSharedMemoryResize(i, &mapping_sizes[i]))
-		{
-			/*
-			 * This should never fail since address map should already be
-			 * reserved. So the failure should be treated as PANIC.
-			 */
-			elog(PANIC, "failed to resize anonymous shared memory");
-		}
-	}
-
-	INJECTION_POINT("pgrsb-after-shmem-resize", NULL);
-
-	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM));
-
-	/* Phase 3: SHBUF_EXPAND - Only for expanding buffer pool */
-	if (targetNBuffers > currentNBuffers)
-	{
-		/* Expand buffer manager structures after expanding the shared memory. */
-		BufferManagerShmemResize(currentNBuffers, targetNBuffers);
-
-		/*
-		 * Phase 3: Expanding - send SHBUF_EXPAND barrier Backends set
-		 * activeNBuffers = NewNBuffers and start allocating buffers from the
-		 * expanded range
-		 */
-		elog(LOG, "Phase 3: Expanding buffer pool, enabling allocations up to %d buffers", targetNBuffers);
-		pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
-
-		SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_EXPAND, CppAsString(PROCSIGNAL_BARRIER_SHBUF_EXPAND));
-	}
+		DoShrink(rsinfo, currentNBuffers, targetNBuffers, mapping_sizes);
+	else
+		DoExpand(rsinfo, currentNBuffers, targetNBuffers, mapping_sizes);
 
 	/*
 	 * Reset buffer resize control area.
@@ -294,7 +380,7 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 
 	elog(LOG, "successfully resized shared buffers to %d", targetNBuffers);
 
-	PG_RETURN_BOOL(result);
+	return (Datum) 0;
 }
 
 bool

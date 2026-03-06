@@ -42,7 +42,7 @@ $session1->query_until(
 	qr/starting_resize/,
 	q(
 		\echo starting_resize
-		SELECT pg_resize_shared_buffers();
+		SELECT * FROM pg_resize_shared_buffers();
 	)
 );
 
@@ -50,10 +50,10 @@ $session1->query_until(
 $node->wait_for_event('client backend', 'pg-resize-shared-buffers-flag-set');
 
 # Start second resize session (should fail immediately since resize is in progress)
-my $result2 = $node->safe_psql('postgres', "SELECT pg_resize_shared_buffers()");
+my $result2 = $node->safe_psql('postgres', "SELECT * FROM pg_resize_shared_buffers()");
 
-# The second call should return false (already in progress)
-is($result2, 'f', 'Second concurrent resize call returns false');
+# The second call should report "resize already in progress"
+like($result2, qr/resize already in progress/, 'Second concurrent resize call reports already in progress');
 
 # Wake up the first session
 $node->safe_psql('postgres',

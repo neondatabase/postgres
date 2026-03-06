@@ -33,7 +33,7 @@ SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;
 SELECT COUNT(*) AS buffer_count FROM pg_buffercache;
 -- Calling pg_resize_shared_buffers() without changing shared_buffers should be a no-op.
-SELECT pg_resize_shared_buffers();
+SELECT * FROM pg_resize_shared_buffers();
 SHOW shared_buffers;
 SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;
@@ -45,7 +45,7 @@ SELECT pg_reload_conf();
 -- reconnect to ensure new setting is loaded
 \c
 SHOW shared_buffers;
-SELECT pg_resize_shared_buffers();
+SELECT * FROM pg_resize_shared_buffers();
 SHOW shared_buffers;
 SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;
@@ -57,7 +57,7 @@ SELECT pg_reload_conf();
 -- reconnect to ensure new setting is loaded
 \c
 SHOW shared_buffers;
-SELECT pg_resize_shared_buffers();
+SELECT * FROM pg_resize_shared_buffers();
 SHOW shared_buffers;
 SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;
@@ -69,7 +69,7 @@ SELECT pg_reload_conf();
 -- reconnect to ensure new setting is loaded
 \c
 SHOW shared_buffers;
-SELECT pg_resize_shared_buffers();
+SELECT * FROM pg_resize_shared_buffers();
 SHOW shared_buffers;
 SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;
@@ -81,7 +81,7 @@ SELECT pg_reload_conf();
 -- reconnect to ensure new setting is loaded
 \c
 SHOW shared_buffers;
-SELECT pg_resize_shared_buffers();
+SELECT * FROM pg_resize_shared_buffers();
 SHOW shared_buffers;
 SELECT * FROM buffer_allocations;
 SELECT * FROM buffer_segments;

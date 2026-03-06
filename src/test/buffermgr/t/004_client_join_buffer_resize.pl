@@ -141,7 +141,7 @@ sub run_injection_point_test
 		qr/starting_resize/,
 		q(
 			\echo starting_resize
-			SELECT pg_resize_shared_buffers();
+			SELECT * FROM pg_resize_shared_buffers();
 		)
 	);
 
