@@ -47,6 +47,9 @@ ExplainOneQuery_hook_type ExplainOneQuery_hook = NULL;
 /* Hook for plugins to get control in explain_get_index_name() */
 explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 
+/* Hook for plugins to add information per plan (backported from PG18) */
+explain_per_plan_hook_type explain_per_plan_hook = NULL;
+
 /* OR-able flags for ExplainXMLTag() */
 #define X_OPENING 0
 #define X_CLOSING 1
@@ -150,7 +153,7 @@ static void ExplainRestoreGroup(ExplainState *es, int depth, int *state_save);
 static void ExplainDummyGroup(const char *objtype, const char *labelname,
 							  ExplainState *es);
 static void ExplainXMLTag(const char *tagname, int flags, ExplainState *es);
-static void ExplainIndentText(ExplainState *es);
+void ExplainIndentText(ExplainState *es);
 static void ExplainJSONLineEnding(ExplainState *es);
 static void ExplainYAMLLineStarting(ExplainState *es);
 static void escape_yaml(StringInfo buf, const char *str);
@@ -5050,7 +5053,7 @@ ExplainXMLTag(const char *tagname, int flags, ExplainState *es)
  * data for a parallel worker there might already be data on the current line
  * (cf. ExplainOpenWorker); in that case, don't indent any more.
  */
-static void
+void
 ExplainIndentText(ExplainState *es)
 {
 	Assert(es->format == EXPLAIN_FORMAT_TEXT);

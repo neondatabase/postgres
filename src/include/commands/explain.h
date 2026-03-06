@@ -78,6 +78,15 @@ extern PGDLLIMPORT ExplainOneQuery_hook_type ExplainOneQuery_hook;
 typedef const char *(*explain_get_index_name_hook_type) (Oid indexId);
 extern PGDLLIMPORT explain_get_index_name_hook_type explain_get_index_name_hook;
 
+/* Hook for plugins to add information per plan (backported from PG18) */
+typedef void (*explain_per_plan_hook_type) (PlannedStmt *plannedstmt,
+											IntoClause *into,
+											ExplainState *es,
+											const char *queryString,
+											ParamListInfo params,
+											QueryEnvironment *queryEnv);
+extern PGDLLIMPORT explain_per_plan_hook_type explain_per_plan_hook;
+
 
 extern void ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 						 ParamListInfo params, DestReceiver *dest);
@@ -127,5 +136,7 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+
+extern void ExplainIndentText(ExplainState *es);
 
 #endif							/* EXPLAIN_H */
