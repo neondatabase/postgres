@@ -240,7 +240,13 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 		pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
 	}
 
-	/* Phase 2: SHBUF_RESIZE_MAP_AND_MEM - Both expanding and shrinking */
+	/*
+	 * Phase 2: Wait until no backend is in BufferSync (e.g. checkpointer
+	 * delays until checkpoint done), then remap.  The checkpointer must not
+	 * start a new checkpoint until resize is done (see checkpointer.c).
+	 */
+	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM, CppAsString(PROCSIGNAL_BARRIER_SHBUF_RESIZE_MAP_AND_MEM));
+
 	elog(LOG, "Phase 2: Remapping shared memory segments and updating structures");
 	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
 	{
@@ -312,6 +318,7 @@ ProcessBarrierShmemShrink(void)
 
 	if (MyBackendType == B_BG_WRITER)
 	{
+		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, targetNBuffers);
 		/*
 		 * We have to reset the background writer's buffer allocation
 		 * statistics and the strategy control together so that background
@@ -405,6 +412,7 @@ ProcessBarrierShmemExpand(void)
 
 	if (MyBackendType == B_BG_WRITER)
 	{
+		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, targetNBuffers);
 		/*
 		 * We have to reset the background writer's buffer allocation
 		 * statistics and the strategy control together so that background
@@ -443,6 +451,7 @@ ProcessBarrierShmemResizeFailed(void)
 
 	if (MyBackendType == B_BG_WRITER)
 	{
+		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, currentNBuffers);
 		/*
 		 * We have to reset the background writer's buffer allocation
 		 * statistics and the strategy control together so that background

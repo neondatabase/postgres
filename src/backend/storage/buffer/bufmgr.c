@@ -3726,6 +3726,13 @@ BgBufferSync(WritebackContext *wb_context)
 	uint32		new_recent_alloc;
 
 	/*
+	 * Resizing shared buffers while this function is performing an LRU scan
+	 * on them may lead to wrong results. Indicate that the resizing should
+	 * wait for the LRU scan to complete.
+	 */
+	delay_shmem_resize = true;
+
+	/*
 	 * If buffer pool is being shrunk the buffer being written out may not
 	 * remain valid. If the buffer pool is being expanded, more buffers will
 	 * become available without even this function writing out any. Hence wait
@@ -3734,15 +3741,11 @@ BgBufferSync(WritebackContext *wb_context)
 	 * TODO: We may not need this synchronization if background worker itself
 	 * becomes the coordinator.
 	 */
-	if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+	 if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+	 {
+		delay_shmem_resize = false;
 		return true;
-
-	/*
-	 * Resizing shared buffers while this function is performing an LRU scan
-	 * on them may lead to wrong results. Indicate that the resizing should
-	 * wait for the LRU scan to complete.
-	 */
-	delay_shmem_resize = true;
+	 }
 
 	/*
 	 * Find out where the freelist clock sweep currently is, and how many
@@ -3927,6 +3930,9 @@ BgBufferSync(WritebackContext *wb_context)
 	num_written = 0;
 	reusable_buffers = reusable_buffers_est;
 
+	elog(LOG, "BgBufferSync Start: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+		 num_to_scan, reusable_buffers, upcoming_alloc_est);
+
 	/*
 	 * Execute the LRU scan.
 	 *
@@ -3998,6 +4004,9 @@ BgBufferSync(WritebackContext *wb_context)
 
 	/* Let the resizing commence. */
 	delay_shmem_resize = false;
+
+	elog(LOG, "BgBufferSync End: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+		num_to_scan, reusable_buffers, upcoming_alloc_est);
 
 	/* Return true if OK to hibernate */
 	return (bufs_to_lap == 0 && recent_alloc == 0);
@@ -4328,12 +4337,16 @@ CheckPointBuffers(int flags)
 	 */
 	delay_shmem_resize = true;
 
+	elog(LOG, "Buffer sync is in progress: %d", pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
+
+	if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+	{
+		delay_shmem_resize = false;
+		elog(ERROR, "Buffer sync is not in progress");
+	}
+
 	BufferSync(flags);
 
-	/*
-	 * Mark that buffer sync is no longer in progress - allow shared memory
-	 * resizing
-	 */
 	delay_shmem_resize = false;
 }
 
