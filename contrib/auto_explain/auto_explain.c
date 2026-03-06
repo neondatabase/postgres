@@ -412,6 +412,11 @@ explain_ExecutorEnd(QueryDesc *queryDesc)
 				ExplainPrintTriggers(es, queryDesc);
 			if (es->costs)
 				ExplainPrintJITSummary(es, queryDesc);
+			if (explain_per_plan_hook)
+				(*explain_per_plan_hook) (queryDesc->plannedstmt, NULL, es,
+										  queryDesc->sourceText,
+										  queryDesc->params,
+										  queryDesc->queryEnv);
 			ExplainEndOutput(es);
 
 			/* Remove last line break */
