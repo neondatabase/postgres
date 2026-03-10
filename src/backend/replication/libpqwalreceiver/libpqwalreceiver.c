@@ -171,6 +171,16 @@ libpqrcv_connect(const char *conninfo, bool replication, bool logical,
 	keys[i] = "dbname";
 	vals[i] = conninfo;
 
+/* BEGIN_NEON */
+	if (pg_strcasecmp(appname, "walreceiver") == 0 && GetWalRcvConninfo_hook)
+	{
+		const char *reordered = GetWalRcvConninfo_hook(conninfo);
+
+		if (reordered)
+			vals[0] = reordered;
+	}
+/* END_NEON */
+
 	/* We can not have logical without replication */
 	Assert(replication || !logical);
 
