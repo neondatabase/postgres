@@ -29,6 +29,9 @@
 typedef char *(*GetWalRcvPassword_hook_type) (void);
 extern PGDLLIMPORT GetWalRcvPassword_hook_type GetWalRcvPassword_hook;
 
+typedef const char *(*GetWalRcvConninfo_hook_type) (const char *conninfo);
+extern PGDLLIMPORT GetWalRcvConninfo_hook_type GetWalRcvConninfo_hook;
+
 /* user-settable parameters */
 extern PGDLLIMPORT int wal_receiver_status_interval;
 extern PGDLLIMPORT int wal_receiver_timeout;

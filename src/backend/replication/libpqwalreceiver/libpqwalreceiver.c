@@ -160,6 +160,16 @@ libpqrcv_connect(const char *conninfo, bool logical, bool must_use_password,
 	vals[i] = conninfo;
 
 /* BEGIN_NEON */
+	if (pg_strcasecmp(appname, "walreceiver") == 0 && GetWalRcvConninfo_hook)
+	{
+		const char *reordered = GetWalRcvConninfo_hook(conninfo);
+
+		if (reordered)
+			vals[0] = reordered;
+	}
+/* END_NEON */
+
+/* BEGIN_NEON */
 	/*
 	 * We use the output GetWalRcvPassword_hook for the password because
 	 * conninfo strings are limited to MAXCONNINFO in length. Our tokens can

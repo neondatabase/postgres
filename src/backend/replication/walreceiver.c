@@ -96,6 +96,7 @@ static WalReceiverConn *wrconn = NULL;
 WalReceiverFunctionsType *WalReceiverFunctions = NULL;
 
 GetWalRcvPassword_hook_type GetWalRcvPassword_hook = NULL;
+GetWalRcvConninfo_hook_type GetWalRcvConninfo_hook = NULL;
 
 /*
  * These variables are used similarly to openLogFile/SegNo,
