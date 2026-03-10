@@ -96,6 +96,7 @@ static WalReceiverConn *wrconn = NULL;
 WalReceiverFunctionsType *WalReceiverFunctions = NULL;
 
 GetWalRcvPassword_hook_type GetWalRcvPassword_hook = NULL;
+GetWalRcvConninfo_hook_type GetWalRcvConninfo_hook = NULL;
 
 #define NAPTIME_PER_CYCLE 100	/* max sleep time between cycles (100ms) */
 
