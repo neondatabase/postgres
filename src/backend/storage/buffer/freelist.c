@@ -479,6 +479,13 @@ StrategyShmemSize(void)
 	return size;
 }
 
+uint32
+StrategyGetActiveNBuffers(void)
+{
+	Assert(StrategyControl);
+	return pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+}
+
 void
 StrategyReset(int activeNBuffers)
 {

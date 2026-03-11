@@ -402,6 +402,9 @@ ProcessBarrierShmemShrink(void)
 		return false;
 	}
 
+	if (ShmemCtrl->coordinator == MyProcPid)
+		return true;
+
 	if (MyBackendType == B_BG_WRITER)
 	{
 		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, targetNBuffers);
@@ -417,6 +420,18 @@ ProcessBarrierShmemShrink(void)
 		BgBufferSyncReset(NBuffers, targetNBuffers);
 		/* Reset strategy control to new size */
 		StrategyReset(targetNBuffers);
+	}
+	else
+	{
+		/*
+		 * Only acknowledge once the bgwriter has updated activeNBuffers, so we
+		 * don't allocate from the shrinking range after acking.  The
+		 * coordinator returns true above; only regular backends reach here.
+		 */
+		if (StrategyGetActiveNBuffers() != targetNBuffers) {
+			elog(LOG, "Backend %d waiting for bgwriter to update activeNBuffers to %d", MyProcPid, targetNBuffers);
+			return false;
+		}
 	}
 
 	elog(LOG, "Phase 1: Processing SHBUF_SHRINK barrier - target buffer pool size = %d, coordinator is %d",

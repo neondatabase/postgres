@@ -456,6 +456,7 @@ extern void StrategyNotifyBgWriter(int bgwprocno);
 
 extern Size StrategyShmemSize(void);
 extern void StrategyInitialize(bool init);
+extern uint32 StrategyGetActiveNBuffers(void);
 extern void StrategyReset(int activeNBuffers);
 extern bool have_free_buffer(void);
 
