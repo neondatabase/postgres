@@ -16,6 +16,7 @@
  */
 
 #include "postgres.h"
+#include <time.h>
 
 #include "fmgr.h"
 #include "injection_stats.h"
@@ -61,6 +62,8 @@ typedef struct InjectionPointCondition
 
 	/* ID of the process where the injection point is allowed to run */
 	int			pid;
+	/* probability in [0,1], 1.0 = always */
+	double		prob;
 } InjectionPointCondition;
 
 /*
@@ -96,6 +99,9 @@ static InjectionPointSharedState *inj_state = NULL;
 extern PGDLLEXPORT void injection_error(const char *name,
 										const void *private_data,
 										void *arg);
+extern PGDLLEXPORT void injection_error_prob(const char *name,
+											 const void *private_data,
+											 void *arg);
 extern PGDLLEXPORT void injection_notice(const char *name,
 										 const void *private_data,
 										 void *arg);
@@ -105,6 +111,7 @@ extern PGDLLEXPORT void injection_wait(const char *name,
 
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
+static double action2prob(const char *action, int pos);
 
 /*
  * GUC variable
@@ -260,6 +267,22 @@ injection_error(const char *name, const void *private_data, void *arg)
 }
 
 void
+injection_error_prob(const char *name, const void *private_data, void *arg)
+{
+	InjectionPointCondition *condition = (InjectionPointCondition *) private_data;
+
+	if (!injection_point_allowed(condition))
+		return;
+
+	/* Use the probability stored in the condition. */
+	if ((double) rand() / (double) RAND_MAX > condition->prob)
+		return;
+
+	pgstat_report_inj(name);
+	elog(ERROR, "error triggered for injection point %s", name);
+}
+
+void
 injection_notice(const char *name, const void *private_data, void *arg)
 {
 	InjectionPointCondition *condition = (InjectionPointCondition *) private_data;
@@ -361,6 +384,11 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
+	else if (strncmp(action, "error-prob-", 11) == 0)
+	{
+		condition.prob = action2prob(action, 11);
+		function = "injection_error_prob";
+	}
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 
@@ -543,6 +571,33 @@ injection_points_detach(PG_FUNCTION_ARGS)
 	pgstat_drop_inj(name);
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Convert the action name suffix into probability.
+ */
+static double action2prob(const char *action, const int pos)
+{
+	/*
+	 * Simple parser: convert "0-01" -> "0.01" then strtod().
+	 */
+	const char *p = action + pos; /* points to "0-01" */
+	double		prob;
+	char	   *endptr;
+	char		buf[32];
+	int			i,
+				j;
+
+	for (i = 0, j = 0; p[i] != '\0' && j < (int) sizeof(buf) - 1; i++)
+	{
+		buf[j++] = (p[i] == '-') ? '.' : p[i];
+	}
+	buf[j] = '\0';
+	errno = 0;
+	prob = strtod(buf, &endptr);
+	if (errno != 0 || endptr == buf || prob < 0.0 || prob > 1.0)
+		elog(ERROR, "invalid probability in action \"%s\"", action);
+	return prob;
 }
 
 
