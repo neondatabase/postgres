@@ -2424,6 +2424,10 @@ pg_available_extensions(PG_FUNCTION_ARGS)
 				if (strstr(extname, "--"))
 					continue;
 
+				/* Check extension visibility hook */
+				if (extension_is_visible_hook && !extension_is_visible_hook(extname))
+					continue;
+
 				/*
 				 * Ignore already-found names.  They are not reachable by the
 				 * path search, so don't shown them.
@@ -2518,6 +2522,10 @@ pg_available_extension_versions(PG_FUNCTION_ARGS)
 
 				/* ignore it if it's an auxiliary control file */
 				if (strstr(extname, "--"))
+					continue;
+
+				/* Check extension visibility hook */
+				if (extension_is_visible_hook && !extension_is_visible_hook(extname))
 					continue;
 
 				/*
