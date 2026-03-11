@@ -1,6 +1,7 @@
 --
 -- Cursor regression tests
 --
+SET synchronize_seqscans = off;
 BEGIN;
 DECLARE foo1 SCROLL CURSOR FOR SELECT * FROM tenk1 ORDER BY unique2;
 DECLARE foo2 SCROLL CURSOR FOR SELECT * FROM tenk2;
@@ -1518,3 +1519,4 @@ fetch backward all in c2;
 (3 rows)
 
 rollback;
+reset synchronize_seqscans;

@@ -2,6 +2,8 @@
 -- Cursor regression tests
 --
 
+SET synchronize_seqscans = off;
+
 BEGIN;
 
 DECLARE foo1 SCROLL CURSOR FOR SELECT * FROM tenk1 ORDER BY unique2;
@@ -569,3 +571,4 @@ declare c2 scroll cursor for select generate_series(1,3) as g;
 fetch all in c2;
 fetch backward all in c2;
 rollback;
+reset synchronize_seqscans;
