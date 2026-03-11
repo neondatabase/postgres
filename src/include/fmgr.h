@@ -775,6 +775,9 @@ typedef void (*fmgr_hook_type) (FmgrHookEventType event,
 extern PGDLLIMPORT needs_fmgr_hook_type needs_fmgr_hook;
 extern PGDLLIMPORT fmgr_hook_type fmgr_hook;
 
+typedef bool (*extension_is_visible_hook_type) (const char *extname);
+extern PGDLLIMPORT extension_is_visible_hook_type extension_is_visible_hook;
+
 #define FmgrHookIsNeeded(fn_oid)							\
 	(!needs_fmgr_hook ? false : (*needs_fmgr_hook)(fn_oid))
 
