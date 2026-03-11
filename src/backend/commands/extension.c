@@ -2212,6 +2212,10 @@ pg_available_extensions(PG_FUNCTION_ARGS)
 			if (strstr(extname, "--"))
 				continue;
 
+			/* Check extension visibility hook */
+			if (extension_is_visible_hook && !extension_is_visible_hook(extname))
+				continue;
+
 			control = read_extension_control_file(extname);
 
 			memset(values, 0, sizeof(values));
@@ -2288,6 +2292,10 @@ pg_available_extension_versions(PG_FUNCTION_ARGS)
 
 			/* ignore it if it's an auxiliary control file */
 			if (strstr(extname, "--"))
+				continue;
+
+			/* Check extension visibility hook */
+			if (extension_is_visible_hook && !extension_is_visible_hook(extname))
 				continue;
 
 			/* read the control file */
