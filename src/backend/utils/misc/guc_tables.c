@@ -2477,7 +2477,7 @@ struct config_int ConfigureNamesInt[] =
 			gettext_noop("0 means use a fraction of \"shared_buffers\"."),
 			GUC_UNIT_BLOCKS
 		},
-		&MaxNBuffers,
+		&commit_timestamp_buffers,
 		0, 0, SLRU_MAX_ALLOWED_BUFFERS,
 		check_commit_ts_buffers, NULL, NULL
 	},
