@@ -576,6 +576,11 @@ AutoVacLauncherMain(const void *startup_data, size_t startup_data_len)
 		TimestampTz current_time = 0;
 		bool		can_launch;
 
+		while (ProcSignalBarrierPending && !ShutdownRequestPending && !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		{
+			ProcessProcSignalBarrier();
+			pg_usleep(10000L);
+		}
 		/*
 		 * This loop is a bit different from the normal use of WaitLatch,
 		 * because we'd like to sleep before the first launch of a child

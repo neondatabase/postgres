@@ -1171,6 +1171,12 @@ ApplyLauncherMain(Datum main_arg)
 		MemoryContext oldctx;
 		long		wait_time = DEFAULT_NAPTIME_PER_CYCLE;
 
+		while (ProcSignalBarrierPending && !ShutdownRequestPending && !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		{
+			ProcessProcSignalBarrier();
+			pg_usleep(10000L);
+		}
+
 		CHECK_FOR_INTERRUPTS();
 
 		/* Use temporary context to avoid leaking memory across cycles. */
