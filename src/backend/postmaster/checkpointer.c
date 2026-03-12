@@ -366,6 +366,19 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		AbsorbSyncRequests();
 
 		ProcessCheckpointerInterrupts();
+
+		/*
+		* Process any pending ProcSignalBarrier(s) immediately.  If a
+		* shared buffer resize was in progress while we were in
+		* BufferSync, we delayed the pre-remap barrier; when we left
+		* BufferSync we may ack it here.  The coordinator then remaps and
+		* sends a post-remap barrier.  We must process both before
+		* touching any buffer-related shared memory (e.g. smgrdestroyall),
+		* or we can SIGBUS.
+		*/
+		while (ProcSignalBarrierPending && !ShutdownXLOGPending && !ShutdownRequestPending && !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+			ProcessProcSignalBarrier();
+
 		if (ShutdownXLOGPending || ShutdownRequestPending)
 			break;
 
@@ -403,26 +416,25 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		{
 			bool		ckpt_performed = false;
 			bool		do_restartpoint;
-			bool		skip_ckpt = false;
-
-			/*
-			 * Do not start a checkpoint while shared buffer resize is in
-			 * progress.  The coordinator remaps shared memory in Phase 2; if we
-			 * run BufferSync during that window we can touch unmapped memory
-			 * and hit SIGBUS.  Wait until resize completes.
-			 */
-			while (pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
-			{
-				pg_usleep(100000);	/* 100ms */
-				ProcessCheckpointerInterrupts();
-				if (ShutdownXLOGPending || ShutdownRequestPending)
-				{
-					skip_ckpt = true;
-					break;
-				}
-			}
-			if (skip_ckpt)
-				continue;
+			// bool		skip_ckpt = false;
+			// /*
+			//  * Do not start a checkpoint while shared buffer resize is in
+			//  * progress.  The coordinator remaps shared memory in Phase 2; if we
+			//  * run BufferSync during that window we can touch unmapped memory
+			//  * and hit SIGBUS.  Wait until resize completes.
+			//  */
+			// while (pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+			// {
+			// 	pg_usleep(100000);	/* 100ms */
+			// 	ProcessCheckpointerInterrupts();
+			// 	if (ShutdownXLOGPending || ShutdownRequestPending)
+			// 	{
+			// 		skip_ckpt = true;
+			// 		break;
+			// 	}
+			// }
+			// if (skip_ckpt)
+			// 	continue;
 
 			/* Check if we should perform a checkpoint or a restartpoint. */
 			do_restartpoint = RecoveryInProgress();
@@ -501,18 +513,6 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 				ckpt_performed = CreateCheckPoint(flags);
 			else
 				ckpt_performed = CreateRestartPoint(flags);
-
-			// /*
-			//  * Process any pending ProcSignalBarrier(s) immediately.  If a
-			//  * shared buffer resize was in progress while we were in
-			//  * BufferSync, we delayed the pre-remap barrier; when we left
-			//  * BufferSync we may ack it here.  The coordinator then remaps and
-			//  * sends a post-remap barrier.  We must process both before
-			//  * touching any buffer-related shared memory (e.g. smgrdestroyall),
-			//  * or we can SIGBUS.
-			//  */
-			// while (ProcSignalBarrierPending)
-			// 	ProcessProcSignalBarrier();
 
 			/*
 			 * After any checkpoint, free all smgr objects.  Otherwise we
@@ -609,6 +609,8 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 				continue;		/* no sleep for us ... */
 			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
 		}
+
+		elog(LOG, "CheckpointerMain wait: %d seconds", cur_timeout);
 
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,

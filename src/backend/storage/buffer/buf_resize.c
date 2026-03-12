@@ -386,9 +386,12 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 bool
 ProcessBarrierShmemShrink(void)
 {
+	int			currentNBuffers = pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
 	int			targetNBuffers = pg_atomic_read_u32(&ShmemCtrl->targetNBuffers);
 
 	Assert(!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
+
+	elog(LOG, "ProcessBarrierShmemShrink: %d %d, %d, %d", ShmemCtrl->coordinator, MyProcPid, currentNBuffers, targetNBuffers);
 
 	/*
 	 * Delay adjusting the new active size of buffer pool till this process
@@ -407,7 +410,7 @@ ProcessBarrierShmemShrink(void)
 
 	if (MyBackendType == B_BG_WRITER)
 	{
-		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, targetNBuffers);
+		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", currentNBuffers, targetNBuffers);
 		/*
 		 * We have to reset the background writer's buffer allocation
 		 * statistics and the strategy control together so that background
@@ -417,7 +420,7 @@ ProcessBarrierShmemShrink(void)
 		 * would reset the strategy control area. So we can't rely on
 		 * background worker to do that. So find a better way.
 		 */
-		BgBufferSyncReset(NBuffers, targetNBuffers);
+		BgBufferSyncReset(currentNBuffers, targetNBuffers);
 		/* Reset strategy control to new size */
 		StrategyReset(targetNBuffers);
 	}
@@ -496,6 +499,7 @@ ProcessBarrierShmemResizeMapAndMem(void)
 bool
 ProcessBarrierShmemExpand(void)
 {
+	int			currentNBuffers = pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
 	int			targetNBuffers = pg_atomic_read_u32(&ShmemCtrl->targetNBuffers);
 
 	Assert(!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
@@ -513,7 +517,7 @@ ProcessBarrierShmemExpand(void)
 
 	if (MyBackendType == B_BG_WRITER)
 	{
-		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", NBuffers, targetNBuffers);
+		elog(LOG, "B_BG_WRITER BgBufferSyncReset: %d, %d", currentNBuffers, targetNBuffers);
 		/*
 		 * We have to reset the background writer's buffer allocation
 		 * statistics and the strategy control together so that background
@@ -523,7 +527,7 @@ ProcessBarrierShmemExpand(void)
 		 * would reset the strategy control area. So we can't rely on
 		 * background worker to do that. So find a better way.
 		 */
-		BgBufferSyncReset(NBuffers, targetNBuffers);
+		BgBufferSyncReset(currentNBuffers, targetNBuffers);
 		StrategyReset(targetNBuffers);
 	}
 

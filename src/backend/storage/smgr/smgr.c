@@ -629,6 +629,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	 */
 	HOLD_INTERRUPTS();
 
+	delay_shmem_resize = true;
+
 	/*
 	 * Get rid of any remaining buffers for the relations.  bufmgr will just
 	 * drop them without bothering to write the contents.
@@ -680,6 +682,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	}
 
 	pfree(rlocators);
+
+	delay_shmem_resize = false;
 
 	RESUME_INTERRUPTS();
 }
@@ -955,6 +959,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 {
 	int			i;
 
+	delay_shmem_resize = true;
+
 	/*
 	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will
 	 * just drop them without bothering to write the contents.
@@ -1000,6 +1006,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 		reln->smgr_cached_nblocks[forknum[i]] =
 			nblocks[i] > old_nblocks[i] ? old_nblocks[i] : nblocks[i];
 	}
+
+	delay_shmem_resize = false;
 }
 
 /*

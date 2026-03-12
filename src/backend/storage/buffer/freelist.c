@@ -326,7 +326,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	// }
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
-	trycounter = NBuffers;
+	trycounter = NBuffersPending;
 	for (;;)
 	{
 		buf = GetBufferDescriptor(ClockSweepTick());
@@ -343,7 +343,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			{
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
-				trycounter = NBuffers;
+				trycounter = NBuffersPending;
 			}
 			else
 			{
@@ -753,7 +753,7 @@ int
 GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
 {
 	if (strategy == NULL)
-		return NBuffers;
+		return NBuffersPending;
 
 	switch (strategy->btype)
 	{

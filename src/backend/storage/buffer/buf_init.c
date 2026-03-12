@@ -141,7 +141,7 @@ BufferManagerShmemInit(void)
 	 */
 	CkptBufferIds = (CkptSortItem *)
 		ShmemInitStructInSegment("Checkpoint BufferIds",
-								 NBuffers * sizeof(CkptSortItem), &foundBufCkpt,
+			NBuffersPending * sizeof(CkptSortItem), &foundBufCkpt,
 								 CHECKPOINT_BUFFERS_SHMEM_SEGMENT);
 
 	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)

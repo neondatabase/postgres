@@ -3434,7 +3434,7 @@ BufferSync(int flags)
 	 * certainly need to be written for the next checkpoint attempt, too.
 	 */
 	num_to_scan = 0;
-	for (buf_id = 0; buf_id < NBuffers; buf_id++)
+	for (buf_id = 0; buf_id < NBuffersPending; buf_id++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
 
@@ -3781,7 +3781,7 @@ BgBufferSync(WritebackContext *wb_context)
 		int32		passes_delta = strategy_passes - prev_strategy_passes;
 
 		strategy_delta = strategy_buf_id - prev_strategy_buf_id;
-		strategy_delta += (long) passes_delta * NBuffers;
+		strategy_delta += (long) passes_delta * NBuffersPending;
 
 		if (strategy_delta < 0)
 		{
@@ -3806,7 +3806,7 @@ BgBufferSync(WritebackContext *wb_context)
 				 next_to_clean >= strategy_buf_id)
 		{
 			/* on same pass, but ahead or at least not behind */
-			bufs_to_lap = NBuffers - (next_to_clean - strategy_buf_id);
+			bufs_to_lap = NBuffersPending - (next_to_clean - strategy_buf_id);
 #ifdef BGW_DEBUG
 			elog(DEBUG2, "bgwriter ahead: bgw %u-%u strategy %u-%u delta=%ld lap=%d",
 				 next_passes, next_to_clean,
@@ -3828,7 +3828,7 @@ BgBufferSync(WritebackContext *wb_context)
 #endif
 			next_to_clean = strategy_buf_id;
 			next_passes = strategy_passes;
-			bufs_to_lap = NBuffers;
+			bufs_to_lap = NBuffersPending;
 		}
 	}
 	else
@@ -3844,7 +3844,7 @@ BgBufferSync(WritebackContext *wb_context)
 		strategy_delta = 0;
 		next_to_clean = strategy_buf_id;
 		next_passes = strategy_passes;
-		bufs_to_lap = NBuffers;
+		bufs_to_lap = NBuffersPending;
 	}
 
 	/* Update saved info for next time */
@@ -3870,7 +3870,7 @@ BgBufferSync(WritebackContext *wb_context)
 	 * strategy point and where we've scanned ahead to, based on the smoothed
 	 * density estimate.
 	 */
-	bufs_ahead = NBuffers - bufs_to_lap;
+	bufs_ahead = NBuffersPending - bufs_to_lap;
 	reusable_buffers_est = (float) bufs_ahead / smoothed_density;
 
 	/*
@@ -4128,7 +4128,7 @@ InitBufferManagerAccess(void)
 	 * allow plenty of pins.  LimitAdditionalPins() and
 	 * GetAdditionalPinLimit() can be used to check the remaining balance.
 	 */
-	MaxProportionalPins = NBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
+	MaxProportionalPins = MaxNBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
 
 	memset(&PrivateRefCountArray, 0, sizeof(PrivateRefCountArray));
 
@@ -4760,7 +4760,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
@@ -4922,7 +4922,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (use_bsearch)
 		qsort(locators, n, sizeof(RelFileLocator), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		RelFileLocator *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -5046,12 +5046,14 @@ DropDatabaseBuffers(Oid dbid)
 {
 	int			i;
 
+	delay_shmem_resize = true;
+
 	/*
 	 * We needn't consider local buffers, since by assumption the target
 	 * database isn't our own.
 	 */
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
@@ -5069,6 +5071,8 @@ DropDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5095,6 +5099,8 @@ FlushRelationBuffers(Relation rel)
 	int			i;
 	BufferDesc *bufHdr;
 	SMgrRelation srel = RelationGetSmgr(rel);
+
+	delay_shmem_resize = true;
 
 	if (RelationUsesLocalBuffers(rel) || am_wal_redo_postgres)
 	{
@@ -5135,10 +5141,12 @@ FlushRelationBuffers(Relation rel)
 			}
 		}
 
+		delay_shmem_resize = false;
+
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		uint32		buf_state;
 
@@ -5168,6 +5176,7 @@ FlushRelationBuffers(Relation rel)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5210,7 +5219,9 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	if (use_bsearch)
 		qsort(srels, nrels, sizeof(SMgrSortArray), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	delay_shmem_resize = true;
+
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		SMgrSortArray *srelent = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -5267,6 +5278,8 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	}
 
 	pfree(srels);
+
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5465,7 +5478,9 @@ FlushDatabaseBuffers(Oid dbid)
 	int			i;
 	BufferDesc *bufHdr;
 
-	for (i = 0; i < NBuffers; i++)
+	delay_shmem_resize = true;
+
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		uint32		buf_state;
 
@@ -5495,6 +5510,8 @@ FlushDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+
+	delay_shmem_resize = false;
 }
 
 /*
@@ -6836,7 +6853,7 @@ EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 	*buffers_skipped = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	for (int buf = 1; buf <= NBuffersPending; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint32		buf_state;
@@ -6888,7 +6905,9 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 	*buffers_evicted = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	delay_shmem_resize = true;
+
+	for (int buf = 1; buf <= NBuffersPending; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint32		buf_state = pg_atomic_read_u32(&(desc->state));
@@ -6923,6 +6942,8 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 		if (buffer_flushed)
 			(*buffers_flushed)++;
 	}
+
+	delay_shmem_resize = false;
 }
 
 /*
