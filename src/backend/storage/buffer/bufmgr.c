@@ -3930,7 +3930,7 @@ BgBufferSync(WritebackContext *wb_context)
 	num_written = 0;
 	reusable_buffers = reusable_buffers_est;
 
-	elog(LOG, "BgBufferSync Start: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+	elog(DEBUG2, "BgBufferSync Start: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
 		 num_to_scan, reusable_buffers, upcoming_alloc_est);
 
 	/*
@@ -4005,7 +4005,7 @@ BgBufferSync(WritebackContext *wb_context)
 	/* Let the resizing commence. */
 	delay_shmem_resize = false;
 
-	elog(LOG, "BgBufferSync End: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+	elog(DEBUG2, "BgBufferSync End: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
 		num_to_scan, reusable_buffers, upcoming_alloc_est);
 
 	/* Return true if OK to hibernate */

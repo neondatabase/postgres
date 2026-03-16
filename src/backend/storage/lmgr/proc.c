@@ -1973,6 +1973,7 @@ GetLockHoldersAndWaiters(LOCALLOCK *locallock, StringInfo lock_holders_sbuf,
 void
 ProcWaitForSignal(uint32 wait_event_info)
 {
+	//
 	(void) WaitLatch(MyLatch, WL_LATCH_SET | WL_EXIT_ON_PM_DEATH, 0,
 					 wait_event_info);
 	ResetLatch(MyLatch);
