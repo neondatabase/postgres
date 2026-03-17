@@ -247,6 +247,11 @@ static inline void pgstat_report_wait_end(void);
 extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
 
+extern uint32 WaitEventExtensionNew(const char *wait_event_name);
+extern void WaitEventCustomShmemInit(void);
+extern Size WaitEventCustomShmemSize(void);
+extern char **GetWaitEventCustomNames(uint32 classId, int *nwaitevents);
+
 extern PGDLLIMPORT uint32 *my_wait_event_info;
 
 typedef void (*pgstat_report_wait_start_hook_type)(uint32 wait_event_info);
