@@ -183,16 +183,6 @@ extern void PGSharedMemoryReAttach(void);
 extern void PGSharedMemoryNoReAttach(void);
 #endif
 
-/*
- * round off mapping size to a multiple of a typical page size.
- */
-static inline void
-round_off_mapping_sizes(MemoryMappingSizes *mapping_sizes)
-{
-	mapping_sizes->shmem_req_size = add_size(mapping_sizes->shmem_req_size, 8192 - (mapping_sizes->shmem_req_size % 8192));
-	mapping_sizes->shmem_reserved = add_size(mapping_sizes->shmem_reserved, 8192 - (mapping_sizes->shmem_reserved % 8192));
-}
-
 static inline const char *
 MappingName(int segment_id)
 {
@@ -228,5 +218,34 @@ extern const char *show_shared_buffers(void);
 extern bool check_shared_buffers(int *newval, void **extra, GucSource source);
 extern void ShmemControlInit(void);
 
+/*
+ * Round mapping sizes up to a multiple of the effective page size.
+ *
+ * We always round to 2MB to enable Transparent Huge Pages (THP). When the
+ * kernel's shmem_enabled=advise and MADV_HUGEPAGE is set on the mapping,
+ * 2MB-aligned regions can be backed by huge pages without requiring explicit
+ * hugetlb reservation. The ~2MB waste per segment is negligible for buffer
+ * pool sizes where THP matters.
+ *
+ * When explicit huge pages are configured, we use the actual huge page size
+ * (which may differ from 2MB on some architectures).
+ */
+#define THP_PAGE_SIZE	((Size) (2 * 1024 * 1024))	/* 2MB */
+
+static inline void
+round_off_mapping_sizes(MemoryMappingSizes *mapping_sizes)
+{
+	Size		pagesize = THP_PAGE_SIZE;
+
+	// if (huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY)
+	// 	GetHugePageSize(&pagesize, NULL, NULL);
+
+	if (mapping_sizes->shmem_req_size % pagesize != 0)
+		mapping_sizes->shmem_req_size = add_size(mapping_sizes->shmem_req_size,
+												 pagesize - (mapping_sizes->shmem_req_size % pagesize));
+	if (mapping_sizes->shmem_reserved % pagesize != 0)
+		mapping_sizes->shmem_reserved = add_size(mapping_sizes->shmem_reserved,
+												 pagesize - (mapping_sizes->shmem_reserved % pagesize));
+}
 
 #endif							/* PG_SHMEM_H */

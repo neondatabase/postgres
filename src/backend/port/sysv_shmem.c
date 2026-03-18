@@ -766,12 +766,81 @@ round_off_mapping_sizes_for_hugepages(MemoryMappingSizes *mapping, int hugepages
 										   hugepagesize - (mapping->shmem_reserved % hugepagesize));
 }
 
+// USE_MADV_POPULATE_WRITE tries to use transparent huge pages for the shared memory segment.
+#define USE_MADV_POPULATE_WRITE 1
+
 /*
  * Creates an anonymous mmap()ed shared memory segment.
  *
  * This function will modify mapping size to the actual size of the allocation,
  * if it ends up allocating a segment that is larger than requested.
  */
+static const char *
+mmap_flags_to_string(int flags, char *buf, size_t buflen)
+{
+	buf[0] = '\0';
+
+	if (flags & MAP_SHARED)
+		strlcat(buf, "MAP_SHARED|", buflen);
+#ifdef MAP_HASSEMAPHORE
+	if (flags & MAP_HASSEMAPHORE)
+		strlcat(buf, "MAP_HASSEMAPHORE|", buflen);
+#endif
+#ifdef MAP_NORESERVE
+	if (flags & MAP_NORESERVE)
+		strlcat(buf, "MAP_NORESERVE|", buflen);
+#endif
+#ifdef MAP_HUGETLB
+	if (flags & MAP_HUGETLB)
+		strlcat(buf, "MAP_HUGETLB|", buflen);
+#endif
+
+	/* Strip trailing '|' */
+	{
+		size_t len = strlen(buf);
+		if (len > 0 && buf[len - 1] == '|')
+			buf[len - 1] = '\0';
+	}
+
+	if (buf[0] == '\0')
+		snprintf(buf, buflen, "0x%x", flags);
+
+	return buf;
+}
+
+static const char *
+memfd_flags_to_string(int flags, char *buf, size_t buflen)
+{
+	buf[0] = '\0';
+
+	if (flags == 0)
+	{
+		strlcat(buf, "0", buflen);
+		return buf;
+	}
+
+#ifdef MFD_CLOEXEC
+	if (flags & MFD_CLOEXEC)
+		strlcat(buf, "MFD_CLOEXEC|", buflen);
+#endif
+#ifdef MFD_HUGETLB
+	if (flags & MFD_HUGETLB)
+		strlcat(buf, "MFD_HUGETLB|", buflen);
+#endif
+
+	/* Strip trailing '|' */
+	{
+		size_t len = strlen(buf);
+		if (len > 0 && buf[len - 1] == '|')
+			buf[len - 1] = '\0';
+	}
+
+	if (buf[0] == '\0')
+		snprintf(buf, buflen, "0x%x", flags);
+
+	return buf;
+}
+
 static void
 CreateAnonymousSegment(int segment_id, MemoryMappingSizes *mapping)
 {
@@ -803,8 +872,28 @@ CreateAnonymousSegment(int segment_id, MemoryMappingSizes *mapping)
 
 		mmap_flags = mmap_flags | huge_mmap_flags;
 		memfd_flags = memfd_flags | huge_memfd_flags;
+
+		{
+			char	mmap_buf[128];
+			char	memfd_buf[128];
+
+			elog(LOG, "segment[%s]: huge pages are on, hugepagesize: %zu, mmap_flags: %s, memfd_flags: %s",
+				 segname, hugepagesize,
+				 mmap_flags_to_string(mmap_flags, mmap_buf, sizeof(mmap_buf)),
+				 memfd_flags_to_string(memfd_flags, memfd_buf, sizeof(memfd_buf)));
+		}
 	}
 #endif
+
+	{
+		char	mmap_buf[128];
+		char	memfd_buf[128];
+
+		elog(LOG, "segment[%s]: mmap_flags: %s, memfd_flags: %s",
+			 segname,
+			 mmap_flags_to_string(mmap_flags, mmap_buf, sizeof(mmap_buf)),
+			 memfd_flags_to_string(memfd_flags, memfd_buf, sizeof(memfd_buf)));
+	}
 
 	/*
 	 * Prepare an anonymous file backing the segment. Its size will be
@@ -822,7 +911,7 @@ CreateAnonymousSegment(int segment_id, MemoryMappingSizes *mapping)
 				(errmsg("segment[%s]: could not create anonymous shared memory file: %m",
 						segname)));
 
-	elog(DEBUG1, "segment[%s]: mmap(%zu) reserved, %zu requested",
+	elog(LOG, "segment[%s]: mmap(%zu) reserved, %zu requested",
 		 segname, mapping->shmem_reserved, mapping->shmem_req_size);
 
 	/*
@@ -872,7 +961,40 @@ CreateAnonymousSegment(int segment_id, MemoryMappingSizes *mapping)
 						 "\"max_connections\".",
 						 mapping->shmem_req_size) : 0));
 	}
+
+	// shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
+
+#if defined(MADV_HUGEPAGE) && defined(MADV_POPULATE_WRITE) && USE_MADV_POPULATE_WRITE
+	/*
+	 * Try to enable THP for this mapping. We must NOT use posix_fallocate
+	 * when THP is desired because fallocate populates the shmem page cache
+	 * with 4KB pages, preventing the mmap fault handler from allocating
+	 * transparent huge pages.
+	 *
+	 * Instead, we use MADV_POPULATE_WRITE to pre-fault pages through the
+	 * mmap path, which respects the MADV_HUGEPAGE hint and allocates huge
+	 * pages at PMD-aligned offsets. This also catches out-of-memory
+	 * conditions upfront (returns ENOMEM), providing the same safety as
+	 * posix_fallocate.
+	 */
+	if (madvise(ptr, mapping->shmem_req_size, MADV_HUGEPAGE) == -1)
+	{
+		elog(LOG, "segment[%s]: madvise(MADV_HUGEPAGE) failed: %m, falling back to fallocate",
+			 segname);
+		shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
+	}
+	else
+	{
+		elog(LOG, "segment[%s]: madvise(MADV_HUGEPAGE) succeeded, pre-faulting via MADV_POPULATE_WRITE",
+			 segname);
+		if (madvise(ptr, mapping->shmem_req_size, MADV_POPULATE_WRITE) == -1)
+			elog(FATAL,
+					"segment[%s]: madvise(MADV_POPULATE_WRITE) failed for size %zu: %m",
+							segname, mapping->shmem_req_size);
+	}
+#else
 	shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
+#endif
 
 	anonseg->addr = ptr;
 	anonseg->size = mapping->shmem_reserved;
@@ -926,7 +1048,7 @@ PrepareHugePages(void)
 		}
 
 		/* Map total amount of memory to test its availability. */
-		elog(DEBUG1, "reserving space: probe mmap(%zu) with MAP_HUGETLB",
+		elog(LOG, "reserving space: probe mmap(%zu) with MAP_HUGETLB",
 			 total_size);
 		ptr = mmap(NULL, total_size, PROT_NONE,
 				   mmap_flags | huge_mmap_flags, -1, 0);
@@ -935,6 +1057,8 @@ PrepareHugePages(void)
 			munmap(ptr, total_size);
 	}
 #endif
+
+	elog(LOG, "huge_pages_status: %s", ptr == MAP_FAILED ? "off" : "on");
 
 	/*
 	 * Report whether huge pages are in use. This needs to be tracked before
@@ -1029,8 +1153,25 @@ AnonymousShmemResize(int segment_id, MemoryMappingSizes *mapping, bool expanding
 				(errcode(ERRCODE_SYSTEM_ERROR),
 				 errmsg("could not truncate anonymous file segment for \"%s\": %m",
 						MappingName(segment_id))));
+
 	if (expanding)
+	{
+		// shmem_fallocate(anonseg->fd, MappingName(segment_id), mapping->shmem_req_size, ERROR);
+#if defined(MADV_HUGEPAGE) && defined(MADV_POPULATE_WRITE) && USE_MADV_POPULATE_WRITE
+		/*
+		 * Pre-fault the expanded region via MADV_POPULATE_WRITE to allocate
+		 * pages through the mmap fault handler, which respects the
+		 * MADV_HUGEPAGE VMA flag set during CreateAnonymousSegment.
+		 */
+		if (madvise(anonseg->addr, mapping->shmem_req_size, MADV_POPULATE_WRITE) == -1)
+			ereport(ERROR,
+					(errcode(ERRCODE_SYSTEM_ERROR),
+					 errmsg("could not populate anonymous file segment for \"%s\": %m",
+							MappingName(segment_id))));
+#else
 		shmem_fallocate(anonseg->fd, MappingName(segment_id), mapping->shmem_req_size, ERROR);
+#endif
+	}
 
 	return true;
 }

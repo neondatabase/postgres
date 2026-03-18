@@ -631,6 +631,8 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 
 	delay_shmem_resize = true;
 
+	// TODO: a race condition here with shmem resize.
+
 	/*
 	 * Get rid of any remaining buffers for the relations.  bufmgr will just
 	 * drop them without bothering to write the contents.
@@ -960,6 +962,8 @@ smgrtruncate(SMgrRelation reln, ForkNumber *forknum, int nforks,
 	int			i;
 
 	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	/*
 	 * Get rid of any buffers for the about-to-be-deleted blocks. bufmgr will

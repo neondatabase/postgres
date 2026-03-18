@@ -5048,6 +5048,8 @@ DropDatabaseBuffers(Oid dbid)
 
 	delay_shmem_resize = true;
 
+	// TODO: a race condition here with shmem resize.
+
 	/*
 	 * We needn't consider local buffers, since by assumption the target
 	 * database isn't our own.
@@ -5101,6 +5103,8 @@ FlushRelationBuffers(Relation rel)
 	SMgrRelation srel = RelationGetSmgr(rel);
 
 	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	if (RelationUsesLocalBuffers(rel) || am_wal_redo_postgres)
 	{
@@ -5220,6 +5224,8 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		qsort(srels, nrels, sizeof(SMgrSortArray), rlocator_comparator);
 
 	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	for (i = 0; i < NBuffersPending; i++)
 	{
@@ -5479,6 +5485,8 @@ FlushDatabaseBuffers(Oid dbid)
 	BufferDesc *bufHdr;
 
 	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	for (i = 0; i < NBuffersPending; i++)
 	{
@@ -6906,6 +6914,8 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 	*buffers_flushed = 0;
 
 	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	for (int buf = 1; buf <= NBuffersPending; buf++)
 	{

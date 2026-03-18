@@ -594,8 +594,8 @@ ShmemInitStructInSegment(const char *name, Size size, bool *foundPtr, int segmen
 			ereport(ERROR,
 					(errcode(ERRCODE_OUT_OF_MEMORY),
 					 errmsg("not enough shared memory for data structure"
-							" \"%s\" (%zu bytes requested)",
-							name, size)));
+							" \"%s\" (%zu bytes requested) (%zu bytes allocated)",
+							name, size, allocated_size)));
 		}
 		result->size = size;
 		result->allocated_size = allocated_size;
