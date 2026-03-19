@@ -210,7 +210,7 @@ static SubTransactionId myTempNamespaceSubID = InvalidSubTransactionId;
  * of the GUC variable 'search_path'.
  */
 char	   *namespace_search_path = NULL;
-
+bool		prohibit_superuser_overrides;
 
 /* Local functions */
 static bool RelationIsVisibleExt(Oid relid, bool *is_missing);
@@ -1201,6 +1201,7 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 	Oid			namespaceId;
 	CatCList   *catlist;
 	int			i;
+	bool		has_superuser_candidate = false;
 
 	/* check for caller error */
 	Assert(nargs >= 0 || !(expand_variadic | expand_defaults));
@@ -1262,6 +1263,22 @@ FuncnameGetCandidates(List *names, int nargs, List *argnames,
 			}
 			if (nsp == NULL)
 				continue;		/* proc is not in search path */
+		}
+
+		/* prohibit overrides under superuser */
+		if (prohibit_superuser_overrides && superuser())
+		{
+			bool owned_by_superuser = superuser_arg(procform->proowner);
+
+			/* If we have superuser condidate, then ignore all non-supoeruser alternatives */
+			if (resultList && has_superuser_candidate && !owned_by_superuser)
+				continue;
+
+			/* If new candidate is owned by superuser then forget all non-superuser candidates */
+			if (owned_by_superuser && !has_superuser_candidate)
+				resultList = NULL;
+
+			has_superuser_candidate = owned_by_superuser;
 		}
 
 		/*
@@ -4251,6 +4268,10 @@ finalNamespacePath(List *oidlist, Oid *firstNS)
 	if (OidIsValid(myTempNamespace) &&
 		!list_member_oid(finalPath, myTempNamespace))
 		finalPath = lcons_oid(myTempNamespace, finalPath);
+
+	/* Always place pg_catalog at the beginning of search path */
+	if (prohibit_superuser_overrides && superuser())
+		finalPath = lcons_oid(PG_CATALOG_NAMESPACE, finalPath);
 
 	return finalPath;
 }

@@ -642,6 +642,8 @@ restart:
 								  LSN_FORMAT_ARGS(RecPtr));
 			goto err;
 		}
+		targetRecOff += ((XLogPageHeader) state->readBuf)->xlp_rem_len;
+		RecPtr += ((XLogPageHeader) state->readBuf)->xlp_rem_len;
 	}
 
 	/* ReadPageInternal has verified the page header */
