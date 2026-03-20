@@ -55,4 +55,7 @@ extern Oid	get_function_sibling_type(Oid funcoid, const char *typname);
 extern ObjectAddress AlterExtensionNamespace(const char *extensionName, const char *newschema,
 											 Oid *oldschema);
 
+typedef bool (*extension_is_visible_hook_type) (const char *extname);
+extern PGDLLIMPORT extension_is_visible_hook_type extension_is_visible_hook;
+
 #endif							/* EXTENSION_H */
