@@ -2182,6 +2182,16 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"buffer_mapping_flat", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Use index-based shared buffer mapping table instead of dynahash."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&buf_table_use_flat_mapping,
+		true,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{

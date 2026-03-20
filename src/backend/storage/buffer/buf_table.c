@@ -3,6 +3,9 @@
  * buf_table.c
  *	  routines for mapping BufferTags to buffer indexes.
  *
+ * When buffer_mapping_flat is true, the implementation in buf_table_flat.c
+ * is used; otherwise the historical dynahash (SharedBufHash) backend is used.
+ *
  * Note: the routines in this file do no locking of their own.  The caller
  * must hold a suitable lock on the appropriate BufMappingLock, as specified
  * in the comments.  We can't do the locking inside these functions because
@@ -23,13 +26,17 @@
 
 #include "fmgr.h"
 #include "funcapi.h"
+#include "storage/buf_table_flat.h"
 #include "storage/buf_internals.h"
+#include "storage/bufmgr.h"
 #include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
 #include "utils/rel.h"
 #include "utils/builtins.h"
 
-/* entry for buffer lookup hashtable */
+bool		buf_table_use_flat_mapping = false;
+
+/* entry for buffer lookup hashtable (dynahash path) */
 typedef struct
 {
 	BufferTag	key;			/* Tag of a disk page */
@@ -47,6 +54,8 @@ static HTAB *SharedBufHash;
 Size
 BufTableShmemSize(int size)
 {
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_ShmemSize(size);
 	return hash_estimate_size(size, sizeof(BufferLookupEnt));
 }
 
@@ -59,7 +68,12 @@ InitBufTable(int size)
 {
 	HASHCTL		info;
 
-	/* assume no locking is needed yet */
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_Init(size);
+		SharedBufHash = NULL;
+		return;
+	}
 
 	/* BufferTag maps to Buffer */
 	info.keysize = sizeof(BufferTag);
@@ -91,6 +105,8 @@ InitBufTable(int size)
 uint32
 BufTableHashCode(BufferTag *tagPtr)
 {
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_HashCode(tagPtr);
 	return get_hash_value(SharedBufHash, tagPtr);
 }
 
@@ -104,6 +120,9 @@ int
 BufTableLookup(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
+
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_Lookup(tagPtr, hashcode);
 
 	result = (BufferLookupEnt *)
 		hash_search_with_hash_value(SharedBufHash,
@@ -134,6 +153,9 @@ BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
 	BufferLookupEnt *result;
 	bool		found;
 
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_Insert(tagPtr, hashcode, buf_id);
+
 	Assert(buf_id >= 0);		/* -1 is reserved for not-in-table */
 	Assert(tagPtr->blockNum != P_NEW);	/* invalid tag */
 
@@ -162,6 +184,12 @@ void
 BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
+
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_Delete(tagPtr, hashcode);
+		return;
+	}
 
 	result = (BufferLookupEnt *)
 		hash_search_with_hash_value(SharedBufHash,
@@ -197,6 +225,12 @@ BufTableGetContents(Tuplestorestate *tupstore, TupleDesc tupdesc)
 	memset(nulls, 0, sizeof(nulls));
 
 	Assert(tupdesc->natts == BUFTABLE_CONTENTS_COLS);
+
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_GetContents(tupstore, tupdesc);
+		return;
+	}
 
 	/*
 	 * Lock all buffer mapping partitions to ensure a consistent view of the
