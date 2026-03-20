@@ -76,6 +76,9 @@
 bool		creating_extension = false;
 Oid			CurrentExtensionObject = InvalidOid;
 
+/* Hook for filtering extensions in pg_available_extensions */
+extension_is_visible_hook_type extension_is_visible_hook = NULL;
+
 /*
  * Internal data structure to hold the results of parsing a control file
  */
