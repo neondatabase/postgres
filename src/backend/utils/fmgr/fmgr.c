@@ -37,7 +37,6 @@
  */
 PGDLLIMPORT needs_fmgr_hook_type needs_fmgr_hook = NULL;
 PGDLLIMPORT fmgr_hook_type fmgr_hook = NULL;
-PGDLLIMPORT extension_is_visible_hook_type extension_is_visible_hook = NULL;
 
 /*
  * Hashtable for fast lookup of external C functions
