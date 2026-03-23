@@ -1058,7 +1058,7 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	MyProc->lwWaitMode = mode;
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
-	if (mode == LW_WAIT_UNTIL_FREE || (AmStartupProcess() && StandbyMode))
+	if (mode == LW_WAIT_UNTIL_FREE || AmStartupProcess())
 		proclist_push_head(&lock->waiters, MyProcNumber, lwWaitLink);
 	else
 		proclist_push_tail(&lock->waiters, MyProcNumber, lwWaitLink);
