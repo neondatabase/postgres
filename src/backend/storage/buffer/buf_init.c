@@ -219,9 +219,19 @@ BufferManagerShmemSize(MemoryMappingSizes *mapping_sizes)
 	size = add_size(size, PG_CACHE_LINE_SIZE);
 	mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_reserved = size;
 
-	/* size of checkpoint sort array in bufmgr.c */
-	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_req_size = mul_size(NBuffersPending, sizeof(CkptSortItem));
-	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_reserved = mul_size(MaxNBuffers, sizeof(CkptSortItem));
+	/*
+	 * Checkpoint sort array in bufmgr.c.  Include PG_CACHE_LINE_SIZE like the
+	 * other buffer segments: the segment begins with PGShmemHeader and
+	 * ShmemAllocRaw cacheline-aligns allocations.  Without this slack, a
+	 * size that is already a multiple of the THP rounding (2MB) can leave the
+	 * mapping one header/alignment increment too small.
+	 */
+	size = add_size(0, mul_size(NBuffersPending, sizeof(CkptSortItem)));
+	size = add_size(size, PG_CACHE_LINE_SIZE);
+	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_req_size = size;
+	size = add_size(0, mul_size(MaxNBuffers, sizeof(CkptSortItem)));
+	size = add_size(size, PG_CACHE_LINE_SIZE);
+	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_reserved = size;
 
 	/* Allocations in the main memory segment, at the end. */
 
