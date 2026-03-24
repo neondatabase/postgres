@@ -66,5 +66,14 @@ SELECT injection_points_detach('TestConditionError');
 SELECT injection_points_attach('TestConditionLocal1', 'error');
 SELECT injection_points_detach('TestConditionLocal1');
 
+-- Function variant for attach.
+SELECT injection_points_attach(NULL, NULL, NULL, NULL);
+SELECT injection_points_attach('injection_points', NULL, NULL, NULL);
+SELECT injection_points_attach('injection_points', 'injection_notice', NULL, NULL);
+SELECT injection_points_attach('TestInjectionNoticeFunc',
+    'injection_points', 'injection_notice', NULL);
+SELECT injection_points_run('TestInjectionNoticeFunc'); -- notice
+SELECT injection_points_detach('TestInjectionNoticeFunc');
+
 DROP EXTENSION injection_points;
 DROP FUNCTION wait_pid;

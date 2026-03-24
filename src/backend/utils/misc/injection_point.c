@@ -335,8 +335,10 @@ InjectionPointAttach(const char *name,
 	entry->library[INJ_LIB_MAXLEN - 1] = '\0';
 	strlcpy(entry->function, function, sizeof(entry->function));
 	entry->function[INJ_FUNC_MAXLEN - 1] = '\0';
-	if (private_data != NULL)
+	if (private_data != NULL && private_data_size > 0)
 		memcpy(entry->private_data, private_data, private_data_size);
+	else
+		memset(entry->private_data, 0, sizeof(entry->private_data));
 
 	pg_write_barrier();
 	pg_atomic_write_u64(&entry->generation, generation + 1);
