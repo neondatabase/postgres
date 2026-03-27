@@ -2183,6 +2183,14 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"buffer_shrink_cooperative_eviction", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, evict to-be-removed buffers when the last pin is released."),
+		},
+		&buffer_shrink_cooperative_eviction,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"buffer_mapping_flat", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Use index-based shared buffer mapping table instead of dynahash."),
 			NULL,
@@ -2434,6 +2442,24 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&MaxNBuffers,
 		0, 0, INT_MAX / 2,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"buffer_shrink_relocate_usage_threshold", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, relocate buffers whose usage count is greater than this value into the active range; -1 disables."),
+		},
+		&buffer_shrink_relocate_usage_threshold,
+		-1, -1, 5,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"buffer_shrink_relocate_usage_sample_size", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, relocation also requires source usage count to exceed the mean of this many random active-buffer usage counts; -1 skips this check."),
+		},
+		&buffer_shrink_relocate_usage_sample_size,
+		-1, -1, 4096,
 		NULL, NULL, NULL
 	},
 
