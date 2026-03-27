@@ -5330,6 +5330,27 @@ XLOGShmemInit(void)
 	ConditionVariableInit(&XLogCtl->recoveryNotPausedCV);
 }
 
+static XLogRecPtr replayRecPtr = InvalidXLogRecPtr;
+
+bool
+XLogRecordReplayFinished(XLogRecPtr redoEndRecPtr)
+{
+	if (!RecoveryInProgress())
+		return true;
+
+	/*
+	 * Check the backend-local variable first, we may be able to skip accessing
+	 * shared memory (which requires locking)
+	 */
+	if (redoEndRecPtr <= replayRecPtr)
+		return true;
+
+	/* update the backend-local cache with more up-to-date values */
+	replayRecPtr = GetXLogReplayRecPtr(NULL);
+
+	return redoEndRecPtr <= replayRecPtr;
+}
+
 /*
  * Wait for recovery to complete replaying all WAL up to and including
  * redoEndRecPtr.
@@ -5340,25 +5361,14 @@ XLOGShmemInit(void)
 void
 XLogWaitForReplayOf(XLogRecPtr redoEndRecPtr)
 {
-	static XLogRecPtr replayRecPtr = 0;
-
-	if (!RecoveryInProgress())
-		return;
-
 	/*
-	 * Check the backend-local variable first, we may be able to skip accessing
-	 * shared memory (which requires locking)
+	 * Check if the record has been replayed yet. This includes up-to-date
+	 * information about current replay state - if it hasn't been replayed,
+	 * we're probably going to have to wait.
+	 *
+	 * This also returns if we're not in recovery mode.
 	 */
-	if (redoEndRecPtr <= replayRecPtr)
-		return;
-
-	replayRecPtr = GetXLogReplayRecPtr(NULL);
-
-	/*
-	 * Check again if we're going to need to wait, now that we've updated
-	 * the local cached variable.
-	 */
-	if (redoEndRecPtr <= replayRecPtr)
+	if (XLogRecordReplayFinished(redoEndRecPtr))
 		return;
 
 	/*
