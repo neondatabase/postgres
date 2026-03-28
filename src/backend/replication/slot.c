@@ -44,6 +44,7 @@
 #include "common/string.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "replication/logical.h"
 #include "replication/slot.h"
 #include "replication/message.h"
 #include "storage/fd.h"
@@ -1261,7 +1262,7 @@ InvalidatePossiblyObsoleteSlot(ReplicationSlot *s, XLogRecPtr oldestLSN,
 		 * If the slot is already invalid or is fresh enough, we don't need to
 		 * do anything.
 		 */
-		if (XLogRecPtrIsInvalid(restart_lsn) || restart_lsn >= oldestLSN)
+		if (XLogRecPtrIsInvalid(restart_lsn) || restart_lsn >= oldestLSN || Custom_XLogReaderRoutines)
 		{
 			SpinLockRelease(&s->mutex);
 			if (released_lock)
