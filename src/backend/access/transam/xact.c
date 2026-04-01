@@ -1500,16 +1500,6 @@ RecordTransactionCommit(void)
 			TransactionIdAsyncCommitTree(xid, nchildren, children, XactLastRecEnd);
 	}
 
-	/*
-	 * If we entered a commit critical section, leave it now, and let
-	 * checkpoints proceed.
-	 */
-	if (markXidCommitted)
-	{
-		MyProc->delayChkptFlags &= ~DELAY_CHKPT_START;
-		END_CRIT_SECTION();
-	}
-
 	/* Compute latestXid while we have the child XIDs handy */
 	latestXid = TransactionIdLatest(xid, nchildren, children);
 
@@ -1530,6 +1520,17 @@ RecordTransactionCommit(void)
 
 	/* Reset XactLastRecEnd until the next transaction writes something */
 	XactLastRecEnd = 0;
+
+	/*
+	 * If we entered a commit critical section, leave it now, and let
+	 * checkpoints proceed.
+	 */
+	if (markXidCommitted)
+	{
+		MyProc->delayChkptFlags &= ~DELAY_CHKPT_START;
+		END_CRIT_SECTION();
+	}
+
 cleanup:
 	/* Clean up local data */
 	if (rels)
