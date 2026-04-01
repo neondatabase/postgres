@@ -187,11 +187,9 @@ ClockSweepTick(void)
 bool
 have_free_buffer(void)
 {
-	return false;
-	// if (StrategyControl->firstFreeBuffer >= 0)
-	// 	return true;
-	// else
-	// 	return false;
+	if (!enable_freelist)
+		return false;
+	return StrategyControl->firstFreeBuffer >= 0;
 }
 
 /*
@@ -279,51 +277,62 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	 * buffer_strategy_lock not the individual buffer spinlocks, so it's OK to
 	 * manipulate them without holding the spinlock.
 	 */
-	// if (StrategyControl->firstFreeBuffer >= 0)
-	// {
-	// 	while (true)
-	// 	{
-	// 		/* Acquire the spinlock to remove element from the freelist */
-	// 		SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	if (enable_freelist && StrategyControl->firstFreeBuffer >= 0)
+	{
+		while (true)
+		{
+			uint32		activeBuffers;
 
-	// 		if (StrategyControl->firstFreeBuffer < 0)
-	// 		{
-	// 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
-	// 			break;
-	// 		}
+			/* Acquire the spinlock to remove element from the freelist */
+			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-	// 		buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
-	// 		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+			if (StrategyControl->firstFreeBuffer < 0)
+			{
+				SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+				break;
+			}
 
-	// 		/* Unconditionally remove buffer from freelist */
-	// 		StrategyControl->firstFreeBuffer = buf->freeNext;
-	// 		buf->freeNext = FREENEXT_NOT_IN_LIST;
+			buf = GetBufferDescriptor(StrategyControl->firstFreeBuffer);
+			Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
 
-	// 		/*
-	// 		 * Release the lock so someone else can access the freelist while
-	// 		 * we check out this buffer.
-	// 		 */
-	// 		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+			/* Unconditionally remove buffer from freelist */
+			StrategyControl->firstFreeBuffer = buf->freeNext;
+			buf->freeNext = FREENEXT_NOT_IN_LIST;
+			activeBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
 
-	// 		/*
-	// 		 * If the buffer is pinned or has a nonzero usage_count, we cannot
-	// 		 * use it; discard it and retry.  (This can only happen if VACUUM
-	// 		 * put a valid buffer in the freelist and then someone else used
-	// 		 * it before we got to it.  It's probably impossible altogether as
-	// 		 * of 8.3, but we'd better check anyway.)
-	// 		 */
-	// 		local_buf_state = LockBufHdr(buf);
-	// 		if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
-	// 			&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
-	// 		{
-	// 			if (strategy != NULL)
-	// 				AddBufferToRing(strategy, buf);
-	// 			*buf_state = local_buf_state;
-	// 			return buf;
-	// 		}
-	// 		UnlockBufHdr(buf, local_buf_state);
-	// 	}
-	// }
+			/*
+			 * Release the lock so someone else can access the freelist while
+			 * we check out this buffer.
+			 */
+			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+
+			/*
+			 * During resize, skip descriptors outside the active range; they
+			 * should not appear once the coordinator has purged the freelist,
+			 * but be defensive.
+			 */
+			if (buf->buf_id >= (int) activeBuffers)
+				continue;
+
+			/*
+			 * If the buffer is pinned or has a nonzero usage_count, we cannot
+			 * use it; discard it and retry.  (This can only happen if VACUUM
+			 * put a valid buffer in the freelist and then someone else used
+			 * it before we got to it.  It's probably impossible altogether as
+			 * of 8.3, but we'd better check anyway.)
+			 */
+			local_buf_state = LockBufHdr(buf);
+			if (BUF_STATE_GET_REFCOUNT(local_buf_state) == 0
+				&& BUF_STATE_GET_USAGECOUNT(local_buf_state) == 0)
+			{
+				if (strategy != NULL)
+					AddBufferToRing(strategy, buf);
+				*buf_state = local_buf_state;
+				return buf;
+			}
+			UnlockBufHdr(buf, local_buf_state);
+		}
+	}
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
 	trycounter = NBuffersPending;
@@ -376,21 +385,33 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 void
 StrategyFreeBuffer(BufferDesc *buf)
 {
-	// SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	uint32		activeBuffers;
 
-	// /*
-	//  * It is possible that we are told to put something in the freelist that
-	//  * is already in it; don't screw up the list if so.
-	//  */
-	// if (buf->freeNext == FREENEXT_NOT_IN_LIST)
-	// {
-	// 	buf->freeNext = StrategyControl->firstFreeBuffer;
-	// 	if (buf->freeNext < 0)
-	// 		StrategyControl->lastFreeBuffer = buf->buf_id;
-	// 	StrategyControl->firstFreeBuffer = buf->buf_id;
-	// }
+	if (!enable_freelist)
+		return;
 
-	// SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	activeBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+	if (buf->buf_id >= (int) activeBuffers)
+	{
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		return;
+	}
+
+	/*
+	 * It is possible that we are told to put something in the freelist that
+	 * is already in it; don't screw up the list if so.
+	 */
+	if (buf->freeNext == FREENEXT_NOT_IN_LIST)
+	{
+		buf->freeNext = StrategyControl->firstFreeBuffer;
+		if (buf->freeNext < 0)
+			StrategyControl->lastFreeBuffer = buf->buf_id;
+		StrategyControl->firstFreeBuffer = buf->buf_id;
+	}
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /*
@@ -499,9 +520,18 @@ StrategyReset(int activeNBuffers)
 	/* Reset the clock-sweep pointer to start from beginning */
 	pg_atomic_write_u32(&StrategyControl->nextVictimBuffer, 0);
 
-	StrategyControl->firstFreeBuffer = 0;
-	StrategyControl->lastFreeBuffer = activeNBuffers - 1;
-	
+	/*
+	 * When the freelist is disabled, clear list head/tail.  When enabled, do
+	 * not reset them here: shrink runs StrategyPurgeFreelistAbove(), expand
+	 * runs StrategyAppendNewBuffersToFreelist(), and otherwise the list is
+	 * managed incrementally.
+	 */
+	if (!enable_freelist)
+	{
+		StrategyControl->firstFreeBuffer = -1;
+		StrategyControl->lastFreeBuffer = -1;
+	}
+
 	/*
 	 * The statistics is viewed in the context of the number of shared
 	 * buffers. Reset it as the size of active number of shared buffers
@@ -512,6 +542,93 @@ StrategyReset(int activeNBuffers)
 
 	/* TODO: Do we need to seset background writer notifications? */
 	StrategyControl->bgwprocno = -1;
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/*
+ * Remove from the freelist every buffer with buf_id >= activeNBuffers.
+ * Caller must hold no buffer_strategy_lock; coordinator uses this during
+ * shrink so the freelist only references [0, activeNBuffers).
+ */
+void
+StrategyPurgeFreelistAbove(int activeNBuffers)
+{
+	int			cur;
+	int			next;
+	int			new_head = -1;
+	int			new_tail = -1;
+	BufferDesc *buf;
+
+	if (!enable_freelist)
+		return;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	cur = StrategyControl->firstFreeBuffer;
+	while (cur >= 0)
+	{
+		buf = GetBufferDescriptor(cur);
+		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+		next = buf->freeNext;
+
+		if (cur < activeNBuffers)
+		{
+			if (new_head < 0)
+			{
+				new_head = cur;
+				new_tail = cur;
+			}
+			else
+			{
+				GetBufferDescriptor(new_tail)->freeNext = cur;
+				new_tail = cur;
+			}
+		}
+		else
+			buf->freeNext = FREENEXT_NOT_IN_LIST;
+
+		cur = next;
+	}
+
+	if (new_tail >= 0)
+		GetBufferDescriptor(new_tail)->freeNext = FREENEXT_END_OF_LIST;
+
+	StrategyControl->firstFreeBuffer = new_head;
+	if (new_head >= 0)
+		StrategyControl->lastFreeBuffer = new_tail;
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/*
+ * After expanding the descriptor array, link new buffers [first_new_id,
+ * targetNBuffers) into a chain and append it to the freelist tail.
+ */
+void
+StrategyAppendNewBuffersToFreelist(int first_new_id, int targetNBuffers)
+{
+	int			i;
+
+	if (!enable_freelist || first_new_id >= targetNBuffers)
+		return;
+
+	for (i = first_new_id; i < targetNBuffers - 1; i++)
+		GetBufferDescriptor(i)->freeNext = i + 1;
+	GetBufferDescriptor(targetNBuffers - 1)->freeNext = FREENEXT_END_OF_LIST;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	if (StrategyControl->firstFreeBuffer < 0)
+	{
+		StrategyControl->firstFreeBuffer = first_new_id;
+		StrategyControl->lastFreeBuffer = targetNBuffers - 1;
+	}
+	else
+	{
+		GetBufferDescriptor(StrategyControl->lastFreeBuffer)->freeNext = first_new_id;
+		StrategyControl->lastFreeBuffer = targetNBuffers - 1;
+	}
+
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
@@ -571,9 +688,20 @@ StrategyInitialize(bool init)
 		/*
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by BufferManagerShmemInit().
+		 * When the freelist is disabled, leave the list empty so allocation
+		 * uses only the clock sweep.
 		 */
-		StrategyControl->firstFreeBuffer = 0;
-		StrategyControl->lastFreeBuffer = NBuffers - 1;
+		if (enable_freelist)
+		{
+			StrategyControl->firstFreeBuffer = 0;
+			/* NBuffers is not set yet; BufferManagerShmemInit uses NBuffersPending. */
+			StrategyControl->lastFreeBuffer = NBuffersPending - 1;
+		}
+		else
+		{
+			StrategyControl->firstFreeBuffer = -1;
+			StrategyControl->lastFreeBuffer = -1;
+		}
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);

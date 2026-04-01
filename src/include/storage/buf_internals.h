@@ -458,6 +458,8 @@ extern Size StrategyShmemSize(void);
 extern void StrategyInitialize(bool init);
 extern uint32 StrategyGetActiveNBuffers(void);
 extern void StrategyReset(int activeNBuffers);
+extern void StrategyPurgeFreelistAbove(int activeNBuffers);
+extern void StrategyAppendNewBuffersToFreelist(int first_new_id, int targetNBuffers);
 extern bool have_free_buffer(void);
 
 /* buf_table.c */

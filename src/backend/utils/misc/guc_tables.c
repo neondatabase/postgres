@@ -2191,6 +2191,14 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_freelist", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Enables the shared buffer freelist for faster reuse of empty buffers."),
+		},
+		&enable_freelist,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"buffer_mapping_flat", PGC_POSTMASTER, RESOURCES_MEM,
 			gettext_noop("Use index-based shared buffer mapping table instead of dynahash."),
 			NULL,

@@ -183,6 +183,7 @@ extern PGDLLIMPORT bool buffer_shrink_cooperative_eviction;
 extern PGDLLIMPORT int buffer_shrink_relocate_usage_threshold;
 extern PGDLLIMPORT int buffer_shrink_relocate_usage_sample_size;
 extern PGDLLIMPORT bool buf_table_use_flat_mapping;
+extern PGDLLIMPORT bool enable_freelist;
 
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;

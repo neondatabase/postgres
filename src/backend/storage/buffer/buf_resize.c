@@ -155,6 +155,9 @@ DoShrink(ReturnSetInfo *rsinfo, int currentNBuffers, int targetNBuffers,
 	int			i;
 
 	/* Phase 1: Shrinking */
+	StrategyReset(targetNBuffers);
+	if (enable_freelist)
+		StrategyPurgeFreelistAbove(targetNBuffers);
 	elog(LOG, "Phase 1: Shrinking buffer pool, restricting allocations to %d buffers", targetNBuffers);
 	INSTR_TIME_SET_CURRENT(phase_start);
 	INSTR_TIME_SET_CURRENT(shrink_start);
@@ -177,6 +180,13 @@ DoShrink(ReturnSetInfo *rsinfo, int currentNBuffers, int targetNBuffers,
 	INSTR_TIME_SET_CURRENT(phase_end);
 	INSTR_TIME_SUBTRACT(phase_end, phase_start);
 	EmitResizePhaseRow(rsinfo, "Phase 1: Evicting", INSTR_TIME_GET_DOUBLE(phase_end), false);
+
+	/*
+	 * Eviction may have returned buffers in the removed id range to the
+	 * freelist; drop those entries before we shrink descriptors.
+	 */
+	if (enable_freelist)
+		StrategyPurgeFreelistAbove(targetNBuffers);
 
 	INSTR_TIME_SET_CURRENT(phase_start);
 	BufferManagerShmemResize(currentNBuffers, targetNBuffers);
@@ -252,8 +262,12 @@ DoExpand(ReturnSetInfo *rsinfo, int currentNBuffers, int targetNBuffers,
 	INSTR_TIME_SET_CURRENT(phase_end);
 	INSTR_TIME_SUBTRACT(phase_end, phase_start);
 	EmitResizePhaseRow(rsinfo, "Phase 2: ShmemResize", INSTR_TIME_GET_DOUBLE(phase_end), false);
-	
+
+	if (enable_freelist)
+		StrategyAppendNewBuffersToFreelist(currentNBuffers, targetNBuffers);
+
 	pg_atomic_write_u32(&ShmemCtrl->currentNBuffers, targetNBuffers);
+	StrategyReset(targetNBuffers);
 	INSTR_TIME_SET_CURRENT(phase_start);
 	SharedBufferResizeBarrier(PROCSIGNAL_BARRIER_SHBUF_EXPAND, CppAsString(PROCSIGNAL_BARRIER_SHBUF_EXPAND));
 	INSTR_TIME_SET_CURRENT(phase_end);
@@ -422,7 +436,6 @@ ProcessBarrierShmemShrink(void)
 		 */
 		BgBufferSyncReset(currentNBuffers, targetNBuffers);
 		/* Reset strategy control to new size */
-		StrategyReset(targetNBuffers);
 	}
 	else
 	{
@@ -528,7 +541,6 @@ ProcessBarrierShmemExpand(void)
 		 * background worker to do that. So find a better way.
 		 */
 		BgBufferSyncReset(currentNBuffers, targetNBuffers);
-		StrategyReset(targetNBuffers);
 	}
 
 	/*

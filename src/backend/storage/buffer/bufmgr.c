@@ -210,6 +210,13 @@ int			buffer_shrink_relocate_usage_threshold = -1;
 int			buffer_shrink_relocate_usage_sample_size = -1;
 
 /*
+ * When true, use the shared buffer freelist (StrategyFreeBuffer /
+ * StrategyGetBuffer) in addition to the clock sweep.  When false, only the
+ * clock algorithm is used (legacy v18-with-resize behavior).
+ */
+bool		enable_freelist = false;
+
+/*
  * Re-entrancy guard: EvictUnpinnedBufferInternal ends with UnpinBuffer, which
  * would otherwise call back into TryEvictExtraBufferOnResizeShrinkLastUnpin.
  */
