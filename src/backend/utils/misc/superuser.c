@@ -35,6 +35,7 @@
 static Oid	last_roleid = InvalidOid;	/* InvalidOid == cache not valid */
 static bool last_roleid_is_super = false;
 static bool roleid_callback_registered = false;
+SUForUser_hook_type SUForUser_hook = NULL;
 
 static void RoleidCallback(Datum arg, int cacheid, uint32 hashvalue);
 
@@ -72,6 +73,11 @@ superuser_arg(Oid roleid)
 	{
 		result = ((Form_pg_authid) GETSTRUCT(rtup))->rolsuper;
 		ReleaseSysCache(rtup);
+
+		if (!result && SUForUser_hook != NULL)
+		{
+			result = SUForUser_hook(roleid);
+		}
 	}
 	else
 	{
