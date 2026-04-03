@@ -348,7 +348,7 @@ PGReserveSemaphores(int maxSemas)
 	 * ShmemAlloc() won't be ready yet.
 	 */
 	sharedSemas = (PGSemaphore)
-		ShmemAllocUnlocked(MAIN_SHMEM_SEGMENT, PGSemaphoreShmemSize(maxSemas));
+		ShmemAllocUnlocked(PGSemaphoreShmemSize(maxSemas));
 	numSharedSemas = 0;
 	maxSharedSemas = maxSemas;
 

@@ -470,7 +470,7 @@ CreateLWLocks(void)
 		char	   *ptr;
 
 		/* Allocate space */
-		ptr = (char *) ShmemAlloc(MAIN_SHMEM_SEGMENT, spaceLocks);
+		ptr = (char *) ShmemAlloc(spaceLocks);
 
 		/* Leave room for dynamic allocation of tranches */
 		ptr += sizeof(int);
@@ -621,9 +621,9 @@ LWLockNewTrancheId(void)
 
 	LWLockCounter = (int *) ((char *) MainLWLockArray - sizeof(int));
 	/* We use the ShmemLock spinlock to protect LWLockCounter */
-	SpinLockAcquire(InhShmemSegs[MAIN_SHMEM_SEGMENT].ShmemLock);
+	SpinLockAcquire(ShmemLock);
 	result = (*LWLockCounter)++;
-	SpinLockRelease(InhShmemSegs[MAIN_SHMEM_SEGMENT].ShmemLock);
+	SpinLockRelease(ShmemLock);
 
 	return result;
 }

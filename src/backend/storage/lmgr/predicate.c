@@ -596,7 +596,7 @@ CreatePredXact(void)
 static void
 ReleasePredXact(SERIALIZABLEXACT *sxact)
 {
-	Assert(ShmemAddrIsValid(MAIN_SHMEM_SEGMENT, sxact));
+	Assert(ShmemAddrIsValid(sxact));
 
 	dlist_delete(&sxact->xactLink);
 	dlist_push_tail(&PredXact->availableList, &sxact->xactLink);

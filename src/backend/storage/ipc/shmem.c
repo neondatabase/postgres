@@ -63,18 +63,6 @@
  *	unnecessary.
  */
 
- /*
-  * TODO: Most of the functions here can take PGShmemSegment as argument
-  * instead of segment_id except for ShmemAlloc, ShmemInitStructInSegment, and
-  * ShmemAddrIsValid. The first one is used in lwlock.c. We need to check
-  * whether we can use ShmemAllocInternal() there and expose Segements.
-  * Exposing Segments where the third one is used seems even harder. The
-  * second one can not replace ShmemInitStruct since the latter is used in
-  * many places. Further we need ShmemInitStructInSegment to accept segment_id
-  * so that we can avoid exposing Segments in all the places where the
-  * function is used.
-  */
-
 #include "postgres.h"
 
 #include "fmgr.h"
@@ -107,6 +95,12 @@ typedef struct ShmemSegment
 
 ShmemSegment Segments[NUM_MEMORY_MAPPINGS];
 
+/*
+ * OSS compatibility: points at main segment allocator lock (same as
+ * InhShmemSegs[MAIN_SHMEM_SEGMENT].ShmemLock after startup).
+ */
+slock_t    *ShmemLock = NULL;
+
 static void *ShmemAllocRaw(ShmemSegment *segment, Size size, Size *allocated_size);
 static void *ShmemAllocUnlockedInternal(ShmemSegment *segment, Size size);
 
@@ -129,7 +123,14 @@ Datum		pg_numa_available(PG_FUNCTION_ARGS);
  * even if the underlying segments get resized.
  */
 void
-InitShmemAccess(int segment_id, PGShmemHeader *seghdr, slock_t *ShmemLock)
+InitShmemAccess(PGShmemHeader *seghdr)
+{
+	InitShmemAccessInSegment(MAIN_SHMEM_SEGMENT, seghdr, NULL);
+}
+
+void
+InitShmemAccessInSegment(int segment_id, PGShmemHeader *seghdr,
+						 slock_t *passedShmemLock)
 {
 	ShmemSegment *segment;
 
@@ -137,19 +138,31 @@ InitShmemAccess(int segment_id, PGShmemHeader *seghdr, slock_t *ShmemLock)
 
 	/*
 	 * When called from Postmaster code after creating shared memory segment
-	 * ShmemLock is expected to be NULL; it will be created later. But a
+	 * passedShmemLock is expected to be NULL; it will be created later. But a
 	 * backend initialized under EXEC_BACKEND inherits already initialized
 	 * lock.
 	 */
-	Assert((!IsUnderPostmaster && !ShmemLock) || (IsUnderPostmaster && ShmemLock));
+	Assert((!IsUnderPostmaster && !passedShmemLock) ||
+		   (IsUnderPostmaster && passedShmemLock));
 
 	segment = &Segments[segment_id];
 
 	segment->ShmemSegHdr = seghdr;
 	segment->ShmemBase = (void *) seghdr;
-	segment->ShmemLock = ShmemLock;
+	segment->ShmemLock = passedShmemLock;
 	segment->ShmemSegmentName = MappingName(segment_id);
 
+	/*
+	 * EXEC_BACKEND children attach main lock before InitShmemAllocation runs.
+	 */
+	if (segment_id == MAIN_SHMEM_SEGMENT && segment->ShmemLock != NULL)
+		ShmemLock = segment->ShmemLock;
+}
+
+slock_t *
+InitShmemAllocation(void)
+{
+	return InitShmemAllocationInSegment(MAIN_SHMEM_SEGMENT);
 }
 
 /*
@@ -161,7 +174,7 @@ InitShmemAccess(int segment_id, PGShmemHeader *seghdr, slock_t *ShmemLock)
  * returns it.
  */
 slock_t *
-InitShmemAllocation(int segment_id)
+InitShmemAllocationInSegment(int segment_id)
 {
 	ShmemSegment *segment;
 	PGShmemHeader *shmhdr;
@@ -186,6 +199,9 @@ InitShmemAllocation(int segment_id)
 	segment->ShmemLock = (slock_t *) ShmemAllocUnlockedInternal(segment, sizeof(slock_t));
 
 	SpinLockInit(segment->ShmemLock);
+
+	if (segment_id == MAIN_SHMEM_SEGMENT)
+		ShmemLock = segment->ShmemLock;
 
 	/*
 	 * Allocations after this point should go through ShmemAlloc, which
@@ -228,7 +244,13 @@ ShmemAllocInternal(ShmemSegment *segment, Size size)
 }
 
 void *
-ShmemAlloc(int segment_id, Size size)
+ShmemAlloc(Size size)
+{
+	return ShmemAllocInSegment(MAIN_SHMEM_SEGMENT, size);
+}
+
+void *
+ShmemAllocInSegment(int segment_id, Size size)
 {
 	Assert(segment_id >= 0 && segment_id < NUM_MEMORY_MAPPINGS);
 
@@ -354,7 +376,13 @@ ShmemAllocUnlockedInternal(ShmemSegment *segment, Size size)
  * We consider maxalign, rather than cachealign, sufficient here.
  */
 void *
-ShmemAllocUnlocked(int segment_id, Size size)
+ShmemAllocUnlocked(Size size)
+{
+	return ShmemAllocUnlockedInSegment(MAIN_SHMEM_SEGMENT, size);
+}
+
+void *
+ShmemAllocUnlockedInSegment(int segment_id, Size size)
 {
 	ShmemSegment *segment;
 
@@ -366,12 +394,20 @@ ShmemAllocUnlocked(int segment_id, Size size)
 
 /*
  * ShmemAddrIsValid
- * 		test if an address refers to the given shared memory segment.
- *
- * Returns true if the pointer points within the shared memory segment.
+ * 		test if an address refers to the main shared memory segment.
  */
 bool
-ShmemAddrIsValid(int segment_id, const void *addr)
+ShmemAddrIsValid(const void *addr)
+{
+	return ShmemAddrIsValidInSegment(MAIN_SHMEM_SEGMENT, addr);
+}
+
+/*
+ * ShmemAddrIsValidInSegment
+ * 		test if an address refers to the given shared memory segment.
+ */
+bool
+ShmemAddrIsValidInSegment(int segment_id, const void *addr)
 {
 	ShmemSegment *segment;
 	void	   *shmemEnd;
@@ -605,7 +641,7 @@ ShmemInitStructInSegment(const char *name, Size size, bool *foundPtr, int segmen
 
 	LWLockRelease(ShmemIndexLock);
 
-	Assert(ShmemAddrIsValid(segment_id, structPtr));
+	Assert(ShmemAddrIsValidInSegment(segment_id, structPtr));
 
 	Assert(structPtr == (void *) CACHELINEALIGN(structPtr));
 

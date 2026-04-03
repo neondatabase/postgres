@@ -275,12 +275,12 @@ CreateSharedMemoryAndSemaphores(void)
 		 */
 		seghdr = PGSharedMemoryCreate(i, mapping, &shim);
 
-		InitShmemAccess(i, seghdr, NULL);
+		InitShmemAccessInSegment(i, seghdr, NULL);
 
 		/*
 		 * Set up shared memory allocation mechanism
 		 */
-		inhseg->ShmemLock = InitShmemAllocation(i);
+		inhseg->ShmemLock = InitShmemAllocationInSegment(i);
 
 		if (i == MAIN_SHMEM_SEGMENT)
 			main_seg_shim = shim;

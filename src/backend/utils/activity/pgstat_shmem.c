@@ -228,7 +228,7 @@ StatsShmemInit(void)
 				int			idx = kind - PGSTAT_KIND_CUSTOM_MIN;
 
 				Assert(kind_info->shared_size != 0);
-				ctl->custom_data[idx] = ShmemAlloc(MAIN_SHMEM_SEGMENT, kind_info->shared_size);
+				ctl->custom_data[idx] = ShmemAlloc(kind_info->shared_size);
 				ptr = ctl->custom_data[idx];
 			}
 

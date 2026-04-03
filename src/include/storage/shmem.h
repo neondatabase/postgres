@@ -29,12 +29,25 @@
 typedef struct PGShmemHeader PGShmemHeader; /* avoid including
 											 * storage/pg_shmem.h here */
 
-extern void InitShmemAccess(int segment_id, PGShmemHeader *seghdr, slock_t *ShmemLock);
-extern slock_t *InitShmemAllocation(int segment_id);
-extern void *ShmemAlloc(int segment_id, Size size);
+/*
+ * Main-segment API matches community PostgreSQL.  Multi-segment variants
+ * use *InSegment() and an explicit segment id.
+ */
+extern void InitShmemAccess(PGShmemHeader *seghdr);
+extern void InitShmemAccessInSegment(int segment_id, PGShmemHeader *seghdr,
+									 slock_t *passedShmemLock);
+extern slock_t *InitShmemAllocation(void);
+extern slock_t *InitShmemAllocationInSegment(int segment_id);
+extern void *ShmemAlloc(Size size);
+extern void *ShmemAllocInSegment(int segment_id, Size size);
 extern void *ShmemAllocNoError(Size size);
-extern void *ShmemAllocUnlocked(int segment_id, Size size);
-extern bool ShmemAddrIsValid(int segment_id, const void *addr);
+extern void *ShmemAllocUnlocked(Size size);
+extern void *ShmemAllocUnlockedInSegment(int segment_id, Size size);
+extern bool ShmemAddrIsValid(const void *addr);
+extern bool ShmemAddrIsValidInSegment(int segment_id, const void *addr);
+
+/* Spinlock protecting main-segment ShmemAlloc; same as main segment's lock */
+extern PGDLLIMPORT slock_t *ShmemLock;
 extern void InitShmemIndex(void);
 extern HTAB *ShmemInitHash(const char *name, long init_size, long max_size,
 						   HASHCTL *infoP, int hash_flags);

@@ -702,7 +702,7 @@ SubPostmasterMain(int argc, char *argv[])
 		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
 
 		if (inhseg->UsedShmemSegAddr != NULL)
-			InitShmemAccess(i, inhseg->UsedShmemSegAddr, inhseg->ShmemLock);
+			InitShmemAccessInSegment(i, inhseg->UsedShmemSegAddr, inhseg->ShmemLock);
 	}
 
 	/*
