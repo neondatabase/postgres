@@ -27,6 +27,10 @@ OBJS = \
 	pg_sema.o \
 	pg_shmem.o
 
+ifneq ($(PORTNAME), win32)
+OBJS += anon_reserved_shmem.o
+endif
+
 ifeq ($(PORTNAME), win32)
 SUBDIRS += win32
 endif

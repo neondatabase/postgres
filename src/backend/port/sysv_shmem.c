@@ -28,21 +28,17 @@
 #include <sys/stat.h>
 
 #include "miscadmin.h"
+#include "port/anon_reserved_shmem.h"
 #include "port/pg_bitutils.h"
 #include "portability/mem.h"
-#include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
-#include "storage/lwlock.h"
 #include "storage/pg_shmem.h"
-#include "storage/pmsignal.h"
-#include "storage/procsignal.h"
 #include "storage/shmem.h"
 #include "utils/guc.h"
 #include "utils/guc_hooks.h"
 #include "utils/pidfile.h"
-#include "utils/wait_event.h"
 
 /*
  * TODO: The first two sentences in the first paragraph below make me feel like
@@ -141,26 +137,15 @@ volatile bool delay_shmem_resize = false;
 
 PGInhShmemSeg InhShmemSegs[NUM_MEMORY_MAPPINGS];
 
- /*
-  * Structure to hold anonymous shared memory segment properties.
-  */
-typedef struct AnonShmemSegment
-{
-	int			fd;				/* fd for the backing anon file */
-	void	   *addr;			/* Pointer to the start of the mapped memory */
-	Size		size;			/* Size of the mapped memory */
-
-} AnonShmemSegment;
-
 AnonShmemSegment AnonShmemSegs[NUM_MEMORY_MAPPINGS];
 
+bool		huge_pages_on = false;
+
 /*
- * Flag telling that we have decided to use huge pages.
- *
- * XXX: It's possible to use GetConfigOption("huge_pages_status", false, false)
- * instead, but it feels like an overkill.
+ * Register AnonymousShmemDetach only once (CreateSharedMemoryAndSemaphores
+ * calls PGSharedMemoryCreate per segment).
  */
-static bool huge_pages_on = false;
+static bool anonymous_mmap_exit_registered = false;
 
 /*
  * Currently broadcasted value of NBuffers in shared memory.
@@ -705,299 +690,79 @@ check_huge_page_size(int *newval, void **extra, GucSource source)
 }
 
 /*
- * Wrapper around posix_fallocate() to allocate memory for a given shared memory
- * segment.
+ * Main shared memory only: same anonymous mmap strategy as community
+ * PostgreSQL (MAP_SHARED on fd -1, no memfd / MAP_NORESERVE reservation).
  *
- * Performs retry on EINTR, and raises error upon failure.
+ * Pass requested size in *size; may update *size to actual allocation
+ * (huge-page rounding).
  */
-static void
-shmem_fallocate(int fd, const char *mapping_name, Size size, int elevel)
+static void *
+CreateMainAnonymousSegment(Size *size)
 {
-#if defined(HAVE_POSIX_FALLOCATE) && defined(__linux__)
-	int			ret;
-
-	/*
-	 * If there is not enough memory, trying to access a hole in address space
-	 * will cause SIGBUS. If supported, avoid that by allocating memory
-	 * upfront.
-	 *
-	 * We still use a traditional EINTR retry loop to handle SIGCONT.
-	 * posix_fallocate() doesn't restart automatically, and we don't want this
-	 * to fail if you attach a debugger.
-	 */
-	do
-	{
-		ret = posix_fallocate(fd, 0, size);
-	} while (ret == EINTR);
-
-	if (ret != 0)
-	{
-		ereport(elevel,
-				(errmsg("segment[%s]: could not allocate space for anonymous file: %s",
-						mapping_name, strerror(ret)),
-				 (ret == ENOMEM) ?
-				 errhint("This error usually means that PostgreSQL's request "
-						 "for a shared memory segment exceeded available memory, "
-						 "swap space, or huge pages. To reduce the request size "
-						 "(currently %zu bytes), reduce PostgreSQL's shared "
-						 "memory usage, perhaps by reducing \"shared_buffers\" or "
-						 "\"max_connections\".",
-						 size) : 0));
-	}
-#endif
-}
-
-/*
- * Round up the required amount of memory and the amount of required reserved
- * address space to the nearest huge page size.
- */
-static inline void
-round_off_mapping_sizes_for_hugepages(MemoryMappingSizes *mapping, int hugepagesize)
-{
-	if (hugepagesize == 0)
-		return;
-
-	if (mapping->shmem_req_size % hugepagesize != 0)
-		mapping->shmem_req_size = add_size(mapping->shmem_req_size,
-											hugepagesize - (mapping->shmem_req_size % hugepagesize));
-
-	if (mapping->shmem_reserved % hugepagesize != 0)
-		mapping->shmem_reserved = add_size(mapping->shmem_reserved,
-										   hugepagesize - (mapping->shmem_reserved % hugepagesize));
-}
-
-// USE_MADV_POPULATE_WRITE tries to use transparent huge pages for the shared memory segment.
-#define USE_MADV_POPULATE_WRITE 1
-
-/*
- * Creates an anonymous mmap()ed shared memory segment.
- *
- * This function will modify mapping size to the actual size of the allocation,
- * if it ends up allocating a segment that is larger than requested.
- */
-static const char *
-mmap_flags_to_string(int flags, char *buf, size_t buflen)
-{
-	buf[0] = '\0';
-
-	if (flags & MAP_SHARED)
-		strlcat(buf, "MAP_SHARED|", buflen);
-#ifdef MAP_HASSEMAPHORE
-	if (flags & MAP_HASSEMAPHORE)
-		strlcat(buf, "MAP_HASSEMAPHORE|", buflen);
-#endif
-#ifdef MAP_NORESERVE
-	if (flags & MAP_NORESERVE)
-		strlcat(buf, "MAP_NORESERVE|", buflen);
-#endif
-#ifdef MAP_HUGETLB
-	if (flags & MAP_HUGETLB)
-		strlcat(buf, "MAP_HUGETLB|", buflen);
-#endif
-
-	/* Strip trailing '|' */
-	{
-		size_t len = strlen(buf);
-		if (len > 0 && buf[len - 1] == '|')
-			buf[len - 1] = '\0';
-	}
-
-	if (buf[0] == '\0')
-		snprintf(buf, buflen, "0x%x", flags);
-
-	return buf;
-}
-
-static const char *
-memfd_flags_to_string(int flags, char *buf, size_t buflen)
-{
-	buf[0] = '\0';
-
-	if (flags == 0)
-	{
-		strlcat(buf, "0", buflen);
-		return buf;
-	}
-
-#ifdef MFD_CLOEXEC
-	if (flags & MFD_CLOEXEC)
-		strlcat(buf, "MFD_CLOEXEC|", buflen);
-#endif
-#ifdef MFD_HUGETLB
-	if (flags & MFD_HUGETLB)
-		strlcat(buf, "MFD_HUGETLB|", buflen);
-#endif
-
-	/* Strip trailing '|' */
-	{
-		size_t len = strlen(buf);
-		if (len > 0 && buf[len - 1] == '|')
-			buf[len - 1] = '\0';
-	}
-
-	if (buf[0] == '\0')
-		snprintf(buf, buflen, "0x%x", flags);
-
-	return buf;
-}
-
-static void
-CreateAnonymousSegment(int segment_id, MemoryMappingSizes *mapping)
-{
+	Size		allocsize = *size;
 	void	   *ptr = MAP_FAILED;
-	int			mmap_flags = MAP_SHARED | MAP_HASSEMAPHORE | MAP_NORESERVE;
-	AnonShmemSegment *anonseg = &AnonShmemSegs[segment_id];
-	const char *segname = MappingName(segment_id);
-	int			memfd_flags = 0;
+	int			mmap_errno = 0;
 
 #ifndef MAP_HUGETLB
-	/* PrepareHugePages should have dealt with this case */
-	Assert(huge_pages != HUGE_PAGES_ON && !huge_pages_on);
+	/* PGSharedMemoryCreate should have dealt with this case */
+	Assert(huge_pages != HUGE_PAGES_ON);
 #else
-	if (huge_pages_on)
+	if (huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY)
 	{
 		Size		hugepagesize;
-		int			huge_mmap_flags;
-		int			huge_memfd_flags = 0;
+		int			mmap_flags;
 
-		/* Make sure nothing is messed up */
-		Assert(huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY);
+		GetHugePageSize(&hugepagesize, &mmap_flags, NULL);
 
-		/* Round up the request size to a suitable large value */
-		GetHugePageSize(&hugepagesize, &huge_mmap_flags, &huge_memfd_flags);
-		round_off_mapping_sizes_for_hugepages(mapping, hugepagesize);
+		if (allocsize % hugepagesize != 0)
+			allocsize += hugepagesize - (allocsize % hugepagesize);
 
-		/* Verify that the new size is within the reserved boundaries */
-		Assert(mapping->shmem_reserved >= mapping->shmem_req_size);
-
-		mmap_flags = mmap_flags | huge_mmap_flags;
-		memfd_flags = memfd_flags | huge_memfd_flags;
-
-		{
-			char	mmap_buf[128];
-			char	memfd_buf[128];
-
-			elog(LOG, "segment[%s]: huge pages are on, hugepagesize: %zu, mmap_flags: %s, memfd_flags: %s",
-				 segname, hugepagesize,
-				 mmap_flags_to_string(mmap_flags, mmap_buf, sizeof(mmap_buf)),
-				 memfd_flags_to_string(memfd_flags, memfd_buf, sizeof(memfd_buf)));
-		}
+		ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
+				   PG_MMAP_FLAGS | mmap_flags, -1, 0);
+		mmap_errno = errno;
+		if (huge_pages == HUGE_PAGES_TRY && ptr == MAP_FAILED)
+			elog(DEBUG1, "mmap(%zu) with MAP_HUGETLB failed, huge pages disabled: %m",
+				 allocsize);
 	}
 #endif
 
-	{
-		char	mmap_buf[128];
-		char	memfd_buf[128];
+	/*
+	 * Report whether huge pages are in use.  This needs to be tracked before
+	 * the second mmap() call if attempting to use huge pages failed
+	 * previously.
+	 */
+	SetConfigOption("huge_pages_status", (ptr == MAP_FAILED) ? "off" : "on",
+					PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
 
-		elog(LOG, "segment[%s]: mmap_flags: %s, memfd_flags: %s",
-			 segname,
-			 mmap_flags_to_string(mmap_flags, mmap_buf, sizeof(mmap_buf)),
-			 memfd_flags_to_string(memfd_flags, memfd_buf, sizeof(memfd_buf)));
+	if (ptr == MAP_FAILED && huge_pages != HUGE_PAGES_ON)
+	{
+		/*
+		 * Use the original size, not the rounded-up value, when falling back
+		 * to non-huge pages.
+		 */
+		allocsize = *size;
+		ptr = mmap(NULL, allocsize, PROT_READ | PROT_WRITE,
+				   PG_MMAP_FLAGS, -1, 0);
+		mmap_errno = errno;
 	}
 
-	/*
-	 * Prepare an anonymous file backing the segment. Its size will be
-	 * specified later via ftruncate.
-	 *
-	 * The file behaves like a regular file, but lives in memory. Once all
-	 * references to the file are dropped, it is automatically released.
-	 * Anonymous memory is used for all backing pages of the file, thus it has
-	 * the same semantics as anonymous memory allocations using mmap with the
-	 * MAP_ANONYMOUS flag.
-	 */
-	anonseg->fd = memfd_create(segname, memfd_flags);
-	if (anonseg->fd == -1)
-		ereport(FATAL,
-				(errmsg("segment[%s]: could not create anonymous shared memory file: %m",
-						segname)));
-
-	elog(LOG, "segment[%s]: mmap(%zu) reserved, %zu requested",
-		 segname, mapping->shmem_reserved, mapping->shmem_req_size);
-
-	/*
-	 * Reserve maximum required address space for future expansion of this
-	 * memory segment. The whole address space will be setup for read/write
-	 * access, so that memory allocated to this address space can be read or
-	 * written to even if it is resized in the future using just ftruncate.
-	 * MAP_NORESERVE alone should ensure that no memory is allocated. But when
-	 * using huge pages, the memory is allocated at mmap time if PROT_WRITE |
-	 * PROT_READ is used. Hence we create the mapping with PROT_NONE first and
-	 * then use mprotect to set the required permissions.
-	 */
-	ptr = mmap(NULL, mapping->shmem_reserved, PROT_NONE,
-			   mmap_flags, anonseg->fd, 0);
 	if (ptr == MAP_FAILED)
-		ereport(FATAL,
-				(errmsg("segment[%s]: could not map anonymous shared memory: %m",
-						segname)));
-
-	if (mprotect(ptr, mapping->shmem_reserved, PROT_READ | PROT_WRITE) == -1)
-		ereport(FATAL,
-				(errmsg("segment[%s]: could not update anonymous shared memory permissions: %m",
-						segname)));
-
-	/*
-	 * Resize the backing file to the required size. On platforms where it is
-	 * supported, we also allocate the required memory upfront. On other
-	 * platforms the memory up to the size of file will be allocated on demand.
-	 */
-	if (ftruncate(anonseg->fd, mapping->shmem_req_size) == -1)
 	{
-		int			save_errno = errno;
-
-		close(anonseg->fd);
-		anonseg->fd = -1;
-
-		errno = save_errno;
+		errno = mmap_errno;
 		ereport(FATAL,
-				(errmsg("segment[%s]: could not truncate anonymous file to size %zu: %m",
-						segname, mapping->shmem_req_size),
-				 (save_errno == ENOMEM) ?
+				(errmsg("could not map anonymous shared memory: %m"),
+				 (mmap_errno == ENOMEM) ?
 				 errhint("This error usually means that PostgreSQL's request "
 						 "for a shared memory segment exceeded available memory, "
 						 "swap space, or huge pages. To reduce the request size "
 						 "(currently %zu bytes), reduce PostgreSQL's shared "
 						 "memory usage, perhaps by reducing \"shared_buffers\" or "
 						 "\"max_connections\".",
-						 mapping->shmem_req_size) : 0));
+						 allocsize) : 0));
 	}
 
-	// shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
-
-#if defined(MADV_HUGEPAGE) && defined(MADV_POPULATE_WRITE) && USE_MADV_POPULATE_WRITE
-	/*
-	 * Try to enable THP for this mapping. We must NOT use posix_fallocate
-	 * when THP is desired because fallocate populates the shmem page cache
-	 * with 4KB pages, preventing the mmap fault handler from allocating
-	 * transparent huge pages.
-	 *
-	 * Instead, we use MADV_POPULATE_WRITE to pre-fault pages through the
-	 * mmap path, which respects the MADV_HUGEPAGE hint and allocates huge
-	 * pages at PMD-aligned offsets. This also catches out-of-memory
-	 * conditions upfront (returns ENOMEM), providing the same safety as
-	 * posix_fallocate.
-	 */
-	if (madvise(ptr, mapping->shmem_req_size, MADV_HUGEPAGE) == -1)
-	{
-		elog(LOG, "segment[%s]: madvise(MADV_HUGEPAGE) failed: %m, falling back to fallocate",
-			 segname);
-		shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
-	}
-	else
-	{
-		elog(LOG, "segment[%s]: madvise(MADV_HUGEPAGE) succeeded, pre-faulting via MADV_POPULATE_WRITE",
-			 segname);
-		if (madvise(ptr, mapping->shmem_req_size, MADV_POPULATE_WRITE) == -1)
-			elog(FATAL,
-					"segment[%s]: madvise(MADV_POPULATE_WRITE) failed for size %zu: %m",
-							segname, mapping->shmem_req_size);
-	}
-#else
-	shmem_fallocate(anonseg->fd, segname, mapping->shmem_req_size, FATAL);
-#endif
-
-	anonseg->addr = ptr;
-	anonseg->size = mapping->shmem_reserved;
+	*size = allocsize;
+	return ptr;
 }
 
 /*
@@ -1083,97 +848,17 @@ AnonymousShmemDetach(int status, Datum arg)
 		/* Release anonymous shared memory block, if any. */
 		if (segment->addr != NULL)
 		{
-			Assert(segment->fd != -1);
-
 			if (munmap(segment->addr, segment->size) < 0)
 				elog(LOG, "munmap(%p, %zu) failed: %m",
 					 segment->addr, segment->size);
 			segment->addr = NULL;
-			close(segment->fd);
-			segment->fd = -1;
+			if (segment->fd >= 0)
+			{
+				close(segment->fd);
+				segment->fd = -1;
+			}
 		}
 	}
-}
-
-/*
- * Resize all shared memory segments based on the new shared_buffers value (saved
- * in ShmemCtrl area). The actual segment resizing is done via ftruncate, which
- * will fail if there is not sufficient space to expand the anon file.
- *
- * TODO: Rename this to BufferShmemResize() or something. Only buffer manager's
- * memory should be resized in this function.
- *
- * TODO: This function changes the amount of shared memory used. So it should
- * also update the show only GUCs shared_memory_size and
- * shared_memory_size_in_huge_pages in all backends. SetConfigOption() may be
- * used for that. But it's not clear whether is_reload parameter is safe to use
- * while resizing is going on; also at what stage it should be done.
- */
-static bool
-AnonymousShmemResize(int segment_id, MemoryMappingSizes *mapping, bool expanding)
-{
-	Size		hugepagesize;
-	AnonShmemSegment *anonseg = &AnonShmemSegs[segment_id];
-
-	Assert(!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
-
-	elog(DEBUG1, "Resize shmem from %d to %d", NBuffers, NBuffersPending);
-
-	if (anonseg->fd == -1)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("segment[%s]: only anonymous (mmaped) file backed segments can be resized",
-						MappingName(segment_id))));
-
-#ifndef MAP_HUGETLB
-	/* PrepareHugePages should have dealt with this case */
-	Assert(huge_pages != HUGE_PAGES_ON && !huge_pages_on);
-#else
-	if (huge_pages_on)
-	{
-		Assert(huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY);
-		GetHugePageSize(&hugepagesize, NULL, NULL);
-		round_off_mapping_sizes_for_hugepages(mapping, hugepagesize);
-	}
-#endif
-	Assert(anonseg->addr);
-
-	/*
-	 * Size of the reserved address space should not change, since it depends
-	 * upon MaxNBuffers, which can be changed only on restart.
-	 */
-	Assert(anonseg->size == mapping->shmem_reserved);
-
-	/*
-	 * Resize the backing file to resize the allocated memory, and allocate
-	 * more memory on supported platforms if required.
-	 */
-	if (ftruncate(anonseg->fd, mapping->shmem_req_size) == -1)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYSTEM_ERROR),
-				 errmsg("could not truncate anonymous file segment for \"%s\": %m",
-						MappingName(segment_id))));
-
-	if (expanding)
-	{
-		// shmem_fallocate(anonseg->fd, MappingName(segment_id), mapping->shmem_req_size, ERROR);
-#if defined(MADV_HUGEPAGE) && defined(MADV_POPULATE_WRITE) && USE_MADV_POPULATE_WRITE
-		/*
-		 * Pre-fault the expanded region via MADV_POPULATE_WRITE to allocate
-		 * pages through the mmap fault handler, which respects the
-		 * MADV_HUGEPAGE VMA flag set during CreateAnonymousSegment.
-		 */
-		if (madvise(anonseg->addr, mapping->shmem_req_size, MADV_POPULATE_WRITE) == -1)
-			ereport(ERROR,
-					(errcode(ERRCODE_SYSTEM_ERROR),
-					 errmsg("could not populate anonymous file segment for \"%s\": %m",
-							MappingName(segment_id))));
-#else
-		shmem_fallocate(anonseg->fd, MappingName(segment_id), mapping->shmem_req_size, ERROR);
-#endif
-	}
-
-	return true;
 }
 
 /*
@@ -1217,16 +902,45 @@ PGSharedMemoryCreate(int segment_id, MemoryMappingSizes *mapping,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("huge pages not supported with the current \"shared_memory_type\" setting")));
 
+#if !defined(MAP_HUGETLB)
+	if (huge_pages == HUGE_PAGES_ON)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("huge pages not supported on this platform")));
+#endif
+
 	/* Room for a header? */
 	Assert(mapping->shmem_req_size > MAXALIGN(sizeof(PGShmemHeader)));
 
 	if (shared_memory_type == SHMEM_TYPE_MMAP)
 	{
-		/* On success, mapping data will be modified. */
-		CreateAnonymousSegment(segment_id, mapping);
+		if (segment_id == MAIN_SHMEM_SEGMENT)
+		{
+			Size		main_size = mapping->shmem_req_size;
+			void	   *anonptr;
 
-		/* Register on-exit routine to unmap the anonymous segment */
-		on_shmem_exit(AnonymousShmemDetach, (Datum) 0);
+			/*
+			 * Community-style anonymous mapping for the main heap (not memfd).
+			 */
+			anonptr = CreateMainAnonymousSegment(&main_size);
+			mapping->shmem_req_size = main_size;
+			mapping->shmem_reserved = main_size;
+
+			anonseg->fd = -1;
+			anonseg->addr = anonptr;
+			anonseg->size = main_size;
+		}
+		else
+		{
+			/* Resizable buffer segments: memfd + reserved VMA */
+			ReservedAnonymousSegmentCreate(segment_id, mapping);
+		}
+
+		if (!anonymous_mmap_exit_registered)
+		{
+			on_shmem_exit(AnonymousShmemDetach, (Datum) 0);
+			anonymous_mmap_exit_registered = true;
+		}
 
 		/* Now we need only allocate a minimal-sized SysV shmem block. */
 		sysvsize = sizeof(PGShmemHeader);
@@ -1389,7 +1103,8 @@ PGSharedMemoryResize(int segment_id, MemoryMappingSizes *mapping)
 	if (hdr->totalsize == mapping->shmem_req_size)
 		return true;
 
-	AnonymousShmemResize(segment_id, mapping, mapping->shmem_req_size > hdr->totalsize);
+	ReservedAnonymousSegmentResize(segment_id, mapping,
+								   mapping->shmem_req_size > hdr->totalsize);
 
 	/* Update the available size. */
 	hdr->totalsize = mapping->shmem_req_size;
@@ -1532,8 +1247,11 @@ PGSharedMemoryDetach(void)
 				elog(LOG, "munmap(%p, %zu) failed: %m",
 					 anonseg->addr, anonseg->size);
 			anonseg->addr = NULL;
-			close(anonseg->fd);
-			anonseg->fd = -1;
+			if (anonseg->fd >= 0)
+			{
+				close(anonseg->fd);
+				anonseg->fd = -1;
+			}
 		}
 	}
 }

@@ -18,7 +18,7 @@ if cdata.has('USE_WIN32_SEMAPHORES')
 endif
 
 if cdata.has('USE_SYSV_SHARED_MEMORY')
-  backend_sources += files('sysv_shmem.c')
+  backend_sources += files('anon_reserved_shmem.c', 'sysv_shmem.c')
 endif
 
 if cdata.has('USE_WIN32_SHARED_MEMORY')

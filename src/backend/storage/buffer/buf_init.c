@@ -94,6 +94,38 @@ InitializeBuffer(int buf_id)
 	ConditionVariableInit(BufferDescriptorGetIOCV(buf));
 }
 
+/*
+ * Attach buffer-pool globals to their dedicated shmem segments (init path).
+ */
+static void
+BufferPoolShmemInitStructPointers(int nbufs,
+								  bool *foundDescs,
+								  bool *foundBufs,
+								  bool *foundIOCV,
+								  bool *foundBufCkpt)
+{
+	BufferDescriptors = (BufferDescPadded *)
+		ShmemInitStructInSegment("Buffer Descriptors",
+								 nbufs * sizeof(BufferDescPadded),
+								 foundDescs, BUFFER_DESCRIPTORS_SHMEM_SEGMENT);
+
+	BufferBlocks = (char *)
+		TYPEALIGN(PG_IO_ALIGN_SIZE,
+				  ShmemInitStructInSegment("Buffer Blocks",
+										   nbufs * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
+										   foundBufs, BUFFERS_SHMEM_SEGMENT));
+
+	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
+		ShmemInitStructInSegment("Buffer IO Condition Variables",
+								 nbufs * sizeof(ConditionVariableMinimallyPadded),
+								 foundIOCV, BUFFER_IOCV_SHMEM_SEGMENT);
+
+	CkptBufferIds = (CkptSortItem *)
+		ShmemInitStructInSegment("Checkpoint BufferIds",
+								 nbufs * sizeof(CkptSortItem), foundBufCkpt,
+								 CHECKPOINT_BUFFERS_SHMEM_SEGMENT);
+}
+
 
 /*
  * Initialize shared buffer pool
@@ -113,36 +145,8 @@ BufferManagerShmemInit(void)
 				foundIOCV,
 				foundBufCkpt;
 
-	/* Align descriptors to a cacheline boundary. */
-	BufferDescriptors = (BufferDescPadded *)
-		ShmemInitStructInSegment("Buffer Descriptors",
-								 NBuffersPending * sizeof(BufferDescPadded),
-								 &foundDescs, BUFFER_DESCRIPTORS_SHMEM_SEGMENT);
-
-	/* Align buffer pool on IO page size boundary. */
-	BufferBlocks = (char *)
-		TYPEALIGN(PG_IO_ALIGN_SIZE,
-				  ShmemInitStructInSegment("Buffer Blocks",
-										   NBuffersPending * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
-										   &foundBufs, BUFFERS_SHMEM_SEGMENT));
-
-	/* Align condition variables to cacheline boundary. */
-	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
-		ShmemInitStructInSegment("Buffer IO Condition Variables",
-								 NBuffersPending * sizeof(ConditionVariableMinimallyPadded),
-								 &foundIOCV, BUFFER_IOCV_SHMEM_SEGMENT);
-
-	/*
-	 * The array used to sort to-be-checkpointed buffer ids is located in
-	 * shared memory, to avoid having to allocate significant amounts of
-	 * memory at runtime. As that'd be in the middle of a checkpoint, or when
-	 * the checkpointer is restarted, memory allocation failures would be
-	 * painful.
-	 */
-	CkptBufferIds = (CkptSortItem *)
-		ShmemInitStructInSegment("Checkpoint BufferIds",
-			NBuffersPending * sizeof(CkptSortItem), &foundBufCkpt,
-								 CHECKPOINT_BUFFERS_SHMEM_SEGMENT);
+	BufferPoolShmemInitStructPointers(NBuffersPending,
+									  &foundDescs, &foundBufs, &foundIOCV, &foundBufCkpt);
 
 	if (foundDescs || foundBufs || foundIOCV || foundBufCkpt)
 	{

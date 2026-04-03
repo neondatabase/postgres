@@ -98,9 +98,6 @@ typedef struct PGInhShmemSeg
 /* Checkpoint BufferIds */
 #define CHECKPOINT_BUFFERS_SHMEM_SEGMENT 4
 
-/* Buffer strategy status */
-#define STRATEGY_SHMEM_SEGMENT 5
-
 /* Number of available segments for anonymous memory mappings */
 #define NUM_MEMORY_MAPPINGS 5
 
@@ -118,6 +115,25 @@ typedef struct MemoryMappingSizes
 } MemoryMappingSizes;
 
 extern PGDLLIMPORT PGInhShmemSeg InhShmemSegs[NUM_MEMORY_MAPPINGS];
+
+/*
+ * Backing store for mmap-based segments.  Main uses fd == -1 (plain anonymous
+ * mmap); resizable buffer segments use memfd.
+ */
+typedef struct AnonShmemSegment
+{
+	int			fd;
+	void	   *addr;
+	Size		size;
+} AnonShmemSegment;
+
+extern PGDLLIMPORT AnonShmemSegment AnonShmemSegs[NUM_MEMORY_MAPPINGS];
+
+/*
+ * Set by PrepareHugePages before segment creation; used for memfd buffer
+ * segments when choosing huge-page mmap/memfd flags.
+ */
+extern PGDLLIMPORT bool huge_pages_on;
 
 /*
  * ShmemControl is shared between backends and helps to coordinate shared
@@ -198,8 +214,6 @@ MappingName(int segment_id)
 			return "iocv";
 		case CHECKPOINT_BUFFERS_SHMEM_SEGMENT:
 			return "checkpoint";
-		case STRATEGY_SHMEM_SEGMENT:
-			return "strategy";
 		default:
 			return "unknown";
 	}
