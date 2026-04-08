@@ -129,6 +129,24 @@ static void RoleMembershipCacheCallback(Datum arg, int cacheid, uint32 hashvalue
  */
 char *privileged_role_name = NULL;
 
+static bool
+is_privileged_role_arg_super(Oid roleid, bool nosuper)
+{
+	Oid privileged_role_oid;
+
+	if (privileged_role_name == NULL)
+		return false;
+
+	privileged_role_oid = get_role_oid(privileged_role_name, true /* missing_ok */);
+
+	if (privileged_role_oid == InvalidOid)
+		return false;
+
+	if (nosuper)
+		return has_privs_of_role_nosuper(roleid, privileged_role_oid);
+	return has_privs_of_role(roleid, privileged_role_oid);
+}
+
 bool
 is_privileged_role(void)
 {
@@ -138,14 +156,12 @@ is_privileged_role(void)
 bool
 is_privileged_role_arg(Oid roleid)
 {
-	Oid privileged_role_oid;
+	return is_privileged_role_arg_super(roleid, false);
+}
 
-	if (privileged_role_name == NULL)
-		return false;
-
-	privileged_role_oid = get_role_oid(privileged_role_name, true /* missing_ok */);
-
-	return privileged_role_oid != InvalidOid && has_privs_of_role(roleid, privileged_role_oid);
+bool is_privileged_role_nosuper(void)
+{
+	return is_privileged_role_arg_super(GetUserId(), true);
 }
 
 /*
@@ -5017,6 +5033,24 @@ has_privs_of_role(Oid member, Oid role)
 											  InvalidOid, NULL),
 						   role);
 }
+
+/*
+ * Same as has_privs_of_role, but ignores checking superuser.
+ */
+ bool
+ has_privs_of_role_nosuper(Oid member, Oid role)
+ {
+	 /* Fast path for simple case */
+	 if (member == role)
+		 return true;
+	 /*
+	  * Find all the roles that member has the privileges of, including
+	  * multi-level recursion, then see if target role is any one of them.
+	  */
+	 return list_member_oid(roles_is_member_of(member, ROLERECURSE_PRIVS,
+											   InvalidOid, NULL),
+							role);
+ }
 
 /*
  * Can member use SET ROLE to this role?
