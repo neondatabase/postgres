@@ -83,6 +83,9 @@ typedef struct NamedLWLockTranche
 extern PGDLLIMPORT NamedLWLockTranche *NamedLWLockTrancheArray;
 extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 
+/* NEON: GUC from neon ext that gives Replica Standby process priority to acquire a lock */
+extern PGDLLIMPORT bool startupProcessLockPriority;
+
 /*
  * It's a bit odd to declare NUM_BUFFER_PARTITIONS and NUM_LOCK_PARTITIONS
  * here, but we need them to figure out offsets within MainLWLockArray, and

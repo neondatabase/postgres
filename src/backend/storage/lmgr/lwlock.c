@@ -230,6 +230,8 @@ int			NamedLWLockTrancheRequests = 0;
 /* points to data in shared memory: */
 NamedLWLockTranche *NamedLWLockTrancheArray = NULL;
 
+bool           startupProcessLockPriority = false; /* NEON: GUC is defined in neon extension */
+
 static void InitializeLWLocks(void);
 static inline void LWLockReportWaitStart(LWLock *lock);
 static inline void LWLockReportWaitEnd(void);
@@ -1058,7 +1060,8 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	MyProc->lwWaitMode = mode;
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
-	if (mode == LW_WAIT_UNTIL_FREE || AmStartupProcess())
+	/* NEON: Give priority to startup process when GUC is enabled */
+	if (mode == LW_WAIT_UNTIL_FREE || (startupProcessLockPriority && AmStartupProcess()))
 		proclist_push_head(&lock->waiters, MyProcNumber, lwWaitLink);
 	else
 		proclist_push_tail(&lock->waiters, MyProcNumber, lwWaitLink);
