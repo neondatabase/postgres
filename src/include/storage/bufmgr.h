@@ -19,7 +19,9 @@
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
+#include "storage/pg_shmem.h"
 #include "storage/relfilelocator.h"
+#include "utils/guc.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
 
@@ -151,6 +153,7 @@ struct SMgrRelationData;
 
 /* in globals.c ... this duplicates miscadmin.h */
 extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NBuffersPending;
 
 /* in bufmgr.c */
 extern PGDLLIMPORT bool zero_damaged_pages;
@@ -176,6 +179,11 @@ extern PGDLLIMPORT int bgwriter_flush_after;
 extern PGDLLIMPORT const PgAioHandleCallbacks aio_shared_buffer_readv_cb;
 extern PGDLLIMPORT const PgAioHandleCallbacks aio_local_buffer_readv_cb;
 extern PGDLLIMPORT bool	neon_test_evict;
+extern PGDLLIMPORT bool buffer_shrink_cooperative_eviction;
+extern PGDLLIMPORT int buffer_shrink_relocate_usage_threshold;
+extern PGDLLIMPORT int buffer_shrink_relocate_usage_sample_size;
+extern PGDLLIMPORT bool buf_table_use_flat_mapping;
+extern PGDLLIMPORT bool enable_freelist;
 
 /* in buf_init.c */
 extern PGDLLIMPORT char *BufferBlocks;
@@ -198,6 +206,11 @@ extern PGDLLIMPORT int32 *LocalRefCount;
 #define BUFFER_LOCK_SHARE		1
 #define BUFFER_LOCK_EXCLUSIVE	2
 
+/*
+ * prototypes for functions in buf_init.c
+ */
+extern const char *show_shared_buffers(void);
+extern bool check_shared_buffers(int *newval, void **extra, GucSource source);
 
 /*
  * prototypes for functions in bufmgr.c
@@ -300,6 +313,7 @@ extern bool IsBufferCleanupOK(Buffer buffer);
 extern bool HoldingBufferPinThatDelaysRecovery(void);
 
 extern bool BgBufferSync(struct WritebackContext *wb_context);
+extern void BgBufferSyncReset(int currentNBuffers, int targetNBuffers);
 
 extern uint32 GetPinLimit(void);
 extern uint32 GetLocalPinLimit(void);
@@ -319,7 +333,12 @@ extern void EvictRelUnpinnedBuffers(Relation rel,
 
 /* in buf_init.c */
 extern void BufferManagerShmemInit(void);
-extern Size BufferManagerShmemSize(void);
+extern Size BufferManagerShmemSize(MemoryMappingSizes *mapping_sizes);
+extern void BufferManagerShmemResize(int currentNBuffers, int targetNBuffers);
+extern void BufferManagerShmemValidate(int targetNBuffers);
+
+/* in bufmgr.c */
+extern bool EvictExtraBuffers(int targetNBuffers, int currentNBuffers);
 
 /* in localbuf.c */
 extern void AtProcExit_LocalBuffers(void);
@@ -369,7 +388,7 @@ extern uint32 (*get_pin_limit_hook)(void);
 static inline bool
 BufferIsValid(Buffer bufnum)
 {
-	Assert(bufnum <= NBuffers);
+	Assert(bufnum <= (Buffer) pg_atomic_read_u32(&ShmemCtrl->currentNBuffers));
 	Assert(bufnum >= -NLocBuffer);
 
 	return bufnum != InvalidBuffer;
@@ -422,5 +441,12 @@ BufferGetPage(Buffer buffer)
 }
 
 #endif							/* FRONTEND */
+
+/* buf_resize.c */
+extern Datum pg_resize_shared_buffers(PG_FUNCTION_ARGS);
+extern bool ProcessBarrierShmemShrink(void);
+extern bool ProcessBarrierShmemResizeMapAndMem(void);
+extern bool ProcessBarrierShmemExpand(void);
+extern bool ProcessBarrierShmemResizeFailed(void);
 
 #endif							/* BUFMGR_H */

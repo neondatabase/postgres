@@ -15,8 +15,10 @@ include $(top_builddir)/src/Makefile.global
 OBJS = \
 	buf_init.o \
 	buf_table.o \
+	buf_table_flat.o \
 	bufmgr.o \
 	freelist.o \
-	localbuf.o
+	localbuf.o \
+	buf_resize.o
 
 include $(top_srcdir)/src/backend/common.mk

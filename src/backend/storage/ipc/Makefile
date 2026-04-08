@@ -22,6 +22,7 @@ OBJS = \
 	shm_mq.o \
 	shm_toc.o \
 	shmem.o \
+	shmem_inspection.o \
 	signalfuncs.o \
 	sinval.o \
 	sinvaladt.o \

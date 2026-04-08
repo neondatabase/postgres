@@ -28,6 +28,7 @@
 #include "storage/spin.h"
 #include "utils/relcache.h"
 #include "utils/resowner.h"
+#include "utils/tuplestore.h"
 
 /*
  * Buffer state is a single 32-bit variable where following data is combined.
@@ -455,6 +456,10 @@ extern void StrategyNotifyBgWriter(int bgwprocno);
 
 extern Size StrategyShmemSize(void);
 extern void StrategyInitialize(bool init);
+extern uint32 StrategyGetActiveNBuffers(void);
+extern void StrategyReset(int activeNBuffers);
+extern void StrategyPurgeFreelistAbove(int activeNBuffers);
+extern void StrategyAppendNewBuffersToFreelist(int first_new_id, int targetNBuffers);
 extern bool have_free_buffer(void);
 
 /* buf_table.c */
@@ -464,6 +469,7 @@ extern uint32 BufTableHashCode(BufferTag *tagPtr);
 extern int	BufTableLookup(BufferTag *tagPtr, uint32 hashcode);
 extern int	BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id);
 extern void BufTableDelete(BufferTag *tagPtr, uint32 hashcode);
+extern void BufTableGetContents(Tuplestorestate *tupstore, TupleDesc tupdesc);
 
 /* localbuf.c */
 extern bool PinLocalBuffer(BufferDesc *buf_hdr, bool adjust_usagecount);

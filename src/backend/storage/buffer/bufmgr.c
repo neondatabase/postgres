@@ -34,6 +34,9 @@
  */
 #include "postgres.h"
 
+#include "common/pg_prng.h"
+
+#include <string.h>
 #include <sys/file.h>
 #include <unistd.h>
 
@@ -57,6 +60,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/read_stream.h"
 #include "storage/smgr.h"
@@ -183,6 +187,40 @@ int			backend_flush_after = DEFAULT_BACKEND_FLUSH_AFTER;
 
 /* Evict unpinned pages (for better test coverage) */
 bool		neon_test_evict = false;
+
+/*
+ * When true, the backend that drops the last pin on a buffer in the
+ * to-be-removed range during shared buffer shrink performs eviction there,
+ * instead of relying only on the resize coordinator loop.
+ */
+bool		buffer_shrink_cooperative_eviction = true;
+
+/*
+ * During shared buffer shrink, relocate (instead of discarding) extra-range
+ * buffers whose usage count is greater than this value into the active buffer
+ * id range.  -1 disables relocation.
+ */
+int			buffer_shrink_relocate_usage_threshold = -1;
+
+/*
+ * When > 0, shrink relocation also requires source usage count to exceed the
+ * mean usage count of this many random buffers in [0, activeNBuffers).  -1
+ * disables that requirement.
+ */
+int			buffer_shrink_relocate_usage_sample_size = -1;
+
+/*
+ * When true, use the shared buffer freelist (StrategyFreeBuffer /
+ * StrategyGetBuffer) in addition to the clock sweep.  When false, only the
+ * clock algorithm is used (legacy v18-with-resize behavior).
+ */
+bool		enable_freelist = false;
+
+/*
+ * Re-entrancy guard: EvictUnpinnedBufferInternal ends with UnpinBuffer, which
+ * would otherwise call back into TryEvictExtraBufferOnResizeShrinkLastUnpin.
+ */
+static int	shrink_evict_from_unpin_depth = 0;
 
 
 /* local state for LockBufferForCleanup */
@@ -522,6 +560,19 @@ static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf);
 static void UnpinBufferNoOwner(BufferDesc *buf);
+static bool EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed);
+static void TryEvictExtraBufferOnResizeShrinkLastUnpin(BufferDesc *buf);
+
+typedef enum
+{
+	SHRINK_RELOC_NONE,			/* caller still holds buffer header lock */
+	SHRINK_RELOC_DONE,			/* relocation ok; lock released */
+	SHRINK_RELOC_FALLBACK		/* relocation aborted; lock released */
+} ShrinkRelocateResult;
+
+static ShrinkRelocateResult TryRelocateHotShrinkBuffer(BufferDesc *src,
+													   uint32 src_buf_state,
+													   bool *buffer_flushed);
 static void BufferSync(int flags);
 static uint32 WaitBufHdrUnlocked(BufferDesc *buf);
 static int	SyncOneBuffer(int buf_id, bool skip_recently_used,
@@ -3371,6 +3422,8 @@ UnpinBufferNoOwner(BufferDesc *buf)
 			else
 				UnlockBufHdr(buf, buf_state);
 		}
+
+		TryEvictExtraBufferOnResizeShrinkLastUnpin(buf);
 	}
 }
 
@@ -3433,7 +3486,7 @@ BufferSync(int flags)
 	 * certainly need to be written for the next checkpoint attempt, too.
 	 */
 	num_to_scan = 0;
-	for (buf_id = 0; buf_id < NBuffers; buf_id++)
+	for (buf_id = 0; buf_id < NBuffersPending; buf_id++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
 
@@ -3459,7 +3512,7 @@ BufferSync(int flags)
 
 		UnlockBufHdr(bufHdr, buf_state);
 
-		/* Check for barrier events in case NBuffers is large. */
+		/* Check for barrier events in case the buffer pool is large. */
 		if (ProcSignalBarrierPending)
 			ProcessProcSignalBarrier();
 	}
@@ -3657,6 +3710,33 @@ BufferSync(int flags)
 }
 
 /*
+ * Information saved between BgBufferSync() calls so we can determine the
+ * strategy point's advance rate and avoid scanning already-cleaned buffers. The
+ * variables are global instead of static local so that BgBufferSyncReset() can
+ * adjust it when resizing shared buffers.
+ */
+static bool saved_info_valid = false;
+static int	prev_strategy_buf_id;
+static uint32 prev_strategy_passes;
+static int	next_to_clean;
+static uint32 next_passes;
+
+/* Moving averages of allocation rate and clean-buffer density */
+static float smoothed_alloc = 0;
+static float smoothed_density = 10.0;
+
+void
+BgBufferSyncReset(int currentNBuffers, int targetNBuffers)
+{
+	elog(LOG, "BgBufferSyncReset: currentNBuffers=%d, targetNBuffers=%d", currentNBuffers, targetNBuffers);
+	saved_info_valid = false;
+#ifdef BGW_DEBUG
+	elog(DEBUG2, "invalidated background writer status after resizing buffers from %d to %d",
+		 currentNBuffers, targetNBuffers);
+#endif
+}
+
+/*
  * BgBufferSync -- Write out some dirty buffers in the pool.
  *
  * This is called periodically by the background writer process.
@@ -3674,20 +3754,6 @@ BgBufferSync(WritebackContext *wb_context)
 	int			strategy_buf_id;
 	uint32		strategy_passes;
 	uint32		recent_alloc;
-
-	/*
-	 * Information saved between calls so we can determine the strategy
-	 * point's advance rate and avoid scanning already-cleaned buffers.
-	 */
-	static bool saved_info_valid = false;
-	static int	prev_strategy_buf_id;
-	static uint32 prev_strategy_passes;
-	static int	next_to_clean;
-	static uint32 next_passes;
-
-	/* Moving averages of allocation rate and clean-buffer density */
-	static float smoothed_alloc = 0;
-	static float smoothed_density = 10.0;
 
 	/* Potentially these could be tunables, but for now, not */
 	float		smoothing_samples = 16;
@@ -3712,6 +3778,28 @@ BgBufferSync(WritebackContext *wb_context)
 	uint32		new_recent_alloc;
 
 	/*
+	 * Resizing shared buffers while this function is performing an LRU scan
+	 * on them may lead to wrong results. Indicate that the resizing should
+	 * wait for the LRU scan to complete.
+	 */
+	delay_shmem_resize = true;
+
+	/*
+	 * If buffer pool is being shrunk the buffer being written out may not
+	 * remain valid. If the buffer pool is being expanded, more buffers will
+	 * become available without even this function writing out any. Hence wait
+	 * till buffer resizing finishes i.e. go into hibernation mode.
+	 *
+	 * TODO: We may not need this synchronization if background worker itself
+	 * becomes the coordinator.
+	 */
+	 if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+	 {
+		delay_shmem_resize = false;
+		return true;
+	 }
+
+	/*
 	 * Find out where the freelist clock sweep currently is, and how many
 	 * buffer allocations have happened since our last call.
 	 */
@@ -3728,6 +3816,7 @@ BgBufferSync(WritebackContext *wb_context)
 	if (bgwriter_lru_maxpages <= 0)
 	{
 		saved_info_valid = false;
+		delay_shmem_resize = false;
 		return true;
 	}
 
@@ -3744,7 +3833,13 @@ BgBufferSync(WritebackContext *wb_context)
 		int32		passes_delta = strategy_passes - prev_strategy_passes;
 
 		strategy_delta = strategy_buf_id - prev_strategy_buf_id;
-		strategy_delta += (long) passes_delta * NBuffers;
+		strategy_delta += (long) passes_delta * NBuffersPending;
+
+		if (strategy_delta < 0)
+		{
+			elog(LOG, "strategy_delta < 0: strategy_delta=%ld, prev_strategy_buf_id=%d, strategy_buf_id=%d, passes_delta=%d, strategy_passes=%u, prev_strategy_passes=%u, NBuffers=%d",
+				 strategy_delta, prev_strategy_buf_id, strategy_buf_id, passes_delta, strategy_passes, prev_strategy_passes, NBuffers);
+		}
 
 		Assert(strategy_delta >= 0);
 
@@ -3763,7 +3858,7 @@ BgBufferSync(WritebackContext *wb_context)
 				 next_to_clean >= strategy_buf_id)
 		{
 			/* on same pass, but ahead or at least not behind */
-			bufs_to_lap = NBuffers - (next_to_clean - strategy_buf_id);
+			bufs_to_lap = NBuffersPending - (next_to_clean - strategy_buf_id);
 #ifdef BGW_DEBUG
 			elog(DEBUG2, "bgwriter ahead: bgw %u-%u strategy %u-%u delta=%ld lap=%d",
 				 next_passes, next_to_clean,
@@ -3785,7 +3880,7 @@ BgBufferSync(WritebackContext *wb_context)
 #endif
 			next_to_clean = strategy_buf_id;
 			next_passes = strategy_passes;
-			bufs_to_lap = NBuffers;
+			bufs_to_lap = NBuffersPending;
 		}
 	}
 	else
@@ -3801,13 +3896,13 @@ BgBufferSync(WritebackContext *wb_context)
 		strategy_delta = 0;
 		next_to_clean = strategy_buf_id;
 		next_passes = strategy_passes;
-		bufs_to_lap = NBuffers;
+		bufs_to_lap = NBuffersPending;
 	}
 
 	/* Update saved info for next time */
 	prev_strategy_buf_id = strategy_buf_id;
 	prev_strategy_passes = strategy_passes;
-	saved_info_valid = true;
+	saved_info_valid = false;
 
 	/*
 	 * Compute how many buffers had to be scanned for each new allocation, ie,
@@ -3827,7 +3922,7 @@ BgBufferSync(WritebackContext *wb_context)
 	 * strategy point and where we've scanned ahead to, based on the smoothed
 	 * density estimate.
 	 */
-	bufs_ahead = NBuffers - bufs_to_lap;
+	bufs_ahead = NBuffersPending - bufs_to_lap;
 	reusable_buffers_est = (float) bufs_ahead / smoothed_density;
 
 	/*
@@ -3887,8 +3982,20 @@ BgBufferSync(WritebackContext *wb_context)
 	num_written = 0;
 	reusable_buffers = reusable_buffers_est;
 
-	/* Execute the LRU scan */
-	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est)
+	elog(DEBUG2, "BgBufferSync Start: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+		 num_to_scan, reusable_buffers, upcoming_alloc_est);
+
+	/*
+	 * Execute the LRU scan.
+	 *
+	 * If buffer pool is being shrunk, the buffer being written may not remain
+	 * valid. If the buffer pool is being expanded, more buffers will become
+	 * available without even this function writing any. Hence stop what we
+	 * are doing. This also unblocks other processes that are waiting for
+	 * buffer resizing to finish.
+	 */
+	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est &&
+		   !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
 	{
 		int			sync_state = SyncOneBuffer(next_to_clean, true,
 											   wb_context);
@@ -3946,6 +4053,12 @@ BgBufferSync(WritebackContext *wb_context)
 			 scans_per_alloc, smoothed_density);
 #endif
 	}
+
+	/* Let the resizing commence. */
+	delay_shmem_resize = false;
+
+	elog(DEBUG2, "BgBufferSync End: num_to_scan=%d, reusable_buffers=%d, upcoming_alloc_est=%d",
+		num_to_scan, reusable_buffers, upcoming_alloc_est);
 
 	/* Return true if OK to hibernate */
 	return (bufs_to_lap == 0 && recent_alloc == 0);
@@ -4067,7 +4180,7 @@ InitBufferManagerAccess(void)
 	 * allow plenty of pins.  LimitAdditionalPins() and
 	 * GetAdditionalPinLimit() can be used to check the remaining balance.
 	 */
-	MaxProportionalPins = NBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
+	MaxProportionalPins = MaxNBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
 
 	memset(&PrivateRefCountArray, 0, sizeof(PrivateRefCountArray));
 
@@ -4260,7 +4373,33 @@ DebugPrintBufferRefcount(Buffer buffer)
 void
 CheckPointBuffers(int flags)
 {
+	/*
+	 * Mark that buffer sync is in progress - delay any shared memory
+	 * resizing.
+	 */
+	/*
+	 * TODO: We need to assess whether we should allow checkpoint and buffer
+	 * resizing to run in parallel. When expanding buffers it may be fine to
+	 * let the checkpointer run in RESIZE_MAP_AND_MEM phase but delay phase
+	 * EXPAND phase till the checkpoint finishes, at the same time not allow
+	 * checkpoint to run during expansion phase. When shrinking the buffers,
+	 * we should delay SHRINK phase till checkpoint finishes and not allow to
+	 * start checkpoint till SHRINK phase is done, but allow it to run in
+	 * RESIZE_MAP_AND_MEM phase. This needs careful analysis and testing.
+	 */
+	delay_shmem_resize = true;
+
+	elog(LOG, "Buffer sync is in progress: %d", pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress));
+
+	if (!pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+	{
+		delay_shmem_resize = false;
+		elog(ERROR, "Buffer sync is not in progress");
+	}
+
 	BufferSync(flags);
+
+	delay_shmem_resize = false;
 }
 
 /*
@@ -4673,7 +4812,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
@@ -4835,7 +4974,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (use_bsearch)
 		qsort(locators, n, sizeof(RelFileLocator), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		RelFileLocator *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -4959,12 +5098,16 @@ DropDatabaseBuffers(Oid dbid)
 {
 	int			i;
 
+	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
+
 	/*
 	 * We needn't consider local buffers, since by assumption the target
 	 * database isn't our own.
 	 */
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
@@ -4982,6 +5125,8 @@ DropDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5008,6 +5153,10 @@ FlushRelationBuffers(Relation rel)
 	int			i;
 	BufferDesc *bufHdr;
 	SMgrRelation srel = RelationGetSmgr(rel);
+
+	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
 
 	if (RelationUsesLocalBuffers(rel) || am_wal_redo_postgres)
 	{
@@ -5048,10 +5197,12 @@ FlushRelationBuffers(Relation rel)
 			}
 		}
 
+		delay_shmem_resize = false;
+
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		uint32		buf_state;
 
@@ -5081,6 +5232,7 @@ FlushRelationBuffers(Relation rel)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5123,7 +5275,11 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	if (use_bsearch)
 		qsort(srels, nrels, sizeof(SMgrSortArray), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
+
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		SMgrSortArray *srelent = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -5180,6 +5336,8 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	}
 
 	pfree(srels);
+
+	delay_shmem_resize = false;
 }
 
 /* ---------------------------------------------------------------------
@@ -5378,7 +5536,11 @@ FlushDatabaseBuffers(Oid dbid)
 	int			i;
 	BufferDesc *bufHdr;
 
-	for (i = 0; i < NBuffers; i++)
+	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
+
+	for (i = 0; i < NBuffersPending; i++)
 	{
 		uint32		buf_state;
 
@@ -5408,6 +5570,8 @@ FlushDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr, buf_state);
 	}
+
+	delay_shmem_resize = false;
 }
 
 /*
@@ -6645,6 +6809,230 @@ ResOwnerPrintBufferPin(Datum res)
 }
 
 /*
+ * True when src_usage is strictly greater than the sample mean of usage
+ * counts from random buffers in [0, activeNBuffers).  Caller supplies
+ * activeNBuffers == StrategyGetActiveNBuffers().
+ */
+static bool
+BufferUsageExceedsSampledActiveAverage(uint32 src_usage, int activeNBuffers)
+{
+	pg_prng_state prng;
+	uint64		sum = 0;
+	int			n;
+	int			i;
+	double		avg;
+
+	Assert(activeNBuffers > 0);
+
+	n = buffer_shrink_relocate_usage_sample_size;
+	if (n <= 0)
+		return true;			/* should not be called when disabled */
+
+	pg_prng_seed(&prng,
+				 ((uint64) (uint32) MyProcPid << 32) ^
+				 (uint64) (uint32) activeNBuffers ^
+				 (uint64) (uint32) n ^
+				 (uint64) src_usage);
+
+	for (i = 0; i < n; i++)
+	{
+		int			buf_id = (int) (pg_prng_uint64(&prng) % (uint64) activeNBuffers);
+		BufferDesc *sample = GetBufferDescriptor(buf_id);
+		uint32		st;
+
+		st = LockBufHdr(sample);
+		sum += BUF_STATE_GET_USAGECOUNT(st);
+		UnlockBufHdr(sample, st);
+	}
+
+	avg = (double) sum / (double) n;
+	return (double) src_usage > avg;
+}
+
+/*
+ * Move a valid page from a buffer in the shrink-discard range into a victim
+ * buffer in [0, activeNBuffers), updating the mapping table.  Caller must
+ * hold src's buffer header spinlock; it is released here.  On NONE, the lock
+ * is still held.
+ */
+static ShrinkRelocateResult
+TryRelocateHotShrinkBuffer(BufferDesc *src, uint32 src_buf_state,
+						   bool *buffer_flushed)
+{
+	int			targetNBuffers;
+	int			currentNBuffers;
+	BufferTag	savetag;
+	uint32		hash;
+	LWLock	   *partition_lock;
+	BufferDesc *dst_desc;
+	Buffer		dst_buf;
+	int			lookup_id;
+	uint32		s_src;
+	uint32		s_dst;
+	uint32		s_hfirst;
+	uint32		s_hsecond;
+	uint32		final_src_state;
+	uint32		final_dst_state;
+	uint32		usage;
+	bool		permanent;
+	BufferDesc *c_first;
+	BufferDesc *c_second;
+	BufferDesc *h_first;
+	BufferDesc *h_second;
+
+	*buffer_flushed = false;
+
+	if (buffer_shrink_relocate_usage_threshold < 0)
+		return SHRINK_RELOC_NONE;
+
+	if (BUF_STATE_GET_USAGECOUNT(src_buf_state) <=
+		(uint32) buffer_shrink_relocate_usage_threshold)
+		return SHRINK_RELOC_NONE;
+
+	if ((src_buf_state & BM_IO_IN_PROGRESS) != 0)
+		return SHRINK_RELOC_NONE;
+
+	if (pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		return SHRINK_RELOC_NONE;
+
+	targetNBuffers = (int) pg_atomic_read_u32(&ShmemCtrl->targetNBuffers);
+	currentNBuffers = (int) pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
+
+	if (targetNBuffers >= currentNBuffers)
+		return SHRINK_RELOC_NONE;
+
+	if (src->buf_id < targetNBuffers || src->buf_id >= currentNBuffers)
+		return SHRINK_RELOC_NONE;
+
+	if (buffer_shrink_relocate_usage_sample_size > 0)
+	{
+		int			activeNBuffers = (int) StrategyGetActiveNBuffers();
+
+		if (activeNBuffers <= 0 ||
+			!BufferUsageExceedsSampledActiveAverage(BUF_STATE_GET_USAGECOUNT(src_buf_state),
+													activeNBuffers))
+			return SHRINK_RELOC_NONE;
+	}
+
+	PinBuffer_Locked(src);		/* releases buffer header spinlock */
+
+	/* If it was dirty, try to clean it once (same snapshot as eviction path). */
+	if (src_buf_state & BM_DIRTY)
+	{
+		LWLockAcquire(BufferDescriptorGetContentLock(src), LW_SHARED);
+		FlushBuffer(src, NULL, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+		*buffer_flushed = true;
+		LWLockRelease(BufferDescriptorGetContentLock(src));
+	}
+
+	savetag = src->tag;
+	hash = BufTableHashCode(&savetag);
+	partition_lock = BufMappingPartitionLock(hash);
+
+	dst_buf = GetVictimBuffer(NULL, IOCONTEXT_NORMAL);
+	dst_desc = GetBufferDescriptor(dst_buf - 1);
+
+	Assert(dst_desc->buf_id < (int) StrategyGetActiveNBuffers());
+
+	LWLockAcquire(partition_lock, LW_EXCLUSIVE);
+
+	/* Lock headers in buffer id order to match other bufmgr patterns */
+	h_first = src->buf_id < dst_desc->buf_id ? src : dst_desc;
+	h_second = src->buf_id < dst_desc->buf_id ? dst_desc : src;
+
+	s_hfirst = LockBufHdr(h_first);
+	s_hsecond = LockBufHdr(h_second);
+
+	lookup_id = BufTableLookup(&savetag, hash);
+	if (lookup_id != src->buf_id)
+	{
+		UnlockBufHdr(h_second, s_hsecond);
+		UnlockBufHdr(h_first, s_hfirst);
+		LWLockRelease(partition_lock);
+		UnpinBuffer(dst_desc);
+		UnpinBuffer(src);
+		return SHRINK_RELOC_FALLBACK;
+	}
+
+	s_src = (h_first == src) ? s_hfirst : s_hsecond;
+	s_dst = (h_first == src) ? s_hsecond : s_hfirst;
+
+	if (!BufferTagsEqual(&src->tag, &savetag) ||
+		BUF_STATE_GET_REFCOUNT(s_src) != 1 ||
+		BUF_STATE_GET_REFCOUNT(s_dst) != 1 ||
+		(s_src & BM_DIRTY) != 0 ||
+		(s_dst & (BM_TAG_VALID | BM_VALID | BM_DIRTY)) != 0)
+	{
+		UnlockBufHdr(h_second, s_hsecond);
+		UnlockBufHdr(h_first, s_hfirst);
+		LWLockRelease(partition_lock);
+		UnpinBuffer(dst_desc);
+		UnpinBuffer(src);
+		return SHRINK_RELOC_FALLBACK;
+	}
+
+	usage = BUF_STATE_GET_USAGECOUNT(s_src);
+	permanent = (s_src & BM_PERMANENT) != 0;
+
+	UnlockBufHdr(h_second, s_hsecond);
+	UnlockBufHdr(h_first, s_hfirst);
+
+	c_first = src->buf_id < dst_desc->buf_id ? src : dst_desc;
+	c_second = src->buf_id < dst_desc->buf_id ? dst_desc : src;
+
+	LWLockAcquire(BufferDescriptorGetContentLock(c_first), LW_EXCLUSIVE);
+	LWLockAcquire(BufferDescriptorGetContentLock(c_second), LW_EXCLUSIVE);
+	memcpy(BufHdrGetBlock(dst_desc), BufHdrGetBlock(src), BLCKSZ);
+	LWLockRelease(BufferDescriptorGetContentLock(c_second));
+	LWLockRelease(BufferDescriptorGetContentLock(c_first));
+
+	s_hfirst = LockBufHdr(h_first);
+	s_hsecond = LockBufHdr(h_second);
+
+	s_src = (h_first == src) ? s_hfirst : s_hsecond;
+	s_dst = (h_first == src) ? s_hsecond : s_hfirst;
+
+	if (!BufferTagsEqual(&src->tag, &savetag) ||
+		BUF_STATE_GET_REFCOUNT(s_src) != 1 ||
+		BUF_STATE_GET_REFCOUNT(s_dst) != 1 ||
+		(s_src & BM_DIRTY) != 0)
+	{
+		UnlockBufHdr(h_second, s_hsecond);
+		UnlockBufHdr(h_first, s_hfirst);
+		LWLockRelease(partition_lock);
+		UnpinBuffer(dst_desc);
+		UnpinBuffer(src);
+		return SHRINK_RELOC_FALLBACK;
+	}
+
+	BufTableDelete(&savetag, hash);
+
+	ClearBufferTag(&src->tag);
+	final_src_state = BUF_REFCOUNT_ONE;
+
+	dst_desc->tag = savetag;
+	final_dst_state = BUF_REFCOUNT_ONE | BM_TAG_VALID | BM_VALID |
+		(usage << BUF_USAGECOUNT_SHIFT);
+	if (permanent)
+		final_dst_state |= BM_PERMANENT;
+
+	if (BufTableInsert(&savetag, hash, dst_desc->buf_id) >= 0)
+		elog(PANIC, "concurrent buffer table insertion during shrink relocation");
+
+	UnlockBufHdr(h_second, (h_second == src) ? final_src_state : final_dst_state);
+	UnlockBufHdr(h_first, (h_first == src) ? final_src_state : final_dst_state);
+
+	LWLockRelease(partition_lock);
+
+	UnpinBuffer(dst_desc);
+	UnpinBuffer(src);
+
+	StrategyFreeBuffer(src);
+
+	return SHRINK_RELOC_DONE;
+}
+
+/*
  * Helper function to evict unpinned buffer whose buffer header lock is
  * already acquired.
  */
@@ -6653,6 +7041,7 @@ EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed)
 {
 	uint32		buf_state;
 	bool		result;
+	ShrinkRelocateResult reloc_result;
 
 	*buffer_flushed = false;
 
@@ -6672,6 +7061,20 @@ EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed)
 		return false;
 	}
 
+	reloc_result = TryRelocateHotShrinkBuffer(desc, buf_state, buffer_flushed);
+	if (reloc_result == SHRINK_RELOC_DONE)
+		return true;
+	if (reloc_result == SHRINK_RELOC_FALLBACK)
+	{
+		buf_state = LockBufHdr(desc);
+		if ((buf_state & BM_VALID) == 0 ||
+			BUF_STATE_GET_REFCOUNT(buf_state) > 0)
+		{
+			UnlockBufHdr(desc, buf_state);
+			return false;
+		}
+	}
+
 	PinBuffer_Locked(desc);		/* releases spinlock */
 
 	/* If it was dirty, try to clean it once. */
@@ -6689,6 +7092,67 @@ EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed)
 	UnpinBuffer(desc);
 
 	return result;
+}
+
+/*
+ * During shared buffer pool shrink, the coordinator evicts buffers in
+ * (targetNBuffers, currentNBuffers].  If a buffer is still pinned, the
+ * coordinator spins until it becomes unpinned.  When this backend drops the
+ * last pin, perform the eviction here so progress does not wait on the
+ * coordinator's poll loop.
+ */
+static void
+TryEvictExtraBufferOnResizeShrinkLastUnpin(BufferDesc *buf)
+{
+	int			targetNBuffers;
+	int			currentNBuffers;
+	Buffer		bufid;
+	bool		buffer_flushed;
+
+	if (shrink_evict_from_unpin_depth > 0)
+		return;
+
+	if (!buffer_shrink_cooperative_eviction)
+		return;
+
+	if (!IsUnderPostmaster)
+		return;
+
+	/* Resize not in progress */
+	if (pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		return;
+
+	targetNBuffers = (int) pg_atomic_read_u32(&ShmemCtrl->targetNBuffers);
+	currentNBuffers = (int) pg_atomic_read_u32(&ShmemCtrl->currentNBuffers);
+
+	/* Not shrinking (or inconsistent snapshot; skip) */
+	if (targetNBuffers >= currentNBuffers)
+		return;
+
+	bufid = BufferDescriptorGetBuffer(buf);
+	if (bufid <= (Buffer) targetNBuffers || bufid > (Buffer) currentNBuffers)
+		return;
+
+	/* Coordinator runs EvictExtraBuffers(); avoid redundant work and nesting */
+	if (ShmemCtrl->coordinator == MyProcPid)
+		return;
+
+	/*
+	 * Skip if already invalidated (e.g. recursive UnpinBuffer after
+	 * EvictUnpinnedBufferInternal).
+	 */
+	if ((pg_atomic_read_u32(&buf->state) & BM_VALID) == 0)
+		return;
+
+	if (CurrentResourceOwner)
+		ResourceOwnerEnlarge(CurrentResourceOwner);
+
+	ReservePrivateRefCountEntry();
+
+	shrink_evict_from_unpin_depth++;
+	LockBufHdr(buf);
+	(void) EvictUnpinnedBufferInternal(buf, &buffer_flushed);
+	shrink_evict_from_unpin_depth--;
 }
 
 /*
@@ -6749,7 +7213,7 @@ EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 	*buffers_skipped = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	for (int buf = 1; buf <= NBuffersPending; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint32		buf_state;
@@ -6801,7 +7265,11 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 	*buffers_evicted = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	delay_shmem_resize = true;
+
+	// TODO: a race condition here with shmem resize.
+
+	for (int buf = 1; buf <= NBuffersPending; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint32		buf_state = pg_atomic_read_u32(&(desc->state));
@@ -6836,6 +7304,8 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 		if (buffer_flushed)
 			(*buffers_flushed)++;
 	}
+
+	delay_shmem_resize = false;
 }
 
 /*
@@ -7529,3 +7999,70 @@ const PgAioHandleCallbacks aio_local_buffer_readv_cb = {
 	.complete_local = local_buffer_readv_complete,
 	.report = buffer_readv_report,
 };
+
+/*
+ * When shrinking shared buffers pool, evict the buffers which will not be part
+ * of the shrunk buffer pool.
+ */
+bool
+EvictExtraBuffers(int targetNBuffers, int currentNBuffers)
+{
+	bool		result = true;
+
+	Assert(targetNBuffers < currentNBuffers);
+
+	/*
+	 * If the buffer being evicated is locked, this function will need to
+	 * wait. This function should not be called from a Postmaster since it can
+	 * not wait on a lock.
+	 */
+	Assert(IsUnderPostmaster);
+
+	/*
+	 * TODO: Before evicting any buffer, we should check whether any of the
+	 * buffers are pinned. If we find that a buffer is pinned after evicting
+	 * most of them, that will impact performance since all those evicted
+	 * buffers might need to be read again.
+	 */
+	for (Buffer buf = targetNBuffers + 1; buf <= currentNBuffers; buf++)
+	{
+		BufferDesc *desc = GetBufferDescriptor(buf - 1);
+		uint64		buf_state;
+		bool		buffer_flushed;
+
+		buf_state = pg_atomic_read_u32(&desc->state);
+
+		/*
+		 * Nobody is expected to touch the buffers while resizing is going one
+		 * hence unlocked precheck should be safe and saves some cycles.
+		 */
+		if (!(buf_state & BM_VALID))
+			continue;
+
+		/*
+		 * XXX: Looks like CurrentResourceOwner can be NULL here, find another
+		 * one in that case?
+		 */
+		if (CurrentResourceOwner)
+			ResourceOwnerEnlarge(CurrentResourceOwner);
+
+		ReservePrivateRefCountEntry();
+
+		LockBufHdr(desc);
+
+		/*
+		 * Now that we have locked buffer descriptor, make sure that the
+		 * buffer without valid data has been skipped above.
+		 */
+		Assert(buf_state & BM_VALID);
+
+		if (!EvictUnpinnedBufferInternal(desc, &buffer_flushed))
+		{
+			elog(WARNING, "could not remove buffer %u, it is pinned", buf);
+			result = false;
+			break;
+		}
+	}
+
+	return result;
+}

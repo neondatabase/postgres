@@ -19,10 +19,10 @@
  * is normally considerably less than random_page_cost.  (However, if the
  * database is fully cached in RAM, it is reasonable to set them equal.)
  *
- * We also use a rough estimate "effective_cache_size" of the number of
- * disk pages in Postgres + OS-level disk cache.  (We can't simply use
- * NBuffers for this purpose because that would ignore the effects of
- * the kernel's disk cache.)
+ * We also use a rough estimate "effective_cache_size" of the number of disk
+ * pages in Postgres + OS-level disk cache.  (We can't simply use size of the
+ * buffer pool for this purpose because that would ignore the effects of the
+ * kernel's disk cache.)
  *
  * Obviously, taking constants for these values is an oversimplification,
  * but it's tough enough to get any useful estimates even at this level of

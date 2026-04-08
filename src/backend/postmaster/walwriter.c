@@ -243,6 +243,12 @@ WalWriterMain(const void *startup_data, size_t startup_data_len)
 		/* Process any signals received recently */
 		ProcessMainLoopInterrupts();
 
+		while (ProcSignalBarrierPending && !ShutdownRequestPending && !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+		{
+			ProcessProcSignalBarrier();
+			pg_usleep(10000L);
+		}
+
 		/*
 		 * Do what we're here for; then, if XLogBackgroundFlush() found useful
 		 * work to do, reset hibernation counter.

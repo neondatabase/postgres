@@ -51,6 +51,7 @@
 #include "replication/syncrep.h"
 #include "storage/aio_subsys.h"
 #include "storage/bufmgr.h"
+#include "storage/pg_shmem.h"
 #include "storage/condition_variable.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -365,6 +366,19 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		AbsorbSyncRequests();
 
 		ProcessCheckpointerInterrupts();
+
+		/*
+		* Process any pending ProcSignalBarrier(s) immediately.  If a
+		* shared buffer resize was in progress while we were in
+		* BufferSync, we delayed the pre-remap barrier; when we left
+		* BufferSync we may ack it here.  The coordinator then remaps and
+		* sends a post-remap barrier.  We must process both before
+		* touching any buffer-related shared memory (e.g. smgrdestroyall),
+		* or we can SIGBUS.
+		*/
+		while (ProcSignalBarrierPending && !ShutdownXLOGPending && !ShutdownRequestPending && !pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+			ProcessProcSignalBarrier();
+
 		if (ShutdownXLOGPending || ShutdownRequestPending)
 			break;
 
@@ -402,6 +416,25 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 		{
 			bool		ckpt_performed = false;
 			bool		do_restartpoint;
+			// bool		skip_ckpt = false;
+			// /*
+			//  * Do not start a checkpoint while shared buffer resize is in
+			//  * progress.  The coordinator remaps shared memory in Phase 2; if we
+			//  * run BufferSync during that window we can touch unmapped memory
+			//  * and hit SIGBUS.  Wait until resize completes.
+			//  */
+			// while (pg_atomic_unlocked_test_flag(&ShmemCtrl->resize_in_progress))
+			// {
+			// 	pg_usleep(100000);	/* 100ms */
+			// 	ProcessCheckpointerInterrupts();
+			// 	if (ShutdownXLOGPending || ShutdownRequestPending)
+			// 	{
+			// 		skip_ckpt = true;
+			// 		break;
+			// 	}
+			// }
+			// if (skip_ckpt)
+			// 	continue;
 
 			/* Check if we should perform a checkpoint or a restartpoint. */
 			do_restartpoint = RecoveryInProgress();
@@ -577,6 +610,8 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 			cur_timeout = Min(cur_timeout, XLogArchiveTimeout - elapsed_secs);
 		}
 
+		elog(LOG, "CheckpointerMain wait: %d seconds", cur_timeout);
+
 		(void) WaitLatch(MyLatch,
 						 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
 						 cur_timeout * 1000L /* convert to ms */ ,
@@ -641,9 +676,12 @@ CheckpointerMain(const void *startup_data, size_t startup_data_len)
 static void
 ProcessCheckpointerInterrupts(void)
 {
-	if (ProcSignalBarrierPending)
-		ProcessProcSignalBarrier();
-
+	/*
+	 * Reloading config can trigger further signals, complicating interrupts
+	 * processing -- so let it run first.
+	 *
+	 * XXX: Is there any need in memory barrier after ProcessConfigFile?
+	 */
 	if (ConfigReloadPending)
 	{
 		ConfigReloadPending = false;
@@ -662,6 +700,9 @@ ProcessCheckpointerInterrupts(void)
 		 */
 		UpdateSharedMemoryConfig();
 	}
+
+	if (ProcSignalBarrierPending)
+		ProcessProcSignalBarrier();
 
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
@@ -940,12 +981,13 @@ CheckpointerShmemSize(void)
 	Size		size;
 
 	/*
-	 * The size of the requests[] array is arbitrarily set equal to NBuffers.
-	 * But there is a cap of MAX_CHECKPOINT_REQUESTS to prevent accumulating
-	 * too many checkpoint requests in the ring buffer.
+	 * The size of the requests[] array is arbitrarily set equal to the
+	 * initial size of buffer pool.  But there is a cap of
+	 * MAX_CHECKPOINT_REQUESTS to prevent accumulating too many checkpoint
+	 * requests in the ring buffer.
 	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(Min(NBuffers,
+	size = add_size(size, mul_size(Min(NBuffersPending,
 									   MAX_CHECKPOINT_REQUESTS),
 								   sizeof(CheckpointerRequest)));
 

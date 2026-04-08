@@ -62,6 +62,8 @@ static void proc_exit_prepare(int code);
  * but provide some additional features we need --- in particular,
  * we want to register callbacks to invoke when we are disconnecting
  * from a broken shared-memory context but not exiting the postmaster.
+ * Maximum number of such exit callbacks depends on the number of shared
+ * segments.
  *
  * Callback functions can take zero, one, or two args: the first passed
  * arg is the integer exitcode, the second is the Datum supplied when
@@ -69,7 +71,7 @@ static void proc_exit_prepare(int code);
  * ----------------------------------------------------------------
  */
 
-#define MAX_ON_EXITS 20
+#define MAX_ON_EXITS 40
 
 struct ONEXIT
 {

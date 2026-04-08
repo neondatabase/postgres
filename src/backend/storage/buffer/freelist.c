@@ -19,6 +19,7 @@
 #include "port/atomics.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 
 #define INT_ACCESS_ONCE(var)	((int)(*((volatile int *)&(var))))
@@ -33,9 +34,15 @@ typedef struct
 	slock_t		buffer_strategy_lock;
 
 	/*
+	 * Number of active buffers that can be allocated. During buffer resizing,
+	 * this may be different from the actual size of the buffer pool.
+	 */
+	pg_atomic_uint32 activeNBuffers;
+
+	/*
 	 * Clock sweep hand: index of next buffer to consider grabbing. Note that
 	 * this isn't a concrete buffer - we only ever increase the value. So, to
-	 * get an actual buffer, it needs to be used modulo NBuffers.
+	 * get an actual buffer, it needs to be used modulo activeNBuffers.
 	 */
 	pg_atomic_uint32 nextVictimBuffer;
 
@@ -108,21 +115,27 @@ static inline uint32
 ClockSweepTick(void)
 {
 	uint32		victim;
+	int			activeBuffers;
 
 	/*
 	 * Atomically move hand ahead one buffer - if there's several processes
 	 * doing this, this can lead to buffers being returned slightly out of
-	 * apparent order.
+	 * apparent order. We need to read both the current position of hand and
+	 * the current buffer allocation limit together consistently. They may be
+	 * reset by concurrent resize.
 	 */
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	victim =
 		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
+	activeBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 
-	if (victim >= NBuffers)
+	if (victim >= activeBuffers)
 	{
 		uint32		originalVictim = victim;
 
 		/* always wrap what we look up in BufferDescriptors */
-		victim = victim % NBuffers;
+		victim = victim % activeBuffers;
 
 		/*
 		 * If we're the one that just caused a wraparound, force
@@ -150,7 +163,7 @@ ClockSweepTick(void)
 				 */
 				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-				wrapped = expected % NBuffers;
+				wrapped = expected % activeBuffers;
 
 				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
 														 &expected, wrapped);
@@ -174,10 +187,9 @@ ClockSweepTick(void)
 bool
 have_free_buffer(void)
 {
-	if (StrategyControl->firstFreeBuffer >= 0)
-		return true;
-	else
+	if (!enable_freelist)
 		return false;
+	return StrategyControl->firstFreeBuffer >= 0;
 }
 
 /*
@@ -265,10 +277,12 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	 * buffer_strategy_lock not the individual buffer spinlocks, so it's OK to
 	 * manipulate them without holding the spinlock.
 	 */
-	if (StrategyControl->firstFreeBuffer >= 0)
+	if (enable_freelist && StrategyControl->firstFreeBuffer >= 0)
 	{
 		while (true)
 		{
+			uint32		activeBuffers;
+
 			/* Acquire the spinlock to remove element from the freelist */
 			SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
@@ -284,12 +298,21 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			/* Unconditionally remove buffer from freelist */
 			StrategyControl->firstFreeBuffer = buf->freeNext;
 			buf->freeNext = FREENEXT_NOT_IN_LIST;
+			activeBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
 
 			/*
 			 * Release the lock so someone else can access the freelist while
 			 * we check out this buffer.
 			 */
 			SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+
+			/*
+			 * During resize, skip descriptors outside the active range; they
+			 * should not appear once the coordinator has purged the freelist,
+			 * but be defensive.
+			 */
+			if (buf->buf_id >= (int) activeBuffers)
+				continue;
 
 			/*
 			 * If the buffer is pinned or has a nonzero usage_count, we cannot
@@ -312,7 +335,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 	}
 
 	/* Nothing on the freelist, so run the "clock sweep" algorithm */
-	trycounter = NBuffers;
+	trycounter = NBuffersPending;
 	for (;;)
 	{
 		buf = GetBufferDescriptor(ClockSweepTick());
@@ -329,7 +352,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 			{
 				local_buf_state -= BUF_USAGECOUNT_ONE;
 
-				trycounter = NBuffers;
+				trycounter = NBuffersPending;
 			}
 			else
 			{
@@ -362,7 +385,19 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint32 *buf_state, bool *from_r
 void
 StrategyFreeBuffer(BufferDesc *buf)
 {
+	uint32		activeBuffers;
+
+	if (!enable_freelist)
+		return;
+
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	activeBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+	if (buf->buf_id >= (int) activeBuffers)
+	{
+		SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+		return;
+	}
 
 	/*
 	 * It is possible that we are told to put something in the freelist that
@@ -395,10 +430,12 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 {
 	uint32		nextVictimBuffer;
 	int			result;
+	uint32		activeNBuffers;
 
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
-	result = nextVictimBuffer % NBuffers;
+	activeNBuffers = pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+	result = nextVictimBuffer % activeNBuffers;
 
 	if (complete_passes)
 	{
@@ -408,7 +445,7 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		 * Additionally add the number of wraparounds that happened before
 		 * completePasses could be incremented. C.f. ClockSweepTick().
 		 */
-		*complete_passes += nextVictimBuffer / NBuffers;
+		*complete_passes += nextVictimBuffer / activeNBuffers;
 	}
 
 	if (num_buf_alloc)
@@ -455,12 +492,144 @@ StrategyShmemSize(void)
 	Size		size = 0;
 
 	/* size of lookup hash table ... see comment in StrategyInitialize */
-	size = add_size(size, BufTableShmemSize(NBuffers + NUM_BUFFER_PARTITIONS));
+	size = add_size(size, BufTableShmemSize(MaxNBuffers + NUM_BUFFER_PARTITIONS));
 
 	/* size of the shared replacement strategy control block */
 	size = add_size(size, MAXALIGN(sizeof(BufferStrategyControl)));
 
 	return size;
+}
+
+uint32
+StrategyGetActiveNBuffers(void)
+{
+	Assert(StrategyControl);
+	return pg_atomic_read_u32(&StrategyControl->activeNBuffers);
+}
+
+void
+StrategyReset(int activeNBuffers)
+{
+	Assert(StrategyControl);
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	/* Update the active buffer count for the strategy */
+	pg_atomic_write_u32(&StrategyControl->activeNBuffers, activeNBuffers);
+
+	/* Reset the clock-sweep pointer to start from beginning */
+	pg_atomic_write_u32(&StrategyControl->nextVictimBuffer, 0);
+
+	/*
+	 * When the freelist is disabled, clear list head/tail.  When enabled, do
+	 * not reset them here: shrink runs StrategyPurgeFreelistAbove(), expand
+	 * runs StrategyAppendNewBuffersToFreelist(), and otherwise the list is
+	 * managed incrementally.
+	 */
+	if (!enable_freelist)
+	{
+		StrategyControl->firstFreeBuffer = -1;
+		StrategyControl->lastFreeBuffer = -1;
+	}
+
+	/*
+	 * The statistics is viewed in the context of the number of shared
+	 * buffers. Reset it as the size of active number of shared buffers
+	 * changes.
+	 */
+	StrategyControl->completePasses = 0;
+	pg_atomic_write_u32(&StrategyControl->numBufferAllocs, 0);
+
+	/* TODO: Do we need to seset background writer notifications? */
+	StrategyControl->bgwprocno = -1;
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/*
+ * Remove from the freelist every buffer with buf_id >= activeNBuffers.
+ * Caller must hold no buffer_strategy_lock; coordinator uses this during
+ * shrink so the freelist only references [0, activeNBuffers).
+ */
+void
+StrategyPurgeFreelistAbove(int activeNBuffers)
+{
+	int			cur;
+	int			next;
+	int			new_head = -1;
+	int			new_tail = -1;
+	BufferDesc *buf;
+
+	if (!enable_freelist)
+		return;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	cur = StrategyControl->firstFreeBuffer;
+	while (cur >= 0)
+	{
+		buf = GetBufferDescriptor(cur);
+		Assert(buf->freeNext != FREENEXT_NOT_IN_LIST);
+		next = buf->freeNext;
+
+		if (cur < activeNBuffers)
+		{
+			if (new_head < 0)
+			{
+				new_head = cur;
+				new_tail = cur;
+			}
+			else
+			{
+				GetBufferDescriptor(new_tail)->freeNext = cur;
+				new_tail = cur;
+			}
+		}
+		else
+			buf->freeNext = FREENEXT_NOT_IN_LIST;
+
+		cur = next;
+	}
+
+	if (new_tail >= 0)
+		GetBufferDescriptor(new_tail)->freeNext = FREENEXT_END_OF_LIST;
+
+	StrategyControl->firstFreeBuffer = new_head;
+	if (new_head >= 0)
+		StrategyControl->lastFreeBuffer = new_tail;
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
+}
+
+/*
+ * After expanding the descriptor array, link new buffers [first_new_id,
+ * targetNBuffers) into a chain and append it to the freelist tail.
+ */
+void
+StrategyAppendNewBuffersToFreelist(int first_new_id, int targetNBuffers)
+{
+	int			i;
+
+	if (!enable_freelist || first_new_id >= targetNBuffers)
+		return;
+
+	for (i = first_new_id; i < targetNBuffers - 1; i++)
+		GetBufferDescriptor(i)->freeNext = i + 1;
+	GetBufferDescriptor(targetNBuffers - 1)->freeNext = FREENEXT_END_OF_LIST;
+
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+
+	if (StrategyControl->firstFreeBuffer < 0)
+	{
+		StrategyControl->firstFreeBuffer = first_new_id;
+		StrategyControl->lastFreeBuffer = targetNBuffers - 1;
+	}
+	else
+	{
+		GetBufferDescriptor(StrategyControl->lastFreeBuffer)->freeNext = first_new_id;
+		StrategyControl->lastFreeBuffer = targetNBuffers - 1;
+	}
+
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }
 
 /*
@@ -480,20 +649,29 @@ StrategyInitialize(bool init)
 	 *
 	 * Since we can't tolerate running out of lookup table entries, we must be
 	 * sure to specify an adequate table size here.  The maximum steady-state
-	 * usage is of course NBuffers entries, but BufferAlloc() tries to insert
-	 * a new entry before deleting the old.  In principle this could be
-	 * happening in each partition concurrently, so we could need as many as
-	 * NBuffers + NUM_BUFFER_PARTITIONS entries.
+	 * usage is of course is as many number of entries as the number of
+	 * buffers in the buffer pool.  Right now there is no way to free shared
+	 * memory. Even if we shrink the buffer lookup table when shrinking the
+	 * buffer pool the unused hash table entries can not be freed. When we
+	 * expand the buffer pool, more entries can be allocated but we can not
+	 * resize the hash table directory without rehashing all the entries. Just
+	 * allocating more entries will lead to more contention. Hence we setup
+	 * the buffer lookup table considering the maximum possible size of the
+	 * buffer pool which is MaxNBuffers.
+	 *
+	 * Additionally BufferAlloc() tries to insert a new entry before deleting
+	 * the old.  In principle this could be happening in each partition
+	 * concurrently, so we need extra NUM_BUFFER_PARTITIONS entries.
 	 */
-	InitBufTable(NBuffers + NUM_BUFFER_PARTITIONS);
+	InitBufTable(MaxNBuffers + NUM_BUFFER_PARTITIONS);
 
 	/*
 	 * Get or create the shared strategy control block
 	 */
 	StrategyControl = (BufferStrategyControl *)
-		ShmemInitStruct("Buffer Strategy Status",
-						sizeof(BufferStrategyControl),
-						&found);
+		ShmemInitStructInSegment("Buffer Strategy Status",
+								 sizeof(BufferStrategyControl),
+								 &found, MAIN_SHMEM_SEGMENT);
 
 	if (!found)
 	{
@@ -504,12 +682,26 @@ StrategyInitialize(bool init)
 
 		SpinLockInit(&StrategyControl->buffer_strategy_lock);
 
+		/* Initialize the active buffer count */
+		pg_atomic_init_u32(&StrategyControl->activeNBuffers, NBuffersPending);
+
 		/*
 		 * Grab the whole linked list of free buffers for our strategy. We
 		 * assume it was previously set up by BufferManagerShmemInit().
+		 * When the freelist is disabled, leave the list empty so allocation
+		 * uses only the clock sweep.
 		 */
-		StrategyControl->firstFreeBuffer = 0;
-		StrategyControl->lastFreeBuffer = NBuffers - 1;
+		if (enable_freelist)
+		{
+			StrategyControl->firstFreeBuffer = 0;
+			/* NBuffers is not set yet; BufferManagerShmemInit uses NBuffersPending. */
+			StrategyControl->lastFreeBuffer = NBuffersPending - 1;
+		}
+		else
+		{
+			StrategyControl->firstFreeBuffer = -1;
+			StrategyControl->lastFreeBuffer = -1;
+		}
 
 		/* Initialize the clock sweep pointer */
 		pg_atomic_init_u32(&StrategyControl->nextVictimBuffer, 0);
@@ -689,7 +881,7 @@ int
 GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
 {
 	if (strategy == NULL)
-		return NBuffers;
+		return NBuffersPending;
 
 	switch (strategy->btype)
 	{
@@ -746,12 +938,25 @@ GetBufferFromRing(BufferAccessStrategy strategy, uint32 *buf_state)
 		strategy->current = 0;
 
 	/*
-	 * If the slot hasn't been filled yet, tell the caller to allocate a new
-	 * buffer with the normal allocation strategy.  He will then fill this
+	 * If the slot hasn't been filled yet or the buffer in the slot has been
+	 * invalidated when buffer pool was shrunk, tell the caller to allocate a
+	 * new buffer with the normal allocation strategy.  He will then fill this
 	 * slot by calling AddBufferToRing with the new buffer.
+	 *
+	 * TODO: buffer ids in the ring will never be greater than the size of
+	 * buffer pool, except maybe the first time ring is accessed after
+	 * shrinking the buffer pool. Checking the upper bound on buffer id always
+	 * may mask a bug bugs that introduces buffer ids higher than the size of
+	 * buffer pool in the ring. But performing that check only once after
+	 * shrinking seems impossible.  The BufferAccessStrategy objects are not
+	 * accessible outside the ScanState. Hence we can not purge the buffers
+	 * while evicting the buffers.  After the resizing is finished, it's not
+	 * possible to notice when we touch the first of those objects and the
+	 * last of objects. See if this can fixed.
 	 */
 	bufnum = strategy->buffers[strategy->current];
-	if (bufnum == InvalidBuffer)
+	if (bufnum == InvalidBuffer ||
+		bufnum > pg_atomic_read_u32(&StrategyControl->activeNBuffers))
 		return NULL;
 
 	/*

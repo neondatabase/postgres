@@ -4696,7 +4696,7 @@ XLOGChooseNumBuffers(void)
 {
 	int			xbuffers;
 
-	xbuffers = NBuffers / 32;
+	xbuffers = NBuffersPending / 32;
 	if (xbuffers > (wal_segment_size / XLOG_BLCKSZ))
 		xbuffers = (wal_segment_size / XLOG_BLCKSZ);
 	if (xbuffers < 8)
@@ -7770,7 +7770,8 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	 * Writing to the WAL during shutdown checkpoint cause Postgres panic.
 	 * So do it before in PreCheckPointGuts.
 	 */
-	if (!(flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY)))
+	// initdb will flush buffers. Otherwise, we can skip.
+	if (!(flags & (CHECKPOINT_IS_SHUTDOWN|CHECKPOINT_END_OF_RECOVERY)) && !IsUnderPostmaster)
 		CheckPointBuffers(flags);
 
 	/* Perform all queued up fsyncs */

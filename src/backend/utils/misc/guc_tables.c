@@ -2182,6 +2182,32 @@ struct config_bool ConfigureNamesBool[] =
 		false,
 		NULL, NULL, NULL
 	},
+	{
+		{"buffer_shrink_cooperative_eviction", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, evict to-be-removed buffers when the last pin is released."),
+		},
+		&buffer_shrink_cooperative_eviction,
+		true,
+		NULL, NULL, NULL
+	},
+	{
+		{"enable_freelist", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Enables the shared buffer freelist for faster reuse of empty buffers."),
+		},
+		&enable_freelist,
+		false,
+		NULL, NULL, NULL
+	},
+	{
+		{"buffer_mapping_flat", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Use index-based shared buffer mapping table instead of dynahash."),
+			NULL,
+			GUC_NOT_IN_SAMPLE
+		},
+		&buf_table_use_flat_mapping,
+		true,
+		NULL, NULL, NULL
+	},
 
 	/* End-of-list marker */
 	{
@@ -2406,13 +2432,42 @@ struct config_int ConfigureNamesInt[] =
 	 * checking for overflow, so we mustn't allow more than INT_MAX / 2.
 	 */
 	{
-		{"shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+		{"shared_buffers", PGC_SIGHUP, RESOURCES_MEM,
 			gettext_noop("Sets the number of shared memory buffers used by the server."),
 			NULL,
 			GUC_UNIT_BLOCKS
 		},
-		&NBuffers,
+		&NBuffersPending,
 		16384, 16, INT_MAX / 2,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"max_shared_buffers", PGC_POSTMASTER, RESOURCES_MEM,
+			gettext_noop("Sets the upper limit for the shared_buffers value."),
+			NULL,
+			GUC_UNIT_BLOCKS
+		},
+		&MaxNBuffers,
+		0, 0, INT_MAX / 2,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"buffer_shrink_relocate_usage_threshold", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, relocate buffers whose usage count is greater than this value into the active range; -1 disables."),
+		},
+		&buffer_shrink_relocate_usage_threshold,
+		-1, -1, 5,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"buffer_shrink_relocate_usage_sample_size", PGC_SIGHUP, RESOURCES_MEM,
+			gettext_noop("During shared buffer shrink, relocation also requires source usage count to exceed the mean of this many random active-buffer usage counts; -1 skips this check."),
+		},
+		&buffer_shrink_relocate_usage_sample_size,
+		-1, -1, 4096,
 		NULL, NULL, NULL
 	},
 

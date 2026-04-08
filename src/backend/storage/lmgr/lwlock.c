@@ -81,6 +81,8 @@
 #include "pgstat.h"
 #include "access/xlogrecovery.h"
 #include "port/pg_bitutils.h"
+#include "postmaster/postmaster.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/proclist.h"
 #include "storage/procnumber.h"

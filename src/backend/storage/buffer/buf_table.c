@@ -3,6 +3,9 @@
  * buf_table.c
  *	  routines for mapping BufferTags to buffer indexes.
  *
+ * When buffer_mapping_flat is true, the implementation in buf_table_flat.c
+ * is used; otherwise the historical dynahash (SharedBufHash) backend is used.
+ *
  * Note: the routines in this file do no locking of their own.  The caller
  * must hold a suitable lock on the appropriate BufMappingLock, as specified
  * in the comments.  We can't do the locking inside these functions because
@@ -21,9 +24,19 @@
  */
 #include "postgres.h"
 
+#include "fmgr.h"
+#include "funcapi.h"
+#include "storage/buf_table_flat.h"
 #include "storage/buf_internals.h"
+#include "storage/bufmgr.h"
+#include "storage/lwlock.h"
+#include "storage/pg_shmem.h"
+#include "utils/rel.h"
+#include "utils/builtins.h"
 
-/* entry for buffer lookup hashtable */
+bool		buf_table_use_flat_mapping = false;
+
+/* entry for buffer lookup hashtable (dynahash path) */
 typedef struct
 {
 	BufferTag	key;			/* Tag of a disk page */
@@ -35,11 +48,14 @@ static HTAB *SharedBufHash;
 
 /*
  * Estimate space needed for mapping hashtable
- *		size is the desired hash table size (possibly more than NBuffers)
+ *		size is the desired hash table size (possibly more than the size of buffer
+ *  pool)
  */
 Size
 BufTableShmemSize(int size)
 {
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_ShmemSize(size);
 	return hash_estimate_size(size, sizeof(BufferLookupEnt));
 }
 
@@ -52,13 +68,25 @@ InitBufTable(int size)
 {
 	HASHCTL		info;
 
-	/* assume no locking is needed yet */
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_Init(size);
+		SharedBufHash = NULL;
+		return;
+	}
 
 	/* BufferTag maps to Buffer */
 	info.keysize = sizeof(BufferTag);
 	info.entrysize = sizeof(BufferLookupEnt);
 	info.num_partitions = NUM_BUFFER_PARTITIONS;
 
+	/*
+	 * The shared buffer look up table is set up only once with maximum
+	 * possible entries considering maximum size of the buffer pool. It is not
+	 * resized after that even if the buffer pool is resized. Hence it is
+	 * allocated in the main shared memory segment and not in a resizeable
+	 * shared memory segment.
+	 */
 	SharedBufHash = ShmemInitHash("Shared Buffer Lookup Table",
 								  size, size,
 								  &info,
@@ -77,6 +105,8 @@ InitBufTable(int size)
 uint32
 BufTableHashCode(BufferTag *tagPtr)
 {
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_HashCode(tagPtr);
 	return get_hash_value(SharedBufHash, tagPtr);
 }
 
@@ -90,6 +120,9 @@ int
 BufTableLookup(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
+
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_Lookup(tagPtr, hashcode);
 
 	result = (BufferLookupEnt *)
 		hash_search_with_hash_value(SharedBufHash,
@@ -120,6 +153,9 @@ BufTableInsert(BufferTag *tagPtr, uint32 hashcode, int buf_id)
 	BufferLookupEnt *result;
 	bool		found;
 
+	if (buf_table_use_flat_mapping)
+		return BufTableFlat_Insert(tagPtr, hashcode, buf_id);
+
 	Assert(buf_id >= 0);		/* -1 is reserved for not-in-table */
 	Assert(tagPtr->blockNum != P_NEW);	/* invalid tag */
 
@@ -149,6 +185,12 @@ BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
 {
 	BufferLookupEnt *result;
 
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_Delete(tagPtr, hashcode);
+		return;
+	}
+
 	result = (BufferLookupEnt *)
 		hash_search_with_hash_value(SharedBufHash,
 									tagPtr,
@@ -158,4 +200,63 @@ BufTableDelete(BufferTag *tagPtr, uint32 hashcode)
 
 	if (!result)				/* shouldn't happen */
 		elog(ERROR, "shared buffer hash table corrupted");
+}
+
+/*
+ * BufTableGetContents
+ *		Fill the given tuplestore with contents of the shared buffer lookup table
+ *
+ * This function is used by pg_buffercache extension to expose buffer lookup
+ * table contents via SQL. The caller is responsible for setting up the
+ * tuplestore and result set info.
+ */
+void
+BufTableGetContents(Tuplestorestate *tupstore, TupleDesc tupdesc)
+{
+/* Expected number of attributes of the buffer lookup table entry. */
+#define BUFTABLE_CONTENTS_COLS 6
+
+	HASH_SEQ_STATUS hstat;
+	BufferLookupEnt *ent;
+	Datum		values[BUFTABLE_CONTENTS_COLS];
+	bool		nulls[BUFTABLE_CONTENTS_COLS];
+	int			i;
+
+	memset(nulls, 0, sizeof(nulls));
+
+	Assert(tupdesc->natts == BUFTABLE_CONTENTS_COLS);
+
+	if (buf_table_use_flat_mapping)
+	{
+		BufTableFlat_GetContents(tupstore, tupdesc);
+		return;
+	}
+
+	/*
+	 * Lock all buffer mapping partitions to ensure a consistent view of the
+	 * hash table during the scan. Must grab LWLocks in partition-number order
+	 * to avoid LWLock deadlock.
+	 */
+	for (i = 0; i < NUM_BUFFER_PARTITIONS; i++)
+		LWLockAcquire(BufMappingPartitionLockByIndex(i), LW_SHARED);
+
+	hash_seq_init(&hstat, SharedBufHash);
+	while ((ent = (BufferLookupEnt *) hash_seq_search(&hstat)) != NULL)
+	{
+		values[0] = ObjectIdGetDatum(ent->key.spcOid);
+		values[1] = ObjectIdGetDatum(ent->key.dbOid);
+		values[2] = ObjectIdGetDatum(ent->key.relNumber);
+		values[3] = ObjectIdGetDatum(ent->key.forkNum);
+		values[4] = Int64GetDatum(ent->key.blockNum);
+		values[5] = Int32GetDatum(ent->id);
+
+		tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+	}
+
+	/*
+	 * Release all buffer mapping partition locks in the reverse order so as
+	 * to avoid LWLock deadlock.
+	 */
+	for (i = NUM_BUFFER_PARTITIONS - 1; i >= 0; i--)
+		LWLockRelease(BufMappingPartitionLockByIndex(i));
 }

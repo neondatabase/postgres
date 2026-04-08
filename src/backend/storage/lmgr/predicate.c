@@ -207,6 +207,7 @@
 #include "miscadmin.h"
 #include "pgstat.h"
 #include "port/pg_lfind.h"
+#include "storage/pg_shmem.h"
 #include "storage/predicate.h"
 #include "storage/predicate_internals.h"
 #include "storage/proc.h"

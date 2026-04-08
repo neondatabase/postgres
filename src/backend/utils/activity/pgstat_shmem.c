@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "pgstat.h"
+#include "storage/pg_shmem.h"
 #include "storage/shmem.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"

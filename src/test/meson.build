@@ -4,6 +4,7 @@ subdir('regress')
 subdir('isolation')
 
 subdir('authentication')
+subdir('buffermgr')
 subdir('postmaster')
 subdir('recovery')
 subdir('subscription')

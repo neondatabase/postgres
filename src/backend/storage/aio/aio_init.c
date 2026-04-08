@@ -101,7 +101,7 @@ AioChooseMaxConcurrency(void)
 
 	/* Similar logic to LimitAdditionalPins() */
 	max_backends = MaxBackends + NUM_AUXILIARY_PROCS;
-	max_proportional_pins = NBuffers / max_backends;
+	max_proportional_pins = NBuffersPending / max_backends;
 
 	max_proportional_pins = Max(max_proportional_pins, 1);
 

@@ -39,14 +39,13 @@
  * address space and is negligible relative to the 64-bit address space.
  */
 #define PROTECTIVE_REGION_SIZE (10 * WIN32_STACK_RLIMIT)
-void	   *ShmemProtectiveRegion = NULL;
-
-HANDLE		UsedShmemSegID = INVALID_HANDLE_VALUE;
-void	   *UsedShmemSegAddr = NULL;
-static Size UsedShmemSegSize = 0;
 
 static bool EnableLockPagesPrivilege(int elevel);
 static void pgwin32_SharedMemoryDelete(int status, Datum shmId);
+
+PGInhShmemSeg InhShmemSegs[NUM_MEMORY_MAPPINGS];
+
+static Size UsedShmemSegSizes[NUM_MEMORY_MAPPINGS] = {0};
 
 /*
  * Generate shared memory segment name. Expand the data directory, to generate
@@ -202,9 +201,11 @@ EnableLockPagesPrivilege(int elevel)
  *
  * Create a shared memory segment of the given size and initialize its
  * standard header.
+ *
+ * TODO: Check that the segment_id is a valid one before indexing corresponding arrays.
  */
-PGShmemHeader *
-PGSharedMemoryCreate(Size size,
+void
+PGSharedMemoryCreate(int segment_id, MemoryMappingSizes *mapping_sizes,
 					 PGShmemHeader **shim)
 {
 	void	   *memAddress;
@@ -216,13 +217,14 @@ PGSharedMemoryCreate(Size size,
 	DWORD		size_high;
 	DWORD		size_low;
 	SIZE_T		largePageSize = 0;
-	Size		orig_size = size;
+	Size		size = mapping_sizes->shmem_req_size;
 	DWORD		flProtect = PAGE_READWRITE;
 	DWORD		desiredAccess;
+	PGInhShmemSeg *inhseg = &InhShmemSegs[segment_id];
 
-	ShmemProtectiveRegion = VirtualAlloc(NULL, PROTECTIVE_REGION_SIZE,
-										 MEM_RESERVE, PAGE_NOACCESS);
-	if (ShmemProtectiveRegion == NULL)
+	inhseg->ShmemProtectiveRegion = VirtualAlloc(NULL, PROTECTIVE_REGION_SIZE,
+												 MEM_RESERVE, PAGE_NOACCESS);
+	if (inhseg->ShmemProtectiveRegion == NULL)
 		elog(FATAL, "could not reserve memory region: error code %lu",
 			 GetLastError());
 
@@ -231,8 +233,12 @@ PGSharedMemoryCreate(Size size,
 
 	szShareMem = GetSharedMemName();
 
-	UsedShmemSegAddr = NULL;
+	inhseg->UsedShmemSegAddr = NULL;
 
+	/*
+	 * TODO: We don't need to perform this as many times as the number of
+	 * segments. Instead do something similar to sysv_shmem.c
+	 */
 	if (huge_pages == HUGE_PAGES_ON || huge_pages == HUGE_PAGES_TRY)
 	{
 		/* Does the processor support large pages? */
@@ -304,7 +310,7 @@ retry:
 				 * Use the original size, not the rounded-up value, when
 				 * falling back to non-huge pages.
 				 */
-				size = orig_size;
+				size = mapping_sizes->shmem_req_size;
 				flProtect = PAGE_READWRITE;
 				goto retry;
 			}
@@ -337,6 +343,8 @@ retry:
 	if (!hmap)
 		ereport(FATAL,
 				(errmsg("pre-existing shared memory block is still in use"),
+				 errdetail("when trying to create shared memory block for segment \"%s\"",
+						   PGShmemSegmentName(segment)),
 				 errhint("Check if there are any old server processes still running, and terminate them.")));
 
 	free(szShareMem);
@@ -393,9 +401,9 @@ retry:
 	hdr->dsm_control = 0;
 
 	/* Save info for possible future use */
-	UsedShmemSegAddr = memAddress;
-	UsedShmemSegSize = size;
-	UsedShmemSegID = hmap2;
+	inhseg->UsedShmemSegAddr = memAddress;
+	UsedShmemSegSizes[segment_id] = size;
+	inhseg->UsedShmemSegID = (unsigned long) hmap2;
 
 	/* Register on-exit routine to delete the new segment */
 	on_shmem_exit(pgwin32_SharedMemoryDelete, PointerGetDatum(hmap2));
@@ -405,8 +413,12 @@ retry:
 	/* Report whether huge pages are in use */
 	SetConfigOption("huge_pages_status", (flProtect & SEC_LARGE_PAGES) ?
 					"on" : "off", PGC_INTERNAL, PGC_S_DYNAMIC_DEFAULT);
+}
 
-	return hdr;
+bool
+PGSharedMemoryResize(int segment_id, MemoryMappingSizes *mapping)
+{
+	elog(ERROR, "shared memory resizing is not supported on Windows");
 }
 
 /*
@@ -416,42 +428,54 @@ retry:
  * an already existing shared memory segment, using the handle inherited from
  * the postmaster.
  *
- * ShmemProtectiveRegion, UsedShmemSegID and UsedShmemSegAddr are implicit
- * parameters to this routine.  The caller must have already restored them to
- * the postmaster's values.
+ * Segments is an implicit parameters to this routine.  The caller must have
+ * already restored ShmemProtectiveRegion, UsedShmemSegID and UsedShmemSegAddr
+ * in each Segment to the postmaster's values.
  */
 void
 PGSharedMemoryReAttach(void)
 {
 	PGShmemHeader *hdr;
-	void	   *origUsedShmemSegAddr = UsedShmemSegAddr;
+	void	   *origUsedShmemSegAddr;
 
-	Assert(ShmemProtectiveRegion != NULL);
-	Assert(UsedShmemSegAddr != NULL);
 	Assert(IsUnderPostmaster);
 
-	/*
-	 * Release memory region reservations made by the postmaster
-	 */
-	if (VirtualFree(ShmemProtectiveRegion, 0, MEM_RELEASE) == 0)
-		elog(FATAL, "failed to release reserved memory region (addr=%p): error code %lu",
-			 ShmemProtectiveRegion, GetLastError());
-	if (VirtualFree(UsedShmemSegAddr, 0, MEM_RELEASE) == 0)
-		elog(FATAL, "failed to release reserved memory region (addr=%p): error code %lu",
-			 UsedShmemSegAddr, GetLastError());
+	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
 
-	hdr = (PGShmemHeader *) MapViewOfFileEx(UsedShmemSegID, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0, UsedShmemSegAddr);
-	if (!hdr)
-		elog(FATAL, "could not reattach to shared memory (key=%p, addr=%p): error code %lu",
-			 UsedShmemSegID, UsedShmemSegAddr, GetLastError());
-	if (hdr != origUsedShmemSegAddr)
-		elog(FATAL, "reattaching to shared memory returned unexpected address (got %p, expected %p)",
-			 hdr, origUsedShmemSegAddr);
-	if (hdr->magic != PGShmemMagic)
-		elog(FATAL, "reattaching to shared memory returned non-PostgreSQL memory");
-	dsm_set_control_handle(hdr->dsm_control);
+		if (inhseg->UsedShmemSegAddr == NULL)
+			continue;
 
-	UsedShmemSegAddr = hdr;		/* probably redundant */
+		Assert(inhseg->ShmemProtectiveRegion != NULL);
+
+		origUsedShmemSegAddr = inhseg->UsedShmemSegAddr;
+
+		/*
+		 * Release memory region reservations made by the postmaster
+		 */
+		if (VirtualFree(inhseg->ShmemProtectiveRegion, 0, MEM_RELEASE) == 0)
+			elog(FATAL, "failed to release reserved memory region (addr=%p): error code %lu",
+				 inhseg->ShmemProtectiveRegion, GetLastError());
+		if (VirtualFree(inhseg->UsedShmemSegAddr, 0, MEM_RELEASE) == 0)
+			elog(FATAL, "failed to release reserved memory region (addr=%p): error code %lu",
+				 inhseg->UsedShmemSegAddr, GetLastError());
+
+		hdr = (PGShmemHeader *) MapViewOfFileEx(inhseg->UsedShmemSegID, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0, inhseg->UsedShmemSegAddr);
+		if (!hdr)
+			elog(FATAL, "could not reattach to shared memory (key=%p, addr=%p): error code %lu",
+				 inhseg->UsedShmemSegID, inhseg->UsedShmemSegAddr, GetLastError());
+		if (hdr != origUsedShmemSegAddr)
+			elog(FATAL, "reattaching to shared memory returned unexpected address (got %p, expected %p)",
+				 hdr, origUsedShmemSegAddr);
+		if (hdr->magic != PGShmemMagic)
+			elog(FATAL, "reattaching to shared memory returned non-PostgreSQL memory");
+		/* Re-establish dsm_control mapping, if any */
+		if (hdr->dsm_control != 0)
+			dsm_set_control_handle(hdr->dsm_control);
+
+		inhseg->UsedShmemSegAddr = hdr; /* probably redundant */
+	}
 }
 
 /*
@@ -464,22 +488,30 @@ PGSharedMemoryReAttach(void)
  * The child process startup logic might or might not call PGSharedMemoryDetach
  * after this; make sure that it will be a no-op if called.
  *
- * ShmemProtectiveRegion, UsedShmemSegID and UsedShmemSegAddr are implicit
- * parameters to this routine.  The caller must have already restored them to
- * the postmaster's values.
+ * Segments is an implicit parameters to this routine.  The caller must have
+ * already restored ShmemProtectiveRegion and UsedShmemSegAddr
+ * in each Segment to the postmaster's values.
  */
 void
 PGSharedMemoryNoReAttach(void)
 {
-	Assert(ShmemProtectiveRegion != NULL);
-	Assert(UsedShmemSegAddr != NULL);
 	Assert(IsUnderPostmaster);
+	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		PGInhShmemSeg *segment = &InhShmemSegs[i];
 
-	/*
-	 * Under Windows we will not have mapped the segment, so we don't need to
-	 * un-map it.  Just reset UsedShmemSegAddr to show we're not attached.
-	 */
-	UsedShmemSegAddr = NULL;
+		if (segment->UsedShmemSegAddr == NULL)
+			continue;
+
+		Assert(segment->ShmemProtectiveRegion != NULL);
+
+		/*
+		 * Under Windows we will not have mapped the segment, so we don't need
+		 * to un-map it.  Just reset UsedShmemSegAddr to show we're not
+		 * attached.
+		 */
+		segment->UsedShmemSegAddr = NULL;
+	}
 
 	/*
 	 * We *must* close the inherited shmem segment handle, else Windows will
@@ -492,49 +524,56 @@ PGSharedMemoryNoReAttach(void)
 /*
  * PGSharedMemoryDetach
  *
- * Detach from the shared memory segment, if still attached.  This is not
+ * Detach from the shared memory segments, if still attached.  This is not
  * intended to be called explicitly by the process that originally created the
- * segment (it will have an on_shmem_exit callback registered to do that).
- * Rather, this is for subprocesses that have inherited an attachment and want
- * to get rid of it.
+ * segments (it will have an on_shmem_exit callback registered to do that).
+ * Rather, this is for subprocesses that have inherited an attachment and want to
+ * get rid of it.
  *
- * ShmemProtectiveRegion, UsedShmemSegID and UsedShmemSegAddr are implicit
- * parameters to this routine.
+ * InhShmemSegs is an implicit parameters to this routine.  The caller must have
+ * already restored ShmemProtectiveRegion, UsedShmemSegID and UsedShmemSegAddr in
+ * each Segment to the postmaster's values.
  */
 void
 PGSharedMemoryDetach(void)
 {
-	/*
-	 * Releasing the protective region liberates an unimportant quantity of
-	 * address space, but be tidy.
-	 */
-	if (ShmemProtectiveRegion != NULL)
+	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
 	{
-		if (VirtualFree(ShmemProtectiveRegion, 0, MEM_RELEASE) == 0)
-			elog(LOG, "failed to release reserved memory region (addr=%p): error code %lu",
-				 ShmemProtectiveRegion, GetLastError());
+		PGInhShmemSeg *segment = &InhShmemSegs[i];
 
-		ShmemProtectiveRegion = NULL;
-	}
+		/*
+		 * Releasing the protective region liberates an unimportant quantity
+		 * of address space, but be tidy.
+		 */
+		if (segment->ShmemProtectiveRegion != NULL)
+		{
+			if (VirtualFree(segment->ShmemProtectiveRegion, 0, MEM_RELEASE) == 0)
+				elog(LOG, "failed to release reserved memory region (addr=%p): error code %lu",
+					 segment->ShmemProtectiveRegion, GetLastError());
 
-	/* Unmap the view, if it's mapped */
-	if (UsedShmemSegAddr != NULL)
-	{
-		if (!UnmapViewOfFile(UsedShmemSegAddr))
-			elog(LOG, "could not unmap view of shared memory: error code %lu",
-				 GetLastError());
+			segment->ShmemProtectiveRegion = NULL;
+		}
 
-		UsedShmemSegAddr = NULL;
-	}
+		/* Unmap the view, if it's mapped */
+		if (segment->UsedShmemSegAddr != NULL)
+		{
+			if (!UnmapViewOfFile(segment->UsedShmemSegAddr))
+				elog(LOG, "could not unmap view of shared memory: error code %lu",
+					 GetLastError());
 
-	/* And close the shmem handle, if we have one */
-	if (UsedShmemSegID != INVALID_HANDLE_VALUE)
-	{
-		if (!CloseHandle(UsedShmemSegID))
-			elog(LOG, "could not close handle to shared memory: error code %lu",
-				 GetLastError());
+			segment->UsedShmemSegAddr = NULL;
+		}
 
-		UsedShmemSegID = INVALID_HANDLE_VALUE;
+		/* And close the shmem handle, if we have one */
+		if (segment->UsedShmemSegID != NULL &&
+			segment->UsedShmemSegID != INVALID_HANDLE_VALUE)
+		{
+			if (!CloseHandle(segment->UsedShmemSegID))
+				elog(LOG, "could not close handle to shared memory: error code %lu",
+					 GetLastError());
+
+			segment->UsedShmemSegID = INVALID_HANDLE_VALUE;
+		}
 	}
 }
 
@@ -574,50 +613,56 @@ pgwin32_ReserveSharedMemoryRegion(HANDLE hChild)
 {
 	void	   *address;
 
-	Assert(ShmemProtectiveRegion != NULL);
-	Assert(UsedShmemSegAddr != NULL);
-	Assert(UsedShmemSegSize != 0);
+	for (int i = 0; i < NUM_MEMORY_MAPPINGS; i++)
+	{
+		PGInhShmemSeg *segment = &InhShmemSegs[i];
 
-	/* ShmemProtectiveRegion */
-	address = VirtualAllocEx(hChild, ShmemProtectiveRegion,
-							 PROTECTIVE_REGION_SIZE,
-							 MEM_RESERVE, PAGE_NOACCESS);
-	if (address == NULL)
-	{
-		/* Don't use FATAL since we're running in the postmaster */
-		elog(LOG, "could not reserve shared memory region (addr=%p) for child %p: error code %lu",
-			 ShmemProtectiveRegion, hChild, GetLastError());
-		return false;
-	}
-	if (address != ShmemProtectiveRegion)
-	{
-		/*
-		 * Should never happen - in theory if allocation granularity causes
-		 * strange effects it could, so check just in case.
-		 *
-		 * Don't use FATAL since we're running in the postmaster.
-		 */
-		elog(LOG, "reserved shared memory region got incorrect address %p, expected %p",
-			 address, ShmemProtectiveRegion);
-		return false;
-	}
+		if (UsedShmemSegSizes[i] == 0 || segment->UsedShmemSegAddr == NULL)
+			continue;
 
-	/* UsedShmemSegAddr */
-	address = VirtualAllocEx(hChild, UsedShmemSegAddr, UsedShmemSegSize,
-							 MEM_RESERVE, PAGE_READWRITE);
-	if (address == NULL)
-	{
-		elog(LOG, "could not reserve shared memory region (addr=%p) for child %p: error code %lu",
-			 UsedShmemSegAddr, hChild, GetLastError());
-		return false;
-	}
-	if (address != UsedShmemSegAddr)
-	{
-		elog(LOG, "reserved shared memory region got incorrect address %p, expected %p",
-			 address, UsedShmemSegAddr);
-		return false;
-	}
+		Assert(segment->ShmemProtectiveRegion != NULL);
 
+		/* ShmemProtectiveRegion */
+		address = VirtualAllocEx(hChild, segment->ShmemProtectiveRegion,
+								 PROTECTIVE_REGION_SIZE,
+								 MEM_RESERVE, PAGE_NOACCESS);
+		if (address == NULL)
+		{
+			/* Don't use FATAL since we're running in the postmaster */
+			elog(LOG, "could not reserve shared memory region (addr=%p) for child %p: error code %lu",
+				 segment->ShmemProtectiveRegion, hChild, GetLastError());
+			return false;
+		}
+		if (address != segment->ShmemProtectiveRegion)
+		{
+			/*
+			 * Should never happen - in theory if allocation granularity
+			 * causes strange effects it could, so check just in case.
+			 *
+			 * Don't use FATAL since we're running in the postmaster.
+			 */
+			elog(LOG, "reserved shared memory region got incorrect address %p, expected %p",
+				 address, segment->ShmemProtectiveRegion);
+			return false;
+		}
+
+		/* UsedShmemSegAddr */
+		address = VirtualAllocEx(hChild, segment->UsedShmemSegAddr, UsedShmemSegSizes[i],
+								 MEM_RESERVE, PAGE_READWRITE);
+		if (address == NULL)
+		{
+			elog(LOG, "could not reserve shared memory region (addr=%p) for child %p: error code %lu",
+				 segment->UsedShmemSegAddr, hChild, GetLastError());
+			return false;
+		}
+		if (address != segment->UsedShmemSegAddr)
+		{
+			elog(LOG, "reserved shared memory region got incorrect address %p, expected %p",
+				 address, segment->UsedShmemSegAddr);
+			return false;
+		}
+
+	}
 	return true;
 }
 
@@ -627,7 +672,7 @@ pgwin32_ReserveSharedMemoryRegion(HANDLE hChild)
  * use GetLargePageMinimum() instead.
  */
 void
-GetHugePageSize(Size *hugepagesize, int *mmap_flags)
+GetHugePageSize(Size *hugepagesize, int *mmap_flags, int *memfd_flags)
 {
 	if (hugepagesize)
 		*hugepagesize = 0;
