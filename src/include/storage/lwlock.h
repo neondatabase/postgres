@@ -82,6 +82,9 @@ typedef struct NamedLWLockTranche
 extern PGDLLIMPORT NamedLWLockTranche *NamedLWLockTrancheArray;
 extern PGDLLIMPORT int NamedLWLockTrancheRequests;
 
+/* NEON: GUC from neon ext that gives Replica Standby process priority to acquire a lock */
+extern PGDLLIMPORT bool startupProcessLockPriority;
+
 /* Names for fixed lwlocks */
 #include "storage/lwlocknames.h"
 
