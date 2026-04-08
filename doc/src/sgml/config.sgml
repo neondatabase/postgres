@@ -1788,6 +1788,15 @@ include_dir 'conf.d'
        </para>
 
        <para>
+        When <varname>max_shared_buffers</varname> is not greater than
+        <varname>shared_buffers</varname> at server start (including the default
+        that ties the two together), the buffer pool uses the same single
+        shared-memory mapping layout as community PostgreSQL, and
+        <function>pg_resize_shared_buffers</function> is not available; changing
+        the buffer pool size requires a restart.
+       </para>
+
+       <para>
         This parameter determines the amount of memory address space to reserve
         in each backend for expanding the buffer pool in future. While the
         memory for buffer pool is allocated on demand as it is resized, the

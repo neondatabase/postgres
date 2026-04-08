@@ -185,6 +185,11 @@ extern PGDLLIMPORT int NBuffers;
 extern PGDLLIMPORT int NBuffersPending;
 extern PGDLLIMPORT bool finalMaxNBuffers;
 extern PGDLLIMPORT int MaxNBuffers;
+/*
+ * When false, buffer pool lives in the main shmem segment (OSS layout); runtime
+ * buffer resize is unavailable. Set at postmaster startup in InitializeMaxNBuffers().
+ */
+extern PGDLLIMPORT bool buffer_pool_uses_split_segments;
 extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;

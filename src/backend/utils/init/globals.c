@@ -143,6 +143,7 @@ int			NBuffers = 0;
 int			NBuffersPending = 16384;
 bool		finalMaxNBuffers = false;
 int			MaxNBuffers = 0;
+bool		buffer_pool_uses_split_segments = false;
 int			MaxConnections = 100;
 int			max_worker_processes = 8;
 int			max_parallel_workers = 8;

@@ -22,6 +22,7 @@
 #include <math.h>
 
 #include "fmgr.h"
+#include "miscadmin.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "portability/instr_time.h"
@@ -339,6 +340,12 @@ pg_resize_shared_buffers(PG_FUNCTION_ARGS)
 	MemoryMappingSizes mapping_sizes[NUM_MEMORY_MAPPINGS];
 
 	InitMaterializedSRF(fcinfo, 0);
+
+	if (!buffer_pool_uses_split_segments)
+		ereport(ERROR,
+				  (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				   errmsg("pg_resize_shared_buffers() is not available"),
+				   errdetail("\"max_shared_buffers\" must be greater than \"shared_buffers\" at server start to use a resizable buffer pool.")));
 
 	if (currentNBuffers == targetNBuffers)
 	{

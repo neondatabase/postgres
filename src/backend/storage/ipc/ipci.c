@@ -14,6 +14,8 @@
  */
 #include "postgres.h"
 
+#include <string.h>
+
 #include "access/clog.h"
 #include "access/commit_ts.h"
 #include "access/multixact.h"
@@ -259,6 +261,19 @@ CreateSharedMemoryAndSemaphores(void)
 		PGShmemHeader *seghdr;
 
 		/*
+		 * OSS layout: buffer data lives in the main segment; skip creating
+		 * empty auxiliary mappings.
+		 */
+		if (mapping->shmem_req_size == 0)
+		{
+			memset(inhseg, 0, sizeof(PGInhShmemSeg));
+#ifdef WIN32
+			inhseg->UsedShmemSegID = INVALID_HANDLE_VALUE;
+#endif
+			continue;
+		}
+
+		/*
 		 * Set seed shmem identifier which will be changed to the final one
 		 * when creating the shared memory segment.
 		 */
@@ -349,7 +364,10 @@ CreateOrAttachShmemStructs(void)
 	CommitTsShmemInit();
 	SUBTRANSShmemInit();
 	MultiXactShmemInit();
-	/* TODO: This should be part of BufferManagerShmemInit() */
+	/*
+	 * Fork: shared buffer resize coordination (not in PostgreSQL
+	 * REL_18_STABLE).  Kept in one place next to buffer init.
+	 */
 	ShmemControlInit();
 	BufferManagerShmemInit();
 

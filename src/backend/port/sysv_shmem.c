@@ -132,7 +132,9 @@ volatile bool delay_shmem_resize = false;
  * represented by the second /memfd:main with no permissions.
  *
  * The reserved space for buffer manager related segments is calculated based on
- * MaxNBuffers.
+ * MaxNBuffers when buffer_pool_uses_split_segments is true. When false (OSS
+ * layout), buffer arrays live in the main segment and auxiliary segment sizes
+ * are zero.
  */
 
 PGInhShmemSeg InhShmemSegs[NUM_MEMORY_MAPPINGS];
@@ -1137,9 +1139,11 @@ PGSharedMemoryReAttach(void)
 	{
 		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
 
+		if (inhseg->UsedShmemSegAddr == NULL)
+			continue;
+
 		origUsedShmemSegAddr = inhseg->UsedShmemSegAddr;
 
-		Assert(inhseg->UsedShmemSegAddr != NULL);
 		Assert(IsUnderPostmaster);
 
 #ifdef __CYGWIN__
@@ -1198,7 +1202,9 @@ PGSharedMemoryNoReAttach(void)
 	{
 		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
 
-		Assert(inhseg->UsedShmemSegAddr != NULL);
+		if (inhseg->UsedShmemSegAddr == NULL)
+			continue;
+
 		/* For cleanliness, reset UsedShmemSegAddr to show we're not attached. */
 		inhseg->UsedShmemSegAddr = NULL;
 		/* And the same for UsedShmemSegID. */

@@ -66,6 +66,9 @@ pg_get_shmem_allocations(PG_FUNCTION_ARGS)
 		ShmemSegment *segment = &Segments[i];
 		PGShmemHeader *shmhdr = segment->ShmemSegHdr;
 
+		if (shmhdr == NULL)
+			continue;
+
 		values[0] = CStringGetTextDatum("<anonymous>");
 		values[1] = CStringGetTextDatum(segment->ShmemSegmentName);
 		nulls[2] = true;
@@ -81,6 +84,9 @@ pg_get_shmem_allocations(PG_FUNCTION_ARGS)
 	{
 		ShmemSegment *segment = &Segments[i];
 		PGShmemHeader *shmhdr = segment->ShmemSegHdr;
+
+		if (shmhdr == NULL)
+			continue;
 
 		nulls[0] = true;
 		values[1] = CStringGetTextDatum(segment->ShmemSegmentName);
@@ -151,6 +157,9 @@ pg_get_shmem_allocations_numa(PG_FUNCTION_ARGS)
 	for (int segment = 0; segment < NUM_MEMORY_MAPPINGS; segment++)
 	{
 		PGShmemHeader *shmhdr = Segments[segment].ShmemSegHdr;
+
+		if (shmhdr == NULL)
+			continue;
 
 		shm_total_page_count += (shmhdr->totalsize / os_page_size) + 1;
 	}

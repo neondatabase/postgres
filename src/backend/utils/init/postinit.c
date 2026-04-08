@@ -646,6 +646,13 @@ InitializeMaxNBuffers(void)
 
 	Assert(MaxNBuffers > 0);
 	Assert(!finalMaxNBuffers);
+
+	/*
+	 * Split memfd-backed segments (and runtime resize) only when max cap
+	 * exceeds shared_buffers at boot; otherwise use OSS single-segment layout.
+	 */
+	buffer_pool_uses_split_segments = (MaxNBuffers > NBuffersPending);
+
 	finalMaxNBuffers = true;
 }
 

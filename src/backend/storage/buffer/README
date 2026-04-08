@@ -291,6 +291,12 @@ maximum size of the shared buffer pool. Existing GUC shared_buffers controls the
 size of the buffer pool at run time. See configure.sgml for more details about
 these GUCs.
 
+If max_shared_buffers is not greater than shared_buffers at postmaster start
+(including the default, which ties max to current shared_buffers), the server
+uses a single main shared-memory mapping for buffer arrays (upstream PostgreSQL
+layout).  In that mode pg_resize_shared_buffers() and memfd-backed per-segment
+expansion are disabled; changing the buffer pool size requires a restart.
+
 The buffer manager maintains following data structures in shared memory.
 1. Buffer Descriptors: An array of BufferDesc structures, one per buffer.
 2. Buffer Blocks: An array of buffer blocks, forming the buffer pool.

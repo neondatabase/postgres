@@ -14,11 +14,13 @@
  */
 #include "postgres.h"
 
+#include "miscadmin.h"
 #include "storage/aio.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
 #include "storage/pg_shmem.h"
 #include "storage/proclist.h"
+#include "storage/shmem.h"
 #include "utils/guc.h"
 
 BufferDescPadded *BufferDescriptors;
@@ -95,7 +97,7 @@ InitializeBuffer(int buf_id)
 }
 
 /*
- * Attach buffer-pool globals to their dedicated shmem segments (init path).
+ * Attach buffer-pool globals (split memfd segments vs main segment, OSS layout).
  */
 static void
 BufferPoolShmemInitStructPointers(int nbufs,
@@ -104,26 +106,65 @@ BufferPoolShmemInitStructPointers(int nbufs,
 								  bool *foundIOCV,
 								  bool *foundBufCkpt)
 {
-	BufferDescriptors = (BufferDescPadded *)
-		ShmemInitStructInSegment("Buffer Descriptors",
-								 nbufs * sizeof(BufferDescPadded),
-								 foundDescs, BUFFER_DESCRIPTORS_SHMEM_SEGMENT);
+	if (buffer_pool_uses_split_segments)
+	{
+		BufferDescriptors = (BufferDescPadded *)
+			ShmemInitStructInSegment("Buffer Descriptors",
+									 nbufs * sizeof(BufferDescPadded),
+									 foundDescs, BUFFER_DESCRIPTORS_SHMEM_SEGMENT);
 
-	BufferBlocks = (char *)
-		TYPEALIGN(PG_IO_ALIGN_SIZE,
-				  ShmemInitStructInSegment("Buffer Blocks",
-										   nbufs * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
-										   foundBufs, BUFFERS_SHMEM_SEGMENT));
+		BufferBlocks = (char *)
+			TYPEALIGN(PG_IO_ALIGN_SIZE,
+					  ShmemInitStructInSegment("Buffer Blocks",
+											   nbufs * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
+											   foundBufs, BUFFERS_SHMEM_SEGMENT));
 
-	BufferIOCVArray = (ConditionVariableMinimallyPadded *)
-		ShmemInitStructInSegment("Buffer IO Condition Variables",
-								 nbufs * sizeof(ConditionVariableMinimallyPadded),
-								 foundIOCV, BUFFER_IOCV_SHMEM_SEGMENT);
+		BufferIOCVArray = (ConditionVariableMinimallyPadded *)
+			ShmemInitStructInSegment("Buffer IO Condition Variables",
+									 nbufs * sizeof(ConditionVariableMinimallyPadded),
+									 foundIOCV, BUFFER_IOCV_SHMEM_SEGMENT);
 
-	CkptBufferIds = (CkptSortItem *)
-		ShmemInitStructInSegment("Checkpoint BufferIds",
-								 nbufs * sizeof(CkptSortItem), foundBufCkpt,
-								 CHECKPOINT_BUFFERS_SHMEM_SEGMENT);
+		CkptBufferIds = (CkptSortItem *)
+			ShmemInitStructInSegment("Checkpoint BufferIds",
+									 nbufs * sizeof(CkptSortItem), foundBufCkpt,
+									 CHECKPOINT_BUFFERS_SHMEM_SEGMENT);
+	}
+	else
+	{
+		/*
+		 * ---- PostgreSQL REL_18_STABLE buf_init.c (BufferManagerShmemInit
+		 * allocations): NBuffers -> nbufs (NBuffersPending) ----
+		 */
+		/* Align descriptors to a cacheline boundary. */
+		BufferDescriptors = (BufferDescPadded *)
+			ShmemInitStruct("Buffer Descriptors",
+							nbufs * sizeof(BufferDescPadded),
+							foundDescs);
+
+		/* Align buffer pool on IO page size boundary. */
+		BufferBlocks = (char *)
+			TYPEALIGN(PG_IO_ALIGN_SIZE,
+					  ShmemInitStruct("Buffer Blocks",
+									  nbufs * (Size) BLCKSZ + PG_IO_ALIGN_SIZE,
+									  foundBufs));
+
+		/* Align condition variables to cacheline boundary. */
+		BufferIOCVArray = (ConditionVariableMinimallyPadded *)
+			ShmemInitStruct("Buffer IO Condition Variables",
+							nbufs * sizeof(ConditionVariableMinimallyPadded),
+							foundIOCV);
+
+		/*
+		 * The array used to sort to-be-checkpointed buffer ids is located in
+		 * shared memory, to avoid having to allocate significant amounts of
+		 * memory at runtime. As that'd be in the middle of a checkpoint, or when
+		 * the checkpointer is restarted, memory allocation failures would be
+		 * painful.
+		 */
+		CkptBufferIds = (CkptSortItem *)
+			ShmemInitStruct("Checkpoint BufferIds",
+							nbufs * sizeof(CkptSortItem), foundBufCkpt);
+	}
 }
 
 
@@ -156,10 +197,13 @@ BufferManagerShmemInit(void)
 	}
 	else
 	{
+		int			i;
+
 		/*
 		 * Initialize all the buffer headers.
+		 * (REL_18_STABLE uses NBuffers; we use NBuffersPending.)
 		 */
-		for (int i = 0; i < NBuffersPending; i++)
+		for (i = 0; i < NBuffersPending; i++)
 			InitializeBuffer(i);
 
 		/* Correct last entry of linked list */
@@ -185,64 +229,107 @@ BufferManagerShmemInit(void)
  * BufferManagerShmemSize
  *
  * compute the size of shared memory for the buffer pool including
- * data pages, buffer descriptors, hash tables, etc. based on the
- * shared memory segment. The main segment must not allocate anything
- * related to buffers, every other segment will receive part of the
- * data.
+ * data pages, buffer descriptors, hash tables, etc.
  *
- * Also sets the shmem_reserved field for each segment based on MaxNBuffers.
+ * When buffer_pool_uses_split_segments is false, buffer memory is counted in
+ * the main segment only (PostgreSQL REL_18_STABLE layout); mapping_sizes for
+ * buffer segments are zero.
+ *
+ * When true, the main segment must not allocate buffer arrays; each buffer
+ * segment receives part of the data. Also sets shmem_reserved from MaxNBuffers.
  */
 Size
 BufferManagerShmemSize(MemoryMappingSizes *mapping_sizes)
 {
-	size_t		size;
+	Size		size;
 
-	/* size of buffer descriptors, plus alignment padding */
-	size = add_size(0, mul_size(NBuffersPending, sizeof(BufferDescPadded)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_req_size = size;
-	size = add_size(0, mul_size(MaxNBuffers, sizeof(BufferDescPadded)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_reserved = size;
+	if (buffer_pool_uses_split_segments)
+	{
+		/* size of buffer descriptors, plus alignment padding */
+		size = add_size(0, mul_size(NBuffersPending, sizeof(BufferDescPadded)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_req_size = size;
+		size = add_size(0, mul_size(MaxNBuffers, sizeof(BufferDescPadded)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_reserved = size;
 
-	/* size of data pages, plus alignment padding */
-	size = add_size(0, PG_IO_ALIGN_SIZE);
-	size = add_size(size, mul_size(NBuffersPending, BLCKSZ));
-	mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_req_size = size;
-	size = add_size(0, PG_IO_ALIGN_SIZE);
-	size = add_size(size, mul_size(MaxNBuffers, BLCKSZ));
-	mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_reserved = size;
+		/* size of data pages, plus alignment padding */
+		size = add_size(0, PG_IO_ALIGN_SIZE);
+		size = add_size(size, mul_size(NBuffersPending, BLCKSZ));
+		mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_req_size = size;
+		size = add_size(0, PG_IO_ALIGN_SIZE);
+		size = add_size(size, mul_size(MaxNBuffers, BLCKSZ));
+		mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_reserved = size;
 
-	/* size of I/O condition variables, plus alignment padding */
-	size = add_size(0, mul_size(NBuffersPending,
-								sizeof(ConditionVariableMinimallyPadded)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_req_size = size;
-	size = add_size(0, mul_size(MaxNBuffers,
-								sizeof(ConditionVariableMinimallyPadded)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_reserved = size;
+		/* size of I/O condition variables, plus alignment padding */
+		size = add_size(0, mul_size(NBuffersPending,
+									sizeof(ConditionVariableMinimallyPadded)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_req_size = size;
+		size = add_size(0, mul_size(MaxNBuffers,
+									sizeof(ConditionVariableMinimallyPadded)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_reserved = size;
 
-	/*
-	 * Checkpoint sort array in bufmgr.c.  Include PG_CACHE_LINE_SIZE like the
-	 * other buffer segments: the segment begins with PGShmemHeader and
-	 * ShmemAllocRaw cacheline-aligns allocations.  Without this slack, a
-	 * size that is already a multiple of the THP rounding (2MB) can leave the
-	 * mapping one header/alignment increment too small.
-	 */
-	size = add_size(0, mul_size(NBuffersPending, sizeof(CkptSortItem)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_req_size = size;
-	size = add_size(0, mul_size(MaxNBuffers, sizeof(CkptSortItem)));
-	size = add_size(size, PG_CACHE_LINE_SIZE);
-	mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_reserved = size;
+		/*
+		 * Checkpoint sort array in bufmgr.c.  Include PG_CACHE_LINE_SIZE like the
+		 * other buffer segments: the segment begins with PGShmemHeader and
+		 * ShmemAllocRaw cacheline-aligns allocations.  Without this slack, a
+		 * size that is already a multiple of the THP rounding (2MB) can leave the
+		 * mapping one header/alignment increment too small.
+		 */
+		size = add_size(0, mul_size(NBuffersPending, sizeof(CkptSortItem)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_req_size = size;
+		size = add_size(0, mul_size(MaxNBuffers, sizeof(CkptSortItem)));
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+		mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_reserved = size;
 
-	/* Allocations in the main memory segment, at the end. */
+		/* size of stuff controlled by freelist.c (main segment) */
+		size = add_size(0, StrategyShmemSize());
 
-	/* size of stuff controlled by freelist.c */
-	size = add_size(0, StrategyShmemSize());
+		return size;
+	}
+	else
+	{
+		/*
+		 * ---- PostgreSQL REL_18_STABLE BufferManagerShmemSize (NBuffers ->
+		 * NBuffersPending); buffer segment mappings unused (zero). ----
+		 */
+		mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_req_size = 0;
+		mapping_sizes[BUFFERS_SHMEM_SEGMENT].shmem_reserved = 0;
+		mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_req_size = 0;
+		mapping_sizes[BUFFER_DESCRIPTORS_SHMEM_SEGMENT].shmem_reserved = 0;
+		mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_req_size = 0;
+		mapping_sizes[BUFFER_IOCV_SHMEM_SEGMENT].shmem_reserved = 0;
+		mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_req_size = 0;
+		mapping_sizes[CHECKPOINT_BUFFERS_SHMEM_SEGMENT].shmem_reserved = 0;
 
-	return size;
+		size = 0;
+
+		/* size of buffer descriptors */
+		size = add_size(size, mul_size(NBuffersPending, sizeof(BufferDescPadded)));
+		/* to allow aligning buffer descriptors */
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+
+		/* size of data pages, plus alignment padding */
+		size = add_size(size, PG_IO_ALIGN_SIZE);
+		size = add_size(size, mul_size(NBuffersPending, BLCKSZ));
+
+		/* size of stuff controlled by freelist.c */
+		size = add_size(size, StrategyShmemSize());
+
+		/* size of I/O condition variables */
+		size = add_size(size, mul_size(NBuffersPending,
+									   sizeof(ConditionVariableMinimallyPadded)));
+		/* to allow aligning the above */
+		size = add_size(size, PG_CACHE_LINE_SIZE);
+
+		/* size of checkpoint sort array in bufmgr.c */
+		size = add_size(size, mul_size(NBuffersPending, sizeof(CkptSortItem)));
+
+		return size;
+	}
 }
 
 /*
@@ -260,6 +347,12 @@ BufferManagerShmemResize(int currentNBuffers, int targetNBuffers)
 	bool		found;
 	int			i;
 	void	   *tmpPtr;
+
+	if (!buffer_pool_uses_split_segments)
+		ereport(ERROR,
+				  (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				   errmsg("shared buffer pool resize is not available"),
+				   errdetail("\"max_shared_buffers\" must be greater than \"shared_buffers\" at server start to enable resizing.")));
 
 	tmpPtr = (BufferDescPadded *)
 		ShmemResizeStructInSegment("Buffer Descriptors",
@@ -323,6 +416,12 @@ BufferManagerShmemValidate(int targetNBuffers)
 {
 	bool		found;
 	void	   *tmpPtr;
+
+	if (!buffer_pool_uses_split_segments)
+		ereport(ERROR,
+				  (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				   errmsg("shared buffer pool resize validation is not available"),
+				   errdetail("\"max_shared_buffers\" must be greater than \"shared_buffers\" at server start to enable resizing.")));
 
 	/* Validate Buffer Descriptors */
 	tmpPtr = (BufferDescPadded *)

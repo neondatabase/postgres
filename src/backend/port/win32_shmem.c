@@ -444,8 +444,10 @@ PGSharedMemoryReAttach(void)
 	{
 		PGInhShmemSeg *inhseg = &InhShmemSegs[i];
 
+		if (inhseg->UsedShmemSegAddr == NULL)
+			continue;
+
 		Assert(inhseg->ShmemProtectiveRegion != NULL);
-		Assert(inhseg->UsedShmemSegAddr != NULL);
 
 		origUsedShmemSegAddr = inhseg->UsedShmemSegAddr;
 
@@ -498,8 +500,10 @@ PGSharedMemoryNoReAttach(void)
 	{
 		PGInhShmemSeg *segment = &InhShmemSegs[i];
 
+		if (segment->UsedShmemSegAddr == NULL)
+			continue;
+
 		Assert(segment->ShmemProtectiveRegion != NULL);
-		Assert(segment->UsedShmemSegAddr != NULL);
 
 		/*
 		 * Under Windows we will not have mapped the segment, so we don't need
@@ -561,7 +565,8 @@ PGSharedMemoryDetach(void)
 		}
 
 		/* And close the shmem handle, if we have one */
-		if (segment->UsedShmemSegID != INVALID_HANDLE_VALUE)
+		if (segment->UsedShmemSegID != NULL &&
+			segment->UsedShmemSegID != INVALID_HANDLE_VALUE)
 		{
 			if (!CloseHandle(segment->UsedShmemSegID))
 				elog(LOG, "could not close handle to shared memory: error code %lu",
@@ -612,9 +617,10 @@ pgwin32_ReserveSharedMemoryRegion(HANDLE hChild)
 	{
 		PGInhShmemSeg *segment = &InhShmemSegs[i];
 
+		if (UsedShmemSegSizes[i] == 0 || segment->UsedShmemSegAddr == NULL)
+			continue;
+
 		Assert(segment->ShmemProtectiveRegion != NULL);
-		Assert(segment->UsedShmemSegAddr != NULL);
-		Assert(UsedShmemSegSizes[i] != 0);
 
 		/* ShmemProtectiveRegion */
 		address = VirtualAllocEx(hChild, segment->ShmemProtectiveRegion,

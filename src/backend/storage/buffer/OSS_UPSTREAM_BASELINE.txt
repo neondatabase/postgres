@@ -1,0 +1,17 @@
+OSS-identical buffer shared-memory paths in this tree are maintained against:
+
+  Branch: REL_18_STABLE
+  Repository: https://github.com/postgres/postgres
+
+Compare the "REL_18_STABLE" sections in buf_init.c (BufferManagerShmemSize /
+BufferPoolShmemInitStructPointers / init loop) and the OSS branch of
+BufferManagerShmemSize against:
+
+  src/backend/storage/buffer/buf_init.c
+
+When max_shared_buffers at postmaster start does not exceed shared_buffers,
+buffer_pool_uses_split_segments is false and those paths apply.
+
+Pin a specific commit hash here when auditing (update manually on merge):
+
+  (not pinned — set during periodic upstream merges)
