@@ -79,6 +79,7 @@
 #include "miscadmin.h"
 #include "pg_trace.h"
 #include "pgstat.h"
+#include "access/xlogrecovery.h"
 #include "port/pg_bitutils.h"
 #include "storage/proc.h"
 #include "storage/proclist.h"
@@ -237,6 +238,8 @@ int			NamedLWLockTrancheRequests = 0;
 
 /* points to data in shared memory: */
 NamedLWLockTranche *NamedLWLockTrancheArray = NULL;
+
+bool startupProcessLockPriority = false; /* NEON: GUC is defined in neon extension */
 
 static void InitializeLWLocks(void);
 static inline void LWLockReportWaitStart(LWLock *lock);
@@ -1067,7 +1070,7 @@ LWLockQueueSelf(LWLock *lock, LWLockMode mode)
 	MyProc->lwWaitMode = mode;
 
 	/* LW_WAIT_UNTIL_FREE waiters are always at the front of the queue */
-	if (mode == LW_WAIT_UNTIL_FREE)
+	if (mode == LW_WAIT_UNTIL_FREE || (startupProcessLockPriority && AmStartupProcess()))
 		proclist_push_head(&lock->waiters, MyProcNumber, lwWaitLink);
 	else
 		proclist_push_tail(&lock->waiters, MyProcNumber, lwWaitLink);
