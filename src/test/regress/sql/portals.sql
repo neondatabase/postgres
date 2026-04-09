@@ -2,6 +2,8 @@
 -- Cursor regression tests
 --
 
+SET synchronize_seqscans = off;
+
 BEGIN;
 
 DECLARE foo1 SCROLL CURSOR FOR SELECT * FROM tenk1 ORDER BY unique2;
@@ -605,3 +607,4 @@ drop table toasted_data;
 fetch all in held_portal;
 
 reset default_toast_compression;
+reset synchronize_seqscans;
