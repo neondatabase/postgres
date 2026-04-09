@@ -69,14 +69,6 @@ typedef enum
 /* Potentially set by pg_upgrade_support functions */
 Oid			binary_upgrade_next_pg_authid_oid = InvalidOid;
 
-typedef struct
-{
-	unsigned	specified;
-	bool		admin;
-	bool		inherit;
-	bool		set;
-} GrantRoleOptions;
-
 #define GRANT_ROLE_SPECIFIED_ADMIN			0x0001
 #define GRANT_ROLE_SPECIFIED_INHERIT		0x0002
 #define GRANT_ROLE_SPECIFIED_SET			0x0004
@@ -89,7 +81,7 @@ GrantRoleOptions createrole_self_grant_options;
 
 /* Hook to check passwords in CreateRole() and AlterRole() */
 check_password_hook_type check_password_hook = NULL;
-
+CheckRoleMembershipAuthorization_hook_type CheckRoleMembershipAuthorization_hook = NULL;
 static void AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
 						Oid grantorId, GrantRoleOptions *popt);
@@ -98,7 +90,7 @@ static void DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 						Oid grantorId, GrantRoleOptions *popt,
 						DropBehavior behavior);
 static void check_role_membership_authorization(Oid currentUserId, Oid roleid,
-												bool is_grant);
+												bool is_grant, List* memberIds, GrantRoleOptions * popt);
 static Oid	check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId,
 							   bool is_grant);
 static RevokeRoleGrantAction *initialize_revoke_actions(CatCList *memlist);
@@ -517,7 +509,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 			char	   *oldrolename = NameStr(oldroleform->rolname);
 
 			/* can only add this role to roles for which you have rights */
-			check_role_membership_authorization(currentUserId, oldroleid, true);
+			check_role_membership_authorization(currentUserId, oldroleid, true, thisrole_oidlist, &popt);
 			AddRoleMems(currentUserId, oldrolename, oldroleid,
 						thisrole_list,
 						thisrole_oidlist,
@@ -1557,7 +1549,7 @@ GrantRole(ParseState *pstate, GrantRoleStmt *stmt)
 
 		roleid = get_role_oid(rolename, false);
 		check_role_membership_authorization(currentUserId,
-											roleid, stmt->is_grant);
+											roleid, stmt->is_grant, grantee_ids, &popt);
 		if (stmt->is_grant)
 			AddRoleMems(currentUserId, rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
@@ -2108,7 +2100,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
  */
 static void
 check_role_membership_authorization(Oid currentUserId, Oid roleid,
-									bool is_grant)
+									bool is_grant, List *memberIds, GrantRoleOptions * popt)
 {
 	/*
 	 * The charter of pg_database_owner is to have exactly one, implicit,
@@ -2147,6 +2139,10 @@ check_role_membership_authorization(Oid currentUserId, Oid roleid,
 	}
 	else
 	{
+		if (CheckRoleMembershipAuthorization_hook && CheckRoleMembershipAuthorization_hook(currentUserId, roleid, is_grant, memberIds, popt))
+		{
+			return;
+		}
 		/*
 		 * Otherwise, must have admin option on the role to be changed.
 		 */

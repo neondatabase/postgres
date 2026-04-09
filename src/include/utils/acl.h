@@ -287,4 +287,7 @@ extern bool object_ownercheck(Oid classid, Oid objectid, Oid roleid);
 extern bool has_createrole_privilege(Oid roleid);
 extern bool has_bypassrls_privilege(Oid roleid);
 
+typedef void (*SelectBestAdmin_hook_type) (Oid* admin_role, Oid member, Oid role);
+extern PGDLLIMPORT SelectBestAdmin_hook_type SelectBestAdmin_hook;
+
 #endif							/* ACL_H */
