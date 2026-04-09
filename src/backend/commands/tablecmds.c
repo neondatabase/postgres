@@ -733,6 +733,10 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("ON COMMIT can only be used on temporary tables")));
 
+	if (stmt->relation->relpersistence == RELPERSISTENCE_TEMP
+		&& stmt->oncommit != ONCOMMIT_DROP)
+		is_dedicated_backend = true;
+
 	if (stmt->partspec != NULL)
 	{
 		if (relkind != RELKIND_RELATION)

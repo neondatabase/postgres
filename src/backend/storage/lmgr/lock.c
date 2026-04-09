@@ -822,7 +822,10 @@ LockAcquireExtended(const LOCKTAG *locktag,
 
 	/* Identify owner for lock */
 	if (sessionLock)
+	{
 		owner = NULL;
+		is_dedicated_backend = true;
+	}
 	else
 		owner = CurrentResourceOwner;
 

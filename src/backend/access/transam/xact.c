@@ -84,6 +84,10 @@ bool		XactDeferrable;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
 
+/* Backend needs to preserve session context */
+bool		is_dedicated_backend;
+bool		allow_dedicated_backends; /* GUC */
+
 /*
  * CheckXidAlive is a xid value pointing to a possibly ongoing (sub)
  * transaction.  Currently, it is used in logical decoding.  It's possible
@@ -4962,7 +4966,7 @@ TransactionBlockStatusCode(void)
 	{
 		case TBLOCK_DEFAULT:
 		case TBLOCK_STARTED:
-			return 'I';			/* idle --- not in transaction */
+			return is_dedicated_backend && allow_dedicated_backends ? 'T' : 'I';			/* idle --- not in transaction */
 		case TBLOCK_BEGIN:
 		case TBLOCK_SUBBEGIN:
 		case TBLOCK_INPROGRESS:

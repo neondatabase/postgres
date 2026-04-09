@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "access/htup_details.h"
+#include "access/xact.h"
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/predicate_internals.h"
@@ -611,12 +612,14 @@ pg_safe_snapshot_blocking_pids(PG_FUNCTION_ARGS)
  *	field4: 1 if using an int8 key, 2 if using 2 int4 keys
  */
 #define SET_LOCKTAG_INT64(tag, key64) \
+	is_dedicated_backend = true; \
 	SET_LOCKTAG_ADVISORY(tag, \
 						 MyDatabaseId, \
 						 (uint32) ((key64) >> 32), \
 						 (uint32) (key64), \
 						 1)
 #define SET_LOCKTAG_INT32(tag, key1, key2) \
+	is_dedicated_backend = true; \
 	SET_LOCKTAG_ADVISORY(tag, MyDatabaseId, key1, key2, 2)
 
 /*

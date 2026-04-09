@@ -53,6 +53,9 @@ ExecSetVariableStmt(VariableSetStmt *stmt, bool isTopLevel)
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("cannot set parameters during a parallel operation")));
 
+	if (!stmt->is_local)
+		is_dedicated_backend = true;
+
 	switch (stmt->kind)
 	{
 		case VAR_SET_VALUE:

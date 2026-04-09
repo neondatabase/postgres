@@ -812,6 +812,18 @@ struct config_bool ConfigureNamesBool[] =
 		true,
 		NULL, NULL, NULL
 	},
+
+	{
+		{"allow_dedicated_backends", PGC_USERSET, CLIENT_CONN_OTHER,
+		 gettext_noop("Prevent connection pooler from reusing backends requiring session semantic."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&allow_dedicated_backends,
+		true,
+		NULL, NULL, NULL
+	},
+
 	{
 		{"enable_seqscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of sequential-scan plans."),

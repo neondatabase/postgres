@@ -58,6 +58,9 @@ extern PGDLLIMPORT bool XactReadOnly;
 /* flag for logging statements in this transaction */
 extern PGDLLIMPORT bool xact_is_sampled;
 
+/* Backend needs to preserve session context */
+extern PGDLLIMPORT bool is_dedicated_backend;
+extern bool allow_dedicated_backends;
 /*
  * Xact is deferrable -- only meaningful (currently) for read only
  * SERIALIZABLE transactions

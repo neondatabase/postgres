@@ -1252,6 +1252,20 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	/* close the transaction we started above */
 	if (!bootstrap)
 		CommitTransactionCommand();
+
+	/*
+	 * TODO: psql logic and prompt depends on status returned by ReadyForQuery message.
+	 * So the hack with enforcing dedicated backend by reporting in-transaction status doesn't
+	 * work in this case.
+	 * The solution can be to return some special status in ReadyForQuery message which
+	 * will be interpreted only by connection pooler but then mapped to idle ('I') when
+	 * forwarded to the client.
+	 */
+	if (application_name)
+	{
+		if (strcmp(application_name, "psql") == 0 || strncmp(application_name, "pg_regress", 10) == 0)
+			allow_dedicated_backends = false;
+	}
 }
 
 /*

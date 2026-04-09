@@ -59,6 +59,9 @@ PerformCursorOpen(ParseState *pstate, DeclareCursorStmt *cstmt, ParamListInfo pa
 				(errcode(ERRCODE_INVALID_CURSOR_NAME),
 				 errmsg("invalid cursor name: must not be empty")));
 
+	if (cstmt->options & CURSOR_OPT_HOLD)
+		is_dedicated_backend = true; /* cursors are not compatible with builtin connection pooler */
+
 	/*
 	 * If this is a non-holdable cursor, we require that this statement has
 	 * been executed inside a transaction block (or else, it would have no

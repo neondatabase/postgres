@@ -245,6 +245,19 @@ DefineSequence(ParseState *pstate, CreateSeqStmt *seq)
 	heap_freetuple(tuple);
 	table_close(rel, RowExclusiveLock);
 
+		/*
+	 * TODO:
+	 * Using currval() may cause incorrect behavior with connection pooler.
+	 * Unfortunately marking backend as tainted in currval() is too late.
+	 * This is why it is done in nextval(), although it is not strictly required, because
+	 * nextval() may be not followed by currval().
+	 * But currval() may be not preceded by nextval().
+	 * To make regression tests passed, backend is also marker as tainted when it creates
+	 * sequence. Certainly it is just temporary workaround, because sequence may be created
+	 * in one backend and accessed in another.
+	 */
+	is_dedicated_backend = true; /* in case of using currval() */
+
 	return address;
 }
 
@@ -610,6 +623,8 @@ nextval(PG_FUNCTION_ARGS)
 	 * way.
 	 */
 	relid = RangeVarGetRelid(sequence, NoLock, false);
+
+	is_dedicated_backend = true; /* in case of using currval() */
 
 	PG_RETURN_INT64(nextval_internal(relid, true));
 }
