@@ -3272,6 +3272,10 @@ ProcessRecoveryConflictInterrupts(void)
 void
 ProcessInterrupts(void)
 {
+#ifdef USE_INJECTION_POINTS
+	if (CritSectionCount > 0)
+		INJECTION_POINT("PROCESSINTERRUPTS_INSIDE_CRIT_SECTION");
+#endif
 	/* OK to accept any interrupts now? */
 	if (InterruptHoldoffCount != 0 || CritSectionCount != 0)
 		return;
