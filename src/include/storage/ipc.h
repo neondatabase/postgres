@@ -18,6 +18,8 @@
 #ifndef IPC_H
 #define IPC_H
 
+#include "storage/pg_shmem.h"
+
 typedef void (*pg_on_exit_callback) (int code, Datum arg);
 typedef void (*shmem_startup_hook_type) (void);
 
@@ -68,6 +70,7 @@ extern PGDLLIMPORT pg_signal_backend_hook_type pg_signal_backend_hook;
 /* ipc.c */
 extern PGDLLIMPORT bool proc_exit_inprogress;
 extern PGDLLIMPORT bool shmem_exit_inprogress;
+extern PGDLLIMPORT volatile bool delay_shmem_resize;
 
 pg_noreturn extern void proc_exit(int code);
 extern void shmem_exit(int code);
@@ -81,11 +84,13 @@ extern void check_on_shmem_exit_lists_are_empty(void);
 /* ipci.c */
 extern PGDLLIMPORT shmem_startup_hook_type shmem_startup_hook;
 
-extern Size CalculateShmemSize(int *num_semaphores);
+extern Size CalculateShmemSize(MemoryMappingSizes *mapping_sizes);
 extern void CreateSharedMemoryAndSemaphores(void);
 #ifdef EXEC_BACKEND
 extern void AttachSharedMemoryStructs(void);
 #endif
 extern void InitializeShmemGUCs(void);
+extern void CoordinateShmemResize(void);
+extern bool AnonymousShmemResize(void);
 
 #endif							/* IPC_H */

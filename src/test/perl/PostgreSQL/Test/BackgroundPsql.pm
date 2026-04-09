@@ -61,6 +61,7 @@ use Config;
 use IPC::Run;
 use PostgreSQL::Test::Utils qw(pump_until);
 use Test::More;
+use Time::HiRes                      qw(usleep);
 
 =pod
 
@@ -367,6 +368,81 @@ sub set_query_timer_restart
 
 	$self->{query_timer_restart} = 1;
 	return $self->{query_timer_restart};
+}
+
+=pod
+
+=item $session->poll_query_until($query [, $expected ])
+
+Run B<$query> repeatedly in this background session, until it returns the
+B<$expected> result ('t', or SQL boolean true, by default).
+Continues polling if the query returns an error result.
+Times out after a reasonable number of attempts.
+Returns 1 if successful, 0 if timed out.
+
+=cut
+
+sub poll_query_until
+{
+	my ($self, $query, $expected) = @_;
+
+	$expected = 't' unless defined($expected);    # default value
+
+	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
+	my $attempts = 0;
+	my ($stdout, $stderr_flag);
+
+	while ($attempts < $max_attempts)
+	{
+		($stdout, $stderr_flag) = $self->query($query);
+
+		chomp($stdout);
+
+		# If query succeeded and returned expected result
+		if (!$stderr_flag && $stdout eq $expected)
+		{
+			return 1;
+		}
+
+		# Wait 0.1 second before retrying.
+		usleep(100_000);
+
+		$attempts++;
+	}
+
+	# Give up. Print the output from the last attempt, hopefully that's useful
+	# for debugging.
+	my $stderr_output = $stderr_flag ? $self->{stderr} : '';
+	diag qq(poll_query_until timed out executing this query:
+$query
+expecting this output:
+$expected
+last actual query output:
+$stdout
+with stderr:
+$stderr_output);
+	return 0;
+}
+
+=item $session->wait_for_event(backend_type, wait_event_name)
+
+Poll pg_stat_activity until backend_type reaches wait_event_name using this
+background session.
+
+=cut
+
+sub wait_for_event
+{
+	my ($self, $backend_type, $wait_event_name) = @_;
+
+	$self->poll_query_until(qq[
+		SELECT count(*) > 0 FROM pg_stat_activity
+		WHERE backend_type = '$backend_type' AND wait_event = '$wait_event_name'
+	])
+	  or die
+	  qq(timed out when waiting for $backend_type to reach wait event '$wait_event_name');
+
+	return;
 }
 
 1;

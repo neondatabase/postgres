@@ -81,6 +81,8 @@
 #include "pgstat.h"
 #include "access/xlogrecovery.h"
 #include "port/pg_bitutils.h"
+#include "postmaster/postmaster.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/proclist.h"
 #include "storage/procnumber.h"
@@ -622,9 +624,9 @@ LWLockNewTrancheId(void)
 
 	LWLockCounter = (int *) ((char *) MainLWLockArray - sizeof(int));
 	/* We use the ShmemLock spinlock to protect LWLockCounter */
-	SpinLockAcquire(ShmemLock);
+	SpinLockAcquire(Segments[MAIN_SHMEM_SEGMENT].ShmemLock);
 	result = (*LWLockCounter)++;
-	SpinLockRelease(ShmemLock);
+	SpinLockRelease(Segments[MAIN_SHMEM_SEGMENT].ShmemLock);
 
 	return result;
 }

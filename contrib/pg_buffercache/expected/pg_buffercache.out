@@ -1,8 +1,9 @@
 CREATE EXTENSION pg_buffercache;
-select count(*) = (select setting::bigint
-                   from pg_settings
-                   where name = 'shared_buffers')
-from pg_buffercache;
+select pg_size_bytes(setting)/(select setting::bigint from pg_settings where name = 'block_size') AS nbuffers
+        from pg_settings
+        where name = 'shared_buffers'
+\gset
+select count(*) = :nbuffers from pg_buffercache;
  ?column? 
 ----------
  t
@@ -23,6 +24,20 @@ SELECT count(*) > 0 FROM pg_buffercache_usage_counts() WHERE buffers >= 0;
  t
 (1 row)
 
+-- Test the buffer lookup table function and count is <= shared_buffers
+select count(*) <= :nbuffers from pg_buffercache_lookup_table_entries();
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Check that pg_buffercache_lookup_table view works and count is <= shared_buffers
+select count(*) <= :nbuffers from pg_buffercache_lookup_table;
+ ?column? 
+----------
+ t
+(1 row)
+
 -- Check that the functions / views can't be accessed by default. To avoid
 -- having to create a dedicated user, use the pg_database_owner pseudo-role.
 SET ROLE pg_database_owner;
@@ -34,6 +49,10 @@ SELECT * FROM pg_buffercache_summary();
 ERROR:  permission denied for function pg_buffercache_summary
 SELECT * FROM pg_buffercache_usage_counts();
 ERROR:  permission denied for function pg_buffercache_usage_counts
+SELECT * FROM pg_buffercache_lookup_table_entries();
+ERROR:  permission denied for function pg_buffercache_lookup_table_entries
+SELECT * FROM pg_buffercache_lookup_table;
+ERROR:  permission denied for view pg_buffercache_lookup_table
 RESET role;
 -- Check that pg_monitor is allowed to query view / function
 SET ROLE pg_monitor;
@@ -50,6 +69,21 @@ SELECT buffers_used + buffers_unused > 0 FROM pg_buffercache_summary();
 (1 row)
 
 SELECT count(*) > 0 FROM pg_buffercache_usage_counts();
+ ?column? 
+----------
+ t
+(1 row)
+
+RESET role;
+-- Check that pg_read_all_stats is allowed to query buffer lookup table
+SET ROLE pg_read_all_stats;
+SELECT count(*) >= 0 FROM pg_buffercache_lookup_table_entries();
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT count(*) >= 0 FROM pg_buffercache_lookup_table;
  ?column? 
 ----------
  t

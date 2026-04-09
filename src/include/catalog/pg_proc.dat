@@ -8539,8 +8539,8 @@
 { oid => '5052', descr => 'allocations from the main shared memory segment',
   proname => 'pg_get_shmem_allocations', prorows => '50', proretset => 't',
   provolatile => 'v', prorettype => 'record', proargtypes => '',
-  proallargtypes => '{text,int8,int8,int8}', proargmodes => '{o,o,o,o}',
-  proargnames => '{name,off,size,allocated_size}',
+  proallargtypes => '{text,text,int8,int8,int8}', proargmodes => '{o,o,o,o,o}',
+  proargnames => '{name,segment,off,size,allocated_size}',
   prosrc => 'pg_get_shmem_allocations' },
 
 { oid => '4099', descr => 'Is NUMA support available?',
@@ -8554,6 +8554,14 @@
   proallargtypes => '{text,int4,int8}', proargmodes => '{o,o,o}',
   proargnames => '{name,numa_node,size}',
   prosrc => 'pg_get_shmem_allocations_numa' },
+
+# shared memory segments 
+{ oid => '5101', descr => 'shared memory segments',
+  proname => 'pg_get_shmem_segments', prorows => '6', proretset => 't',
+  provolatile => 'v', prorettype => 'record', proargtypes => '',
+  proallargtypes => '{int4,text,int8,int8,int8,int8}', proargmodes => '{o,o,o,o,o,o}',
+  proargnames => '{id,name,size,freeoffset,mapping_size,mapping_reserved_size}',
+  prosrc => 'pg_get_shmem_segments' },
 
 # memory context of local backend
 { oid => '2282',
@@ -12547,4 +12555,10 @@
   proargnames => '{pid,io_id,io_generation,state,operation,off,length,target,handle_data_len,raw_result,result,target_desc,f_sync,f_localmem,f_buffered}',
   prosrc => 'pg_get_aios' },
 
+{ oid => '9999', descr => 'resize shared buffers according to the value of GUC `shared_buffers`',
+  proname => 'pg_resize_shared_buffers',
+  provolatile => 'v',
+  prorettype => 'bool',
+  proargtypes => '',
+  prosrc => 'pg_resize_shared_buffers'},
 ]

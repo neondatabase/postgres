@@ -110,11 +110,15 @@
 #include "replication/slotsync.h"
 #include "replication/walsender.h"
 #include "storage/aio_subsys.h"
+#include "storage/bufmgr.h"
 #include "storage/fd.h"
 #include "storage/io_worker.h"
 #include "storage/ipc.h"
+#include "storage/pg_shmem.h"
 #include "storage/pmsignal.h"
 #include "storage/proc.h"
+#include "storage/procsignal.h"
+#include "storage/shmem.h"
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
 #include "utils/datetime.h"
@@ -125,7 +129,6 @@
 
 #ifdef EXEC_BACKEND
 #include "common/file_utils.h"
-#include "storage/pg_shmem.h"
 #endif
 
 
@@ -954,6 +957,11 @@ PostmasterMain(int argc, char *argv[])
 	 * Calculate the size of the PGPROC fast-path lock arrays.
 	 */
 	InitializeFastPathLocks();
+
+	/*
+	 * Calculate MaxNBuffers for buffer pool resizing.
+	 */
+	InitializeMaxNBuffers();
 
 	/*
 	 * Give preloaded libraries a chance to request additional shared memory.

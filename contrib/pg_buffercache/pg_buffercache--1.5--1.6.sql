@@ -44,3 +44,27 @@ CREATE FUNCTION pg_buffercache_evict_all(
     OUT buffers_skipped int4)
 AS 'MODULE_PATHNAME', 'pg_buffercache_evict_all'
 LANGUAGE C PARALLEL SAFE VOLATILE;
+
+-- Add the buffer lookup table function
+CREATE FUNCTION pg_buffercache_lookup_table_entries(
+    OUT tablespace oid,
+    OUT database oid,
+    OUT relfilenode oid,
+    OUT forknum int2,
+    OUT blocknum int8,
+    OUT bufferid int4)
+RETURNS SETOF record
+AS 'MODULE_PATHNAME', 'pg_buffercache_lookup_table_entries'
+LANGUAGE C PARALLEL SAFE VOLATILE;
+
+-- Create a view for convenient access.
+CREATE VIEW pg_buffercache_lookup_table AS
+    SELECT * FROM pg_buffercache_lookup_table_entries();
+
+-- Don't want these to be available to public.
+REVOKE ALL ON FUNCTION pg_buffercache_lookup_table_entries() FROM PUBLIC;
+REVOKE ALL ON pg_buffercache_lookup_table FROM PUBLIC;
+
+-- Grant access to monitoring role.
+GRANT EXECUTE ON FUNCTION pg_buffercache_lookup_table_entries() TO pg_read_all_stats;
+GRANT SELECT ON pg_buffercache_lookup_table TO pg_read_all_stats;
