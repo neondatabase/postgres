@@ -289,6 +289,10 @@ extern set_lwlsn_db_hook_type set_lwlsn_db_hook;
 extern set_lwlsn_relation_hook_type set_lwlsn_relation_hook;
 extern set_max_lwlsn_hook_type set_max_lwlsn_hook;
 
+/* NEON: Hook to control checkpoint buffer flushing */
+typedef bool (*checkpoint_buffers_hook_type) (void);
+extern checkpoint_buffers_hook_type checkpoint_buffers_hook;
+
 /*
  * Routines used by xlogrecovery.c to call back into xlog.c during recovery.
  */
