@@ -153,6 +153,9 @@ extern PGDLLIMPORT int SessionReplicationRole;
 #define TRIGGER_FIRES_ON_REPLICA			'R'
 #define TRIGGER_DISABLED					'D'
 
+typedef Datum (*DataTrigger_hook_type)(FunctionCallInfo fcinfo);
+extern PGDLLEXPORT DataTrigger_hook_type DataTrigger_hook;
+
 extern ObjectAddress CreateTrigger(CreateTrigStmt *stmt, const char *queryString,
 								   Oid relOid, Oid refRelOid, Oid constraintOid, Oid indexOid,
 								   Oid funcoid, Oid parentTriggerOid, Node *whenClause,

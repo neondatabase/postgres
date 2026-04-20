@@ -16,6 +16,7 @@
 #include "catalog/dependency.h"
 #include "catalog/objectaddress.h"
 #include "catalog/pg_event_trigger.h"
+#include "fmgr.h"
 #include "nodes/parsenodes.h"
 #include "tcop/cmdtag.h"
 #include "tcop/deparse_utility.h"
@@ -48,6 +49,9 @@ extern PGDLLIMPORT bool event_triggers;
  */
 #define CALLED_AS_EVENT_TRIGGER(fcinfo) \
 	((fcinfo)->context != NULL && IsA((fcinfo)->context, EventTriggerData))
+
+typedef void (*EventTrigger_hook_type)(FunctionCallInfo fcinfo);
+extern PGDLLEXPORT EventTrigger_hook_type EventTrigger_hook;
 
 extern Oid	CreateEventTrigger(CreateEventTrigStmt *stmt);
 extern Oid	get_event_trigger_oid(const char *trigname, bool missing_ok);
