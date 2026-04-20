@@ -2831,7 +2831,7 @@ generate_normalized_query(JumbleState *jstate, const char *query,
 	 * could refine that limit based on the max value of n for the current
 	 * query, but it hardly seems worth any extra effort to do so.
 	 */
-	norm_query_buflen = query_len + jstate->clocations_count * 10;
+	norm_query_buflen = query_len + jstate->clocations_count * 20;
 
 	/* Allocate result buffer */
 	norm_query = palloc(norm_query_buflen + 1);
