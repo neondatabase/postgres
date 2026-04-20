@@ -37,5 +37,7 @@ extern void disable_startup_progress_timeout(void);
 extern void begin_startup_progress_phase(void);
 extern void startup_progress_timeout_handler(void);
 extern bool has_startup_progress_timeout_expired(long *secs, int *usecs);
+typedef void (*ReportXLOGRecoveryProgress_hook_type) (void);
+extern PGDLLIMPORT ReportXLOGRecoveryProgress_hook_type ReportXLOGRecoveryProgress_hook;
 
 #endif							/* _STARTUP_H */
