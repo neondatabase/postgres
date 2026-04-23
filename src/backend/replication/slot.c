@@ -502,9 +502,10 @@ SearchNamedReplicationSlot(const char *name, bool need_lock)
 	for (i = 0; i < max_replication_slots; i++)
 	{
 		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
-
+		elog(WARNING, "ReplicationSlot: %s", NameStr(s->data.name));
 		if (s->in_use && strcmp(name, NameStr(s->data.name)) == 0)
 		{
+			elog(WARNING, "ReplicationSlot: found %s", NameStr(s->data.name));
 			slot = s;
 			break;
 		}
@@ -1960,6 +1961,7 @@ StartupReplicationSlots(void)
 			continue;
 
 		snprintf(path, sizeof(path), "pg_replslot/%s", replication_de->d_name);
+		elog(WARNING, "restoring replication slot from \"%s\"", replication_de->d_name);
 		de_type = get_dirent_type(path, replication_de, false, DEBUG1);
 
 		/* we're only creating directories here, skip if it's not our's */
