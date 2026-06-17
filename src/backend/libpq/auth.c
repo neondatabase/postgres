@@ -809,10 +809,11 @@ CheckPasswordAuth(Port *port, const char **logdetail)
 		return STATUS_EOF;		/* client wouldn't send password */
 
 	/* BEGIN HADRON */
-	elog(DEBUG1, "Databricks: before authentication hook");
+	elog(LOG, "Databricks: before authentication hook %p", DatabricksAuthentication_hook);
 
 	if (DatabricksAuthentication_hook)
 	{
+		elog(LOG, "Databricks hook is being registered");
 		result = (*DatabricksAuthentication_hook) (port, passwd, &skip_password_auth, logdetail);
 	}
 	else
