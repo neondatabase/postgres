@@ -74,6 +74,7 @@
 #include "postmaster/walsummarizer.h"
 #include "postmaster/walwriter.h"
 #include "replication/logicallauncher.h"
+#include "replication/logicalworker.h"
 #include "replication/slot.h"
 #include "replication/slotsync.h"
 #include "replication/syncrep.h"
@@ -1223,6 +1224,17 @@ struct config_bool ConfigureNamesBool[] =
 						 "is possible.")
 		},
 		&fullPageWrites,
+		true,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"preserve_commit_order", PGC_SIGHUP, REPLICATION_SUBSCRIBERS,
+			gettext_noop("Commit LR transactions at subscriber in the same order as at publisher."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&preserve_commit_order,
 		true,
 		NULL, NULL, NULL
 	},

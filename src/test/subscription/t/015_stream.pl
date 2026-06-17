@@ -232,6 +232,12 @@ $node_subscriber->wait_for_log(
 
 $node_publisher->safe_psql('postgres', "INSERT INTO test_tab_2 values(1)");
 
+# FIXME: Currently, non-streaming transactions are applied in parallel by
+# default. So, the first transaction is handled by a parallel apply worker. To
+# trigger the deadlock, initiate an more transaction to be applied by the
+# leader.
+$node_publisher->safe_psql('postgres', "INSERT INTO test_tab_2 values(1)");
+
 $h->query_safe('COMMIT');
 $h->quit;
 
@@ -247,7 +253,7 @@ $node_publisher->wait_for_catchup($appname);
 
 $result =
   $node_subscriber->safe_psql('postgres', "SELECT count(*) FROM test_tab_2");
-is($result, qq(5001), 'data replicated to subscriber after dropping index');
+is($result, qq(5002), 'data replicated to subscriber after dropping index');
 
 # Clean up test data from the environment.
 $node_publisher->safe_psql('postgres', "TRUNCATE TABLE test_tab_2");

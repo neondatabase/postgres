@@ -692,6 +692,44 @@ logicalrep_write_rel(StringInfo out, TransactionId xid, Relation rel,
 }
 
 /*
+ * Write internal relation description to the output stream.
+ */
+void
+logicalrep_write_internal_rel(StringInfo out, LogicalRepRelation *rel)
+{
+	pq_sendint32(out, rel->remoteid);
+
+	/* Write relation name */
+	pq_sendstring(out, rel->nspname);
+	pq_sendstring(out, rel->relname);
+
+	/* Write the replica identity. */
+	pq_sendbyte(out, rel->replident);
+
+	/* Write attribute description */
+	pq_sendint16(out, rel->natts);
+
+	for (int i = 0; i < rel->natts; i++)
+	{
+		uint8		flags = 0;
+
+		if (bms_is_member(i, rel->attkeys))
+			flags |= LOGICALREP_IS_REPLICA_IDENTITY;
+
+		pq_sendbyte(out, flags);
+
+		/* attribute name */
+		pq_sendstring(out, rel->attnames[i]);
+
+		/* attribute type id */
+		pq_sendint32(out, rel->atttyps[i]);
+
+		/* ignore attribute mode for now */
+		pq_sendint32(out, 0);
+	}
+}
+
+/*
  * Read the relation info from stream and return as LogicalRepRelation.
  */
 LogicalRepRelation *
@@ -1250,6 +1288,10 @@ logicalrep_message_type(LogicalRepMsgType action)
 			return "STREAM ABORT";
 		case LOGICAL_REP_MSG_STREAM_PREPARE:
 			return "STREAM PREPARE";
+		case LOGICAL_REP_MSG_INTERNAL_DEPENDENCY:
+			return "INTERNAL DEPENDENCY";
+		case LOGICAL_REP_MSG_INTERNAL_RELATION:
+			return "INTERNAL RELATION";
 	}
 
 	/*

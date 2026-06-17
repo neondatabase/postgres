@@ -14,6 +14,8 @@
 
 #include <signal.h>
 
+extern PGDLLIMPORT bool preserve_commit_order;
+
 extern PGDLLIMPORT volatile sig_atomic_t ParallelApplyMessagePending;
 
 extern void ApplyWorkerMain(Datum main_arg);

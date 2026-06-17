@@ -33,4 +33,7 @@ extern bool IsLogicalLauncher(void);
 
 extern pid_t GetLeaderApplyWorkerPid(pid_t pid);
 
+extern Size ParallelApplyShmemSize(void);
+extern void ParallelApplyShmemInit(void);
+
 #endif							/* LOGICALLAUNCHER_H */
